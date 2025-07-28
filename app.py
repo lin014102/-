@@ -45,6 +45,12 @@ def handle_message(event):
         reply = "請輸入：\n➡ 新增 xxx\n➡ 刪除 xxx\n➡ 查詢"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    @handler.add(FollowEvent)
+def handle_follow(event):
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="👋 歡迎使用代辦提醒機器人！\n輸入：\n➡ 新增 xxx\n➡ 查詢\n➡ 刪除 xxx")
+    )
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
