@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: line-todo-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    autoDeploy: true
+    envVars:
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        value: 請填入你的AccessToken
+      - key: LINE_CHANNEL_SECRET
+        value: 2157683f2cea90bd12c1702f18886238
+      - key: YOUR_USER_ID
+        value: U5dec3f164310e443940f8795766f0453
