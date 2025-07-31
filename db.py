@@ -1,29 +1,32 @@
 import sqlite3
+from datetime import datetime, timedelta
 
-def get_conn():
-    return sqlite3.connect('todo.db', check_same_thread=False)
-
-conn = get_conn()
+conn = sqlite3.connect('todo.db', check_same_thread=False)
 cursor = conn.cursor()
-
-# ✅ 改為三欄：user, item, date
-cursor.execute('CREATE TABLE IF NOT EXISTS todos (user TEXT, item TEXT, date TEXT)')
+cursor.execute('CREATE TABLE IF NOT EXISTS todos (user TEXT, item TEXT, remind_at TEXT)')
 conn.commit()
 
-def add_todo(user, item, date=None):  # ✅ 可選的日期欄位
-    cursor.execute('INSERT INTO todos (user, item, date) VALUES (?, ?, ?)', (user, item, date))
-    conn.commit()
+def add_todo(user, item):
+    try:
+        date_part, content = item.split(" ", 1)
+        due = datetime.strptime(date_part, "%m/%d").replace(year=datetime.now().year)
+        remind_time = due - timedelta(days=1)
+        remind_time = remind_time.replace(hour=14, minute=30)
+    except:
+        content = item
+        remind_time = None
 
-def remove_todo(user, item):
-    cursor.execute('DELETE FROM todos WHERE user=? AND item=?', (user, item))
+    cursor.execute("INSERT INTO todos (user, item, remind_at) VALUES (?, ?, ?)", (user, content, remind_time.isoformat() if remind_time else None))
     conn.commit()
 
 def get_todos(user):
-    cursor.execute('SELECT item FROM todos WHERE user=? AND date IS NULL', (user,))
+    cursor.execute("SELECT item FROM todos WHERE user=?", (user,))
     return [row[0] for row in cursor.fetchall()]
 
-# ✅ 取得所有有指定日期的事項（提醒用）
-def get_all_todos_with_date(user):
-    cursor.execute('SELECT item, date FROM todos WHERE user=? AND date IS NOT NULL', (user,))
-    return cursor.fetchall()
+def remove_todo(user, item):
+    cursor.execute("DELETE FROM todos WHERE user=? AND item=?", (user, item))
+    conn.commit()
 
+def get_all_reminders():
+    cursor.execute("SELECT user, item, remind_at FROM todos WHERE remind_at IS NOT NULL")
+    return cursor.fetchall()

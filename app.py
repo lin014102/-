@@ -4,7 +4,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
 import os
 from db import add_todo, remove_todo, get_todos
-from scheduler import schedule_daily_reminder
+from scheduler import schedule_all_reminders
 
 load_dotenv()
 app = Flask(__name__)
@@ -12,7 +12,7 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-schedule_daily_reminder(line_bot_api, os.getenv("YOUR_USER_ID"))
+schedule_all_reminders(line_bot_api)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -30,10 +30,9 @@ def handle_message(event):
     text = event.message.text.strip()
     user_id = event.source.user_id
 
-    if text.startswith("新增 "):
-        item = text[3:]
-        add_todo(user_id, item)
-        reply = f"✅ 已新增：{item}"
+    if "/" in text[:5]:  # 偵測開頭是日期
+        add_todo(user_id, text)
+        reply = f"✅ 已新增並排程提醒：{text}"
     elif text.startswith("刪除 "):
         item = text[3:]
         remove_todo(user_id, item)
@@ -42,15 +41,9 @@ def handle_message(event):
         todos = get_todos(user_id)
         reply = "📝 你的代辦事項：\n" + "\n".join(f"- {t}" for t in todos) if todos else "✨ 沒有代辦事項～"
     else:
-        reply = "請輸入：\n➡ 新增 xxx\n➡ 刪除 xxx\n➡ 查詢"
+        reply = "請輸入格式：\n➡ 7/31 繳信用卡（前一天 14:30 會提醒）\n➡ 刪除 xxx\n➡ 查詢"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-    @handler.add(FollowEvent)
-def handle_follow(event):
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text="👋 歡迎使用代辦提醒機器人！\n輸入：\n➡ 新增 xxx\n➡ 查詢\n➡ 刪除 xxx")
-    )
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
