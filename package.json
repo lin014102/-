@@ -1,31 +1,31 @@
 {
-  name line-todo-reminder-bot,
-  version 1.0.0,
-  description LINE 代辦事項提醒機器人,
-  main app.js,
-  scripts {
-    start node app.js,
-    dev nodemon app.js,
-    test echo Error no test specified && exit 1
+  "name": "line-todo-reminder-bot",
+  "version": "1.0.0",
+  "description": "LINE 代辦事項提醒機器人",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  keywords [
-    line,
-    bot,
-    todo,
-    reminder,
-    taiwan
+  "keywords": [
+    "line",
+    "bot",
+    "todo",
+    "reminder",
+    "taiwan"
   ],
-  author Your Name,
-  license MIT,
-  dependencies {
-    @linebot-sdk ^7.5.2,
-    express ^4.18.2,
-    node-cron ^3.0.2
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.2",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.2"
   },
-  devDependencies {
-    nodemon ^3.0.1
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
-  engines {
-    node =14.0.0
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
