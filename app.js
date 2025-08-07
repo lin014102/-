@@ -3,6 +3,7 @@ const line = require('@line/bot-sdk');
 const cron = require('node-cron');
 const fs = require('fs').promises;
 const path = require('path');
+const { DateTime } = require('luxon');  // ✅ 加入 luxon
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,7 +47,7 @@ function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
       todos: [],
-      reminderTime: '09:00', // 預設提醒時間
+      reminderTime: '09:00',
       timezone: 'Asia/Taipei'
     };
     saveData();
@@ -72,12 +73,11 @@ async function handleEvent(event) {
 
   const userId = event.source.userId;
   const userMessage = event.message.text.trim();
-  
+
   initUser(userId);
-  
+
   let replyMessage = '';
 
-  // 解析用戶指令
   if (userMessage === '幫助' || userMessage === 'help') {
     replyMessage = getHelpMessage();
   } else if (userMessage === '查詢' || userMessage === '清單') {
@@ -103,7 +103,6 @@ async function handleEvent(event) {
   });
 }
 
-// 獲取幫助訊息
 function getHelpMessage() {
   return `📋 代辦事項機器人使用說明：
 
@@ -129,14 +128,14 @@ function addTodo(userId, todo) {
   if (!todo) {
     return '請輸入要新增的代辦事項\n格式：新增 [事項內容]';
   }
-  
+
   userData[userId].todos.push({
     id: Date.now(),
     content: todo,
-    createdAt: new Date().toISOString(),
+    createdAt: DateTime.now().setZone('Asia/Taipei').toISO(),  // ✅ 使用台灣時間
     completed: false
   });
-  
+
   saveData();
   return `✅ 已新增代辦事項：「${todo}」\n目前共有 ${userData[userId].todos.length} 項代辦事項`;
 }
@@ -144,31 +143,31 @@ function addTodo(userId, todo) {
 // 刪除代辦事項
 function deleteTodo(userId, index) {
   const todos = userData[userId].todos;
-  
+
   if (index < 0 || index >= todos.length) {
     return `❌ 編號不正確，請輸入 1 到 ${todos.length} 之間的數字`;
   }
-  
+
   const deletedTodo = todos.splice(index, 1)[0];
   saveData();
-  
+
   return `🗑️ 已刪除代辦事項：「${deletedTodo.content}」\n剩餘 ${todos.length} 項代辦事項`;
 }
 
 // 獲取代辦事項清單
 function getTodoList(userId) {
   const todos = userData[userId].todos;
-  
+
   if (todos.length === 0) {
     return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項';
   }
-  
+
   let message = `📋 您的代辦事項清單 (${todos.length} 項)：\n\n`;
   todos.forEach((todo, index) => {
-    const date = new Date(todo.createdAt).toLocaleDateString('zh-TW');
+    const date = DateTime.fromISO(todo.createdAt).setZone('Asia/Taipei').toFormat('yyyy/MM/dd HH:mm'); // ✅ 台灣時間
     message += `${index + 1}. ${todo.content}\n   📅 ${date}\n\n`;
   });
-  
+
   message += '💡 輸入「刪除 [編號]」可刪除指定項目';
   return message;
 }
@@ -176,22 +175,23 @@ function getTodoList(userId) {
 // 設定提醒時間
 function setReminderTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-  
+
   if (!timeRegex.test(time)) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：08:30';
   }
-  
+
   userData[userId].reminderTime = time;
   saveData();
-  
+
   return `⏰ 已設定每日提醒時間為：${time}\n將於每天 ${time} 提醒您的代辦事項`;
 }
 
-// 獲取提醒時間
+// 查詢提醒時間
 function getReminderTime(userId) {
   const time = userData[userId].reminderTime;
-  const now = new Date();
-  const currentServerTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const now = DateTime.now().setZone('Asia/Taipei'); // ✅ 台灣時間
+  const currentServerTime = now.toFormat('HH:mm');
+
   return `⏰ 目前每日提醒時間：${time}\n🕐 伺服器目前時間：${currentServerTime}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
 }
 
@@ -200,18 +200,18 @@ async function sendReminderToUser(userId) {
   try {
     const todos = userData[userId].todos;
     if (todos.length === 0) return;
-    
+
     let message = `🔔 早安！您有 ${todos.length} 項代辦事項：\n\n`;
     todos.forEach((todo, index) => {
       message += `${index + 1}. ${todo.content}\n`;
     });
     message += '\n📝 祝您今天順利完成所有任務！';
-    
+
     await client.pushMessage(userId, {
       type: 'text',
       text: message
     });
-    
+
     console.log(`已發送提醒給用戶: ${userId}`);
   } catch (error) {
     console.error(`發送提醒失敗 ${userId}:`, error);
@@ -220,11 +220,11 @@ async function sendReminderToUser(userId) {
 
 // 發送每日提醒給所有用戶
 async function sendDailyReminders() {
-  const now = new Date();
-  const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  
+  const now = DateTime.now().setZone('Asia/Taipei'); // ✅ 台灣時間
+  const currentTime = now.toFormat('HH:mm');
+
   console.log(`檢查提醒時間: ${currentTime}`);
-  
+
   for (const userId in userData) {
     const user = userData[userId];
     if (user.reminderTime === currentTime && user.todos.length > 0) {
@@ -233,7 +233,7 @@ async function sendDailyReminders() {
   }
 }
 
-// 設定定時任務 - 每分鐘檢查一次
+// 定時任務：每分鐘檢查一次
 cron.schedule('* * * * *', () => {
   sendDailyReminders();
 });
@@ -249,11 +249,12 @@ app.listen(PORT, async () => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    timestamp: new Date().toISOString(),
+    timestamp: DateTime.now().setZone('Asia/Taipei').toISO(), // ✅ 健康檢查時間顯示為台灣時間
     users: Object.keys(userData).length 
   });
 });
 
-// 匯出模組 (用於測試)
+// 匯出模組
 module.exports = { app, userData };
+
 
