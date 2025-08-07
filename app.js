@@ -35,6 +35,67 @@ function getTaiwanTimeHHMM() {
   const taiwanTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
   return `${String(taiwanTime.getHours()).padStart(2, '0')}:${String(taiwanTime.getMinutes()).padStart(2, '0')}`;
 }
+
+// 獲取台灣當前日期
+function getTaiwanDate() {
+  const now = new Date();
+  const taiwanTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  return taiwanTime;
+}
+
+// 解析日期格式 (支援 M/D 或 MM/DD 格式)
+function parseDate(text) {
+  const currentYear = getTaiwanDate().getFullYear();
+  
+  // 匹配 8/9號繳卡費 或 08/09號繳卡費 等格式
+  const datePattern = /(\d{1,2})\/(\d{1,2})號?(.+)|(.+?)(\d{1,2})\/(\d{1,2})號?/;
+  const match = text.match(datePattern);
+  
+  if (match) {
+    let month, day, content;
+    
+    if (match[1] && match[2]) {
+      // 日期在前面：8/9號繳卡費
+      month = parseInt(match[1]);
+      day = parseInt(match[2]);
+      content = match[3].trim();
+    } else if (match[5] && match[6]) {
+      // 日期在後面：繳卡費8/9號
+      month = parseInt(match[5]);
+      day = parseInt(match[6]);
+      content = match[4].trim();
+    }
+    
+    if (month && day && content) {
+      // 驗證日期合法性
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const targetDate = new Date(currentYear, month - 1, day);
+        const today = getTaiwanDate();
+        
+        // 如果日期已過，設為明年
+        if (targetDate < today) {
+          targetDate.setFullYear(currentYear + 1);
+        }
+        
+        return {
+          hasDate: true,
+          date: targetDate,
+          content: content,
+          dateString: `${month}/${day}`
+        };
+      }
+    }
+  }
+  
+  // 沒有找到日期格式，返回原內容
+  return {
+    hasDate: false,
+    date: null,
+    content: text,
+    dateString: null
+  };
+}
+
 async function loadData() {
   try {
     const data = await fs.readFile(DATA_FILE, 'utf8');
@@ -59,7 +120,8 @@ function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
       todos: [],
-      reminderTime: '09:00', // 預設提醒時間
+      morningReminderTime: '09:00', // 早上提醒時間
+      eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
     };
     saveData();
@@ -101,11 +163,14 @@ async function handleEvent(event) {
   } else if (userMessage.startsWith('刪除 ')) {
     const index = parseInt(userMessage.substring(3).trim()) - 1;
     replyMessage = deleteTodo(userId, index);
-  } else if (userMessage.startsWith('設定時間 ')) {
+  } else if (userMessage.startsWith('早上時間 ')) {
     const time = userMessage.substring(5).trim();
-    replyMessage = setReminderTime(userId, time);
+    replyMessage = setMorningTime(userId, time);
+  } else if (userMessage.startsWith('晚上時間 ')) {
+    const time = userMessage.substring(5).trim();
+    replyMessage = setEveningTime(userId, time);
   } else if (userMessage === '查詢時間') {
-    replyMessage = getReminderTime(userId);
+    replyMessage = getReminderTimes(userId);
   } else {
     replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
   }
@@ -122,17 +187,25 @@ function getHelpMessage() {
 
 📝 基本功能：
 • 新增 [事項] - 新增代辦事項
+• 新增 8/9號繳卡費 - 新增有日期的事項
 • 刪除 [編號] - 刪除指定代辦事項
 • 查詢 或 清單 - 查看所有代辦事項
 
 ⏰ 提醒設定：
-• 設定時間 [HH:MM] - 設定每日提醒時間
+• 早上時間 [HH:MM] - 設定早上提醒時間
+• 晚上時間 [HH:MM] - 設定晚上提醒時間
 • 查詢時間 - 查看目前提醒時間
 
+🔔 智能提醒：
+• 有日期的事項：只在前一天提醒
+• 沒日期的事項：每天提醒
+• 每天早晚各提醒一次
+
 💡 範例：
+• 新增 8/15號繳電費
 • 新增 買午餐
-• 刪除 1
-• 設定時間 08:30
+• 早上時間 08:30
+• 晚上時間 19:00
 
 輸入「幫助」可重複查看此說明`;
 }
@@ -140,18 +213,36 @@ function getHelpMessage() {
 // 新增代辦事項
 function addTodo(userId, todo) {
   if (!todo) {
-    return '請輸入要新增的代辦事項\n格式：新增 [事項內容]';
+    return '請輸入要新增的代辦事項\n格式：新增 [事項內容] 或 新增 8/9號[事項內容]';
   }
   
-  userData[userId].todos.push({
-    id: Date.now(),
-    content: todo,
-    createdAt: getTaiwanTime(),
-    completed: false
-  });
+  const parsed = parseDate(todo);
   
+  const todoItem = {
+    id: Date.now(),
+    content: parsed.content,
+    createdAt: getTaiwanTime(),
+    completed: false,
+    hasDate: parsed.hasDate,
+    targetDate: parsed.date ? parsed.date.toISOString() : null,
+    dateString: parsed.dateString
+  };
+  
+  userData[userId].todos.push(todoItem);
   saveData();
-  return `✅ 已新增代辦事項：「${todo}」\n目前共有 ${userData[userId].todos.length} 項代辦事項`;
+  
+  let message = `✅ 已新增代辦事項：「${parsed.content}」\n`;
+  
+  if (parsed.hasDate) {
+    const targetDate = parsed.date.toLocaleDateString('zh-TW');
+    message += `📅 目標日期：${targetDate}\n🔔 將在前一天提醒您`;
+  } else {
+    message += `🔔 將每天提醒您`;
+  }
+  
+  message += `\n目前共有 ${userData[userId].todos.length} 項代辦事項`;
+  
+  return message;
 }
 
 // 刪除代辦事項
@@ -173,80 +264,168 @@ function getTodoList(userId) {
   const todos = userData[userId].todos;
   
   if (todos.length === 0) {
-    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項';
+    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項';
   }
   
   let message = `📋 您的代辦事項清單 (${todos.length} 項)：\n\n`;
-  todos.forEach((todo, index) => {
-    const date = todo.createdAt.includes('/')? todo.createdAt.split(' ')[0] : new Date(todo.createdAt).toLocaleDateString('zh-TW');
-    message += `${index + 1}. ${todo.content}\n   📅 ${date}\n\n`;
-  });
+  
+  // 分類顯示：有日期的和沒日期的
+  const datedTodos = todos.filter(todo => todo.hasDate);
+  const regularTodos = todos.filter(todo => !todo.hasDate);
+  
+  let index = 1;
+  
+  if (datedTodos.length > 0) {
+    message += '📅 有日期的事項：\n';
+    datedTodos.forEach((todo) => {
+      const targetDate = new Date(todo.targetDate).toLocaleDateString('zh-TW');
+      message += `${index}. ${todo.content}\n   📅 ${targetDate} (前一天提醒)\n\n`;
+      index++;
+    });
+  }
+  
+  if (regularTodos.length > 0) {
+    message += '🔄 每日提醒事項：\n';
+    regularTodos.forEach((todo) => {
+      const date = todo.createdAt.includes('/') ? todo.createdAt.split(' ')[0] : new Date(todo.createdAt).toLocaleDateString('zh-TW');
+      message += `${index}. ${todo.content}\n   📅 建立於 ${date}\n\n`;
+      index++;
+    });
+  }
   
   message += '💡 輸入「刪除 [編號]」可刪除指定項目';
   return message;
 }
 
-// 設定提醒時間
-function setReminderTime(userId, time) {
+// 設定早上提醒時間
+function setMorningTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
   
   if (!timeRegex.test(time)) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：08:30';
   }
   
-  userData[userId].reminderTime = time;
+  userData[userId].morningReminderTime = time;
   saveData();
   
-  return `⏰ 已設定每日提醒時間為：${time}\n將於每天 ${time} 提醒您的代辦事項`;
+  return `🌅 已設定早上提醒時間為：${time}`;
+}
+
+// 設定晚上提醒時間
+function setEveningTime(userId, time) {
+  const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+  
+  if (!timeRegex.test(time)) {
+    return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：19:00';
+  }
+  
+  userData[userId].eveningReminderTime = time;
+  saveData();
+  
+  return `🌙 已設定晚上提醒時間為：${time}`;
 }
 
 // 獲取提醒時間
-function getReminderTime(userId) {
-  const time = userData[userId].reminderTime;
+function getReminderTimes(userId) {
+  const morningTime = userData[userId].morningReminderTime;
+  const eveningTime = userData[userId].eveningReminderTime;
   const currentTaiwanTime = getTaiwanTimeHHMM();
-  return `⏰ 目前每日提醒時間：${time} (台灣時間)\n🕐 台灣目前時間：${currentTaiwanTime}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
+  
+  return `⏰ 目前提醒時間設定：
+🌅 早上：${morningTime}
+🌙 晚上：${eveningTime}
+🕐 台灣目前時間：${currentTaiwanTime}
+
+輸入「早上時間 [HH:MM]」或「晚上時間 [HH:MM]」可修改提醒時間`;
+}
+
+// 檢查是否需要提醒
+function shouldRemindTodo(todo) {
+  const today = getTaiwanDate();
+  
+  if (!todo.hasDate) {
+    // 沒有日期的事項，每天提醒
+    return true;
+  }
+  
+  // 有日期的事項，只在前一天提醒
+  const targetDate = new Date(todo.targetDate);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  
+  // 檢查明天是否是目標日期
+  return (
+    tomorrow.getFullYear() === targetDate.getFullYear() &&
+    tomorrow.getMonth() === targetDate.getMonth() &&
+    tomorrow.getDate() === targetDate.getDate()
+  );
 }
 
 // 發送提醒訊息給單一用戶
-async function sendReminderToUser(userId) {
+async function sendReminderToUser(userId, timeType) {
   try {
-    const todos = userData[userId].todos;
+    const user = userData[userId];
+    const todos = user.todos.filter(shouldRemindTodo);
+    
     if (todos.length === 0) return;
     
-    let message = `🔔 早安！您有 ${todos.length} 項代辦事項：\n\n`;
-    todos.forEach((todo, index) => {
-      message += `${index + 1}. ${todo.content}\n`;
-    });
-    message += '\n📝 祝您今天順利完成所有任務！';
+    const timeIcon = timeType === 'morning' ? '🌅' : '🌙';
+    const timeText = timeType === 'morning' ? '早安' : '晚安';
+    
+    let message = `${timeIcon} ${timeText}！您有 ${todos.length} 項待辦事項：\n\n`;
+    
+    // 分類顯示
+    const datedTodos = todos.filter(todo => todo.hasDate);
+    const regularTodos = todos.filter(todo => !todo.hasDate);
+    
+    if (datedTodos.length > 0) {
+      message += '📅 明天要做的事：\n';
+      datedTodos.forEach((todo, index) => {
+        message += `${index + 1}. ${todo.content}\n`;
+      });
+      message += '\n';
+    }
+    
+    if (regularTodos.length > 0) {
+      message += '🔄 每日待辦：\n';
+      regularTodos.forEach((todo, index) => {
+        message += `${datedTodos.length + index + 1}. ${todo.content}\n`;
+      });
+    }
+    
+    message += '\n📝 祝您順利完成所有任務！';
     
     await client.pushMessage(userId, {
       type: 'text',
       text: message
     });
     
-    console.log(`已發送提醒給用戶: ${userId}`);
+    console.log(`已發送${timeText}提醒給用戶: ${userId}`);
   } catch (error) {
     console.error(`發送提醒失敗 ${userId}:`, error);
   }
 }
 
-// 發送每日提醒給所有用戶
-async function sendDailyReminders() {
+// 發送提醒給所有用戶
+async function sendReminders(timeType) {
   const currentTime = getTaiwanTimeHHMM();
   
-  console.log(`檢查提醒時間 (台灣時間): ${currentTime}`);
+  console.log(`檢查${timeType === 'morning' ? '早上' : '晚上'}提醒時間 (台灣時間): ${currentTime}`);
   
   for (const userId in userData) {
     const user = userData[userId];
-    if (user.reminderTime === currentTime && user.todos.length > 0) {
-      await sendReminderToUser(userId);
+    const targetTime = timeType === 'morning' ? user.morningReminderTime : user.eveningReminderTime;
+    
+    if (targetTime === currentTime) {
+      await sendReminderToUser(userId, timeType);
     }
   }
 }
 
 // 設定定時任務 - 每分鐘檢查一次
 cron.schedule('* * * * *', () => {
-  sendDailyReminders();
+  sendReminders('morning');
+  sendReminders('evening');
 });
 
 // 啟動伺服器
@@ -267,6 +446,7 @@ app.get('/health', (req, res) => {
 
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+
 
 
 
