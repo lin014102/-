@@ -190,7 +190,9 @@ function setReminderTime(userId, time) {
 // 獲取提醒時間
 function getReminderTime(userId) {
   const time = userData[userId].reminderTime;
-  return `⏰ 目前每日提醒時間：${time}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
+  const now = new Date();
+  const currentServerTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  return `⏰ 目前每日提醒時間：${time}\n🕐 伺服器目前時間：${currentServerTime}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
 }
 
 // 發送提醒訊息給單一用戶
@@ -253,4 +255,5 @@ app.get('/health', (req, res) => {
 });
 
 // 匯出模組 (用於測試)
+
 module.exports = { app, userData };
