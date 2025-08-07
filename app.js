@@ -21,7 +21,20 @@ const DATA_FILE = path.join(__dirname, 'todos.json');
 // 初始化資料結構
 let userData = {};
 
-// 載入儲存的資料
+// 獲取台灣時間
+function getTaiwanTime() {
+  return new Date().toLocaleString("zh-TW", {
+    timeZone: "Asia/Taipei",
+    hour12: false
+  });
+}
+
+// 獲取台灣時間 HH:MM 格式
+function getTaiwanTimeHHMM() {
+  const now = new Date();
+  const taiwanTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  return `${String(taiwanTime.getHours()).padStart(2, '0')}:${String(taiwanTime.getMinutes()).padStart(2, '0')}`;
+}
 async function loadData() {
   try {
     const data = await fs.readFile(DATA_FILE, 'utf8');
@@ -133,7 +146,7 @@ function addTodo(userId, todo) {
   userData[userId].todos.push({
     id: Date.now(),
     content: todo,
-    createdAt: new Date().toISOString(),
+    createdAt: getTaiwanTime(),
     completed: false
   });
   
@@ -165,7 +178,7 @@ function getTodoList(userId) {
   
   let message = `📋 您的代辦事項清單 (${todos.length} 項)：\n\n`;
   todos.forEach((todo, index) => {
-    const date = new Date(todo.createdAt).toLocaleDateString('zh-TW');
+    const date = todo.createdAt.includes('/')? todo.createdAt.split(' ')[0] : new Date(todo.createdAt).toLocaleDateString('zh-TW');
     message += `${index + 1}. ${todo.content}\n   📅 ${date}\n\n`;
   });
   
@@ -190,9 +203,8 @@ function setReminderTime(userId, time) {
 // 獲取提醒時間
 function getReminderTime(userId) {
   const time = userData[userId].reminderTime;
-  const now = new Date();
-  const currentServerTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  return `⏰ 目前每日提醒時間：${time}\n🕐 伺服器目前時間：${currentServerTime}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
+  const currentTaiwanTime = getTaiwanTimeHHMM();
+  return `⏰ 目前每日提醒時間：${time} (台灣時間)\n🕐 台灣目前時間：${currentTaiwanTime}\n輸入「設定時間 [HH:MM]」可修改提醒時間`;
 }
 
 // 發送提醒訊息給單一用戶
@@ -220,10 +232,9 @@ async function sendReminderToUser(userId) {
 
 // 發送每日提醒給所有用戶
 async function sendDailyReminders() {
-  const now = new Date();
-  const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const currentTime = getTaiwanTimeHHMM();
   
-  console.log(`檢查提醒時間: ${currentTime}`);
+  console.log(`檢查提醒時間 (台灣時間): ${currentTime}`);
   
   for (const userId in userData) {
     const user = userData[userId];
@@ -255,5 +266,4 @@ app.get('/health', (req, res) => {
 });
 
 // 匯出模組 (用於測試)
-
 module.exports = { app, userData };
