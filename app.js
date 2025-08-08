@@ -499,9 +499,19 @@ function isTodoExpired(todo) {
 async function sendReminderToUser(userId, timeType) {
   try {
     const user = userData[userId];
+    if (!user || !user.todos) {
+      console.log(`用戶 ${userId} 資料不存在`);
+      return;
+    }
+    
     const todos = user.todos.filter(shouldRemindTodo);
     
-    if (todos.length === 0) return;
+    console.log(`用戶 ${userId} 需要提醒的事項數量: ${todos.length}`);
+    
+    if (todos.length === 0) {
+      console.log(`用戶 ${userId} 沒有需要提醒的事項`);
+      return;
+    }
     
     const timeIcon = timeType === 'morning' ? '🌅' : '🌙';
     const timeText = timeType === 'morning' ? '早安' : '晚安';
@@ -534,9 +544,9 @@ async function sendReminderToUser(userId, timeType) {
       text: message
     });
     
-    console.log(`已發送${timeText}提醒給用戶: ${userId}`);
+    console.log(`✅ 已發送${timeText}提醒給用戶: ${userId}`);
   } catch (error) {
-    console.error(`發送提醒失敗 ${userId}:`, error);
+    console.error(`❌ 發送提醒失敗 ${userId}:`, error);
   }
 }
 
@@ -625,6 +635,7 @@ app.get('/cleanup', async (req, res) => {
 
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+
 
 
 
