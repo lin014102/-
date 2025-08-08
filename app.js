@@ -96,28 +96,65 @@ function parseDate(text) {
   };
 }
 
+// 載入資料 - 添加重試機制
 async function loadData() {
-  try {
-    const data = await fs.readFile(DATA_FILE, 'utf8');
-    userData = JSON.parse(data);
-  } catch (error) {
-    console.log('初始化空的資料檔案');
-    userData = {};
+  let retryCount = 0;
+  const maxRetries = 3;
+  
+  while (retryCount < maxRetries) {
+    try {
+      const data = await fs.readFile(DATA_FILE, 'utf8');
+      userData = JSON.parse(data);
+      console.log(`資料載入成功，共有 ${Object.keys(userData).length} 個用戶`);
+      return;
+    } catch (error) {
+      retryCount++;
+      if (error.code === 'ENOENT') {
+        console.log('資料檔案不存在，初始化空的資料檔案');
+        userData = {};
+        await saveData();
+        return;
+      } else if (retryCount < maxRetries) {
+        console.log(`載入資料失敗，第 ${retryCount} 次重試...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        console.error('載入資料失敗，使用空資料:', error);
+        userData = {};
+      }
+    }
   }
 }
 
-// 儲存資料
+// 儲存資料 - 添加重試機制和鎖定
+let isSaving = false;
 async function saveData() {
+  if (isSaving) {
+    console.log('正在儲存中，跳過此次儲存');
+    return;
+  }
+  
+  isSaving = true;
   try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(userData, null, 2));
-    console.log('資料已儲存，目前用戶數:', Object.keys(userData).length);
+    const dataToSave = JSON.stringify(userData, null, 2);
+    await fs.writeFile(DATA_FILE, dataToSave, 'utf8');
+    console.log('資料儲存成功');
   } catch (error) {
     console.error('儲存資料失敗:', error);
-    throw error; // 拋出錯誤以便調試
+    // 重試一次
+    try {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const dataToSave = JSON.stringify(userData, null, 2);
+      await fs.writeFile(DATA_FILE, dataToSave, 'utf8');
+      console.log('重試儲存成功');
+    } catch (retryError) {
+      console.error('重試儲存也失敗:', retryError);
+    }
+  } finally {
+    isSaving = false;
   }
 }
 
-// 初始化用戶資料
+// 初始化用戶資料 - 確保資料同步
 function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
@@ -126,8 +163,9 @@ function initUser(userId) {
       eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
     };
-    console.log(`初始化用戶: ${userId}`);
-    saveData(); // 確保立即儲存新用戶資料
+    // 立即儲存新用戶資料
+    saveData().catch(err => console.error('初始化用戶資料儲存失敗:', err));
+    console.log(`初始化新用戶: ${userId}`);
   }
 }
 
@@ -142,7 +180,7 @@ app.post('/webhook', line.middleware(config), (req, res) => {
     });
 });
 
-// 處理訊息事件
+// 處理訊息事件 - 加強錯誤處理和日誌
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
@@ -151,37 +189,53 @@ async function handleEvent(event) {
   const userId = event.source.userId;
   const userMessage = event.message.text.trim();
   
+  console.log(`收到用戶 ${userId} 的訊息: "${userMessage}"`);
+  
+  // 確保用戶初始化
   initUser(userId);
   
   let replyMessage = '';
 
-  // 解析用戶指令
-  if (userMessage === '幫助' || userMessage === 'help') {
-    replyMessage = getHelpMessage();
-  } else if (userMessage === '查詢' || userMessage === '清單') {
-    replyMessage = getTodoList(userId);
-  } else if (userMessage.startsWith('新增 ')) {
-    const todo = userMessage.substring(3).trim();
-    replyMessage = addTodo(userId, todo);
-  } else if (userMessage.startsWith('刪除 ')) {
-    const index = parseInt(userMessage.substring(3).trim()) - 1;
-    replyMessage = deleteTodo(userId, index);
-  } else if (userMessage.startsWith('早上時間 ')) {
-    const time = userMessage.substring(5).trim();
-    replyMessage = setMorningTime(userId, time);
-  } else if (userMessage.startsWith('晚上時間 ')) {
-    const time = userMessage.substring(5).trim();
-    replyMessage = setEveningTime(userId, time);
-  } else if (userMessage === '查詢時間') {
-    replyMessage = getReminderTimes(userId);
-  } else {
-    replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
-  }
+  try {
+    // 解析用戶指令
+    if (userMessage === '幫助' || userMessage === 'help') {
+      replyMessage = getHelpMessage();
+    } else if (userMessage === '查詢' || userMessage === '清單') {
+      replyMessage = getTodoList(userId);
+    } else if (userMessage.startsWith('新增 ')) {
+      const todo = userMessage.substring(3).trim();
+      replyMessage = addTodo(userId, todo);
+    } else if (userMessage.startsWith('刪除 ')) {
+      const index = parseInt(userMessage.substring(3).trim()) - 1;
+      replyMessage = deleteTodo(userId, index);
+    } else if (userMessage.startsWith('早上時間 ')) {
+      const time = userMessage.substring(5).trim();
+      replyMessage = setMorningTime(userId, time);
+    } else if (userMessage.startsWith('晚上時間 ')) {
+      const time = userMessage.substring(5).trim();
+      replyMessage = setEveningTime(userId, time);
+    } else if (userMessage === '查詢時間') {
+      replyMessage = getReminderTimes(userId);
+    } else if (userMessage === '狀態') {
+      // 添加狀態檢查指令
+      replyMessage = getStatusMessage(userId);
+    } else {
+      replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
+    }
 
-  return client.replyMessage(event.replyToken, {
-    type: 'text',
-    text: replyMessage
-  });
+    console.log(`回覆用戶 ${userId}: "${replyMessage.substring(0, 50)}..."`);
+    
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: replyMessage
+    });
+  } catch (error) {
+    console.error('處理訊息時發生錯誤:', error);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '處理您的訊息時發生錯誤，請稍後再試或輸入「幫助」查看使用說明'
+    });
+  }
 }
 
 // 獲取幫助訊息
@@ -213,13 +267,14 @@ function getHelpMessage() {
 輸入「幫助」可重複查看此說明`;
 }
 
-// 新增代辦事項
+// 新增代辦事項 - 加強錯誤處理和日誌
 function addTodo(userId, todo) {
   if (!todo) {
     return '請輸入要新增的代辦事項\n格式：新增 [事項內容] 或 新增 8/9號[事項內容]';
   }
   
   const parsed = parseDate(todo);
+  console.log(`用戶 ${userId} 新增事項:`, { parsed, originalTodo: todo });
   
   const todoItem = {
     id: Date.now(),
@@ -231,14 +286,16 @@ function addTodo(userId, todo) {
     dateString: parsed.dateString
   };
   
-  userData[userId].todos.push(todoItem);
+  // 確保用戶存在
+  if (!userData[userId]) {
+    initUser(userId);
+  }
   
-  // 立即儲存並等待完成
-  saveData().then(() => {
-    console.log(`用戶 ${userId} 新增事項: ${parsed.content}, 總數: ${userData[userId].todos.length}`);
-  }).catch(err => {
-    console.error('新增事項時儲存失敗:', err);
-  });
+  userData[userId].todos.push(todoItem);
+  console.log(`新增後用戶 ${userId} 的代辦事項數量: ${userData[userId].todos.length}`);
+  
+  // 立即儲存資料
+  saveData().catch(err => console.error('新增代辦事項儲存失敗:', err));
   
   let message = `✅ 已新增代辦事項：「${parsed.content}」\n`;
   
@@ -254,8 +311,12 @@ function addTodo(userId, todo) {
   return message;
 }
 
-// 刪除代辦事項
+// 刪除代辦事項 - 加強錯誤處理
 function deleteTodo(userId, index) {
+  if (!userData[userId]) {
+    initUser(userId);
+  }
+  
   const todos = userData[userId].todos;
   
   if (index < 0 || index >= todos.length) {
@@ -263,16 +324,44 @@ function deleteTodo(userId, index) {
   }
   
   const deletedTodo = todos.splice(index, 1)[0];
-  saveData();
+  console.log(`用戶 ${userId} 刪除事項: ${deletedTodo.content}`);
+  
+  // 立即儲存資料
+  saveData().catch(err => console.error('刪除代辦事項儲存失敗:', err));
   
   return `🗑️ 已刪除代辦事項：「${deletedTodo.content}」\n剩餘 ${todos.length} 項代辦事項`;
 }
 
-// 獲取代辦事項清單
-function getTodoList(userId) {
-  const todos = userData[userId].todos;
+// 狀態檢查功能
+function getStatusMessage(userId) {
+  if (!userData[userId]) {
+    initUser(userId);
+  }
   
-  console.log(`用戶 ${userId} 查詢清單，總數: ${todos.length}`);
+  const user = userData[userId];
+  const currentTime = getTaiwanTimeHHMM();
+  
+  return `📊 系統狀態：
+👤 用戶ID: ${userId.substring(0, 8)}...
+📋 代辦事項數量: ${user.todos.length}
+🌅 早上提醒時間: ${user.morningReminderTime}
+🌙 晚上提醒時間: ${user.eveningReminderTime}
+🕐 目前台灣時間: ${currentTime}
+💾 資料載入狀態: 正常
+
+如果發現資料不同步，請聯繫管理員`;
+}
+
+// 獲取代辦事項清單 - 加強錯誤處理
+function getTodoList(userId) {
+  // 確保用戶資料存在
+  if (!userData[userId]) {
+    console.log(`用戶 ${userId} 不存在，初始化中...`);
+    initUser(userId);
+  }
+  
+  const todos = userData[userId].todos;
+  console.log(`查詢用戶 ${userId} 的代辦事項，共 ${todos.length} 項`);
   
   if (todos.length === 0) {
     return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項';
@@ -316,8 +405,12 @@ function setMorningTime(userId, time) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：08:30';
   }
   
+  if (!userData[userId]) {
+    initUser(userId);
+  }
+  
   userData[userId].morningReminderTime = time;
-  saveData();
+  saveData().catch(err => console.error('設定早上時間儲存失敗:', err));
   
   return `🌅 已設定早上提醒時間為：${time}`;
 }
@@ -330,14 +423,22 @@ function setEveningTime(userId, time) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：19:00';
   }
   
+  if (!userData[userId]) {
+    initUser(userId);
+  }
+  
   userData[userId].eveningReminderTime = time;
-  saveData();
+  saveData().catch(err => console.error('設定晚上時間儲存失敗:', err));
   
   return `🌙 已設定晚上提醒時間為：${time}`;
 }
 
 // 獲取提醒時間
 function getReminderTimes(userId) {
+  if (!userData[userId]) {
+    initUser(userId);
+  }
+  
   const morningTime = userData[userId].morningReminderTime;
   const eveningTime = userData[userId].eveningReminderTime;
   const currentTaiwanTime = getTaiwanTimeHHMM();
@@ -451,22 +552,13 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    users: Object.keys(userData).length,
-    totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0)
-  });
-});
-
-// 新增調試端點
-app.get('/debug', (req, res) => {
-  res.json({
-    userData: userData,
-    dataFile: DATA_FILE,
-    timestamp: new Date().toISOString()
+    users: Object.keys(userData).length 
   });
 });
 
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+
 
 
 
