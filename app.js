@@ -302,25 +302,6 @@ function getHelpMessage() {
 輸入「幫助」可重複查看此說明`;
 }
 
-// 新增：自動生成功能（可選）
-// 可以在每月1號自動生成當月固定事項
-cron.schedule('0 0 1 * *', async () => {
-  console.log('🔄 每月自動生成固定事項...');
-  
-  for (const userId in userData) {
-    try {
-      const user = userData[userId];
-      if (!user.monthlyTodos || user.monthlyTodos.length === 0) continue;
-      
-      // 自動生成（但不發送通知，只記錄在日誌）
-      await generateMonthlyTodosForUser(userId);
-      console.log(`✅ 已為用戶 ${userId} 自動生成每月事項`);
-    } catch (error) {
-      console.error(`❌ 用戶 ${userId} 自動生成失敗:`, error);
-    }
-  }
-});
-
 // 輔助函數：為特定用戶生成每月事項（不返回訊息）
 async function generateMonthlyTodosForUser(userId) {
   const monthlyTodos = userData[userId].monthlyTodos.filter(todo => todo.enabled);
@@ -367,10 +348,29 @@ async function generateMonthlyTodosForUser(userId) {
   return generatedCount;
 }
 
+// 注意：以下程式碼需要加入到您現有的 cron.schedule 區塊附近
+// 或者您可以選擇不使用自動生成功能，只保留手動「生成本月」功能
 
-
-
-
-
-
-
+/*
+// 每月1號自動生成固定事項（可選功能）
+// 請將此段程式碼加入到您現有的 cron.schedule('* * * * *', ...) 後面
+cron.schedule('0 0 1 * *', async () => {
+  console.log('🔄 每月自動生成固定事項...');
+  
+  if (!isDataLoaded) return;
+  
+  for (const userId in userData) {
+    try {
+      const user = userData[userId];
+      if (!user.monthlyTodos || user.monthlyTodos.length === 0) continue;
+      
+      const generated = await generateMonthlyTodosForUser(userId);
+      if (generated > 0) {
+        console.log(`✅ 已為用戶 ${userId} 自動生成 ${generated} 項每月事項`);
+      }
+    } catch (error) {
+      console.error(`❌ 用戶 ${userId} 自動生成失敗:`, error);
+    }
+  }
+});
+*/
