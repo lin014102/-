@@ -1598,3 +1598,138 @@ app.get('/generate-monthly', async (req, res) => {
 
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+// 第9段：Keep-Alive 機制和記憶體管理（加在最後面）
+
+// Keep-Alive 機制 - 防止伺服器休眠
+const KEEP_ALIVE_URL = process.env.KEEP_ALIVE_URL || `http://localhost:${PORT}/health`;
+
+// 只在生產環境啟用 Keep-Alive（避免在本地開發時干擾）
+if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'dev') {
+  console.log('🔄 啟用 Keep-Alive 機制，每10分鐘自動喚醒');
+  
+  setInterval(async () => {
+    try {
+      // 使用 fetch 或 http 模組
+      const response = await fetch(KEEP_ALIVE_URL);
+      const uptime = Math.floor(process.uptime() / 60);
+      console.log(`🟢 Keep-Alive: ${new Date().toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})} - Status: ${response.status} - 運行: ${uptime}分鐘`);
+    } catch (error) {
+      console.log(`🔴 Keep-Alive 失敗: ${error.message}`);
+    }
+  }, 10 * 60 * 1000); // 10分鐘
+}
+
+// 新增：Ping 端點（輕量級檢查）
+app.get('/ping', (req, res) => {
+  res.json({ 
+    pong: true, 
+    timestamp: new Date().toISOString(),
+    taiwanTime: getTaiwanTime(),
+    uptime: process.uptime()
+  });
+});
+
+// 新增：喚醒端點
+app.get('/wake', (req, res) => {
+  console.log('🌅 收到喚醒請求');
+  res.json({ 
+    message: '機器人已喚醒',
+    timestamp: new Date().toISOString(),
+    taiwanTime: getTaiwanTime(),
+    isDataLoaded: isDataLoaded,
+    activeTimers: shortTermReminders.size,
+    uptime: process.uptime()
+  });
+});
+
+// 改進：更頻繁的記憶體清理
+setInterval(() => {
+  // 清理處理過的訊息（原有功能）
+  const oldSize = processedMessages.size;
+  processedMessages.clear();
+  
+  // 新增：清理過期的短期提醒
+  const currentTime = new Date();
+  let cleanedCount = 0;
+  
+  for (const [id, data] of shortTermReminders.entries()) {
+    const reminderTime = new Date(data.reminderTime);
+    // 清理超過30分鐘的過期提醒
+    if (reminderTime < currentTime - 1800000) { // 30分鐘
+      if (data.timerId) {
+        clearTimeout(data.timerId);
+      }
+      shortTermReminders.delete(id);
+      cleanedCount++;
+    }
+  }
+  
+  // 記憶體使用情況監控
+  const memUsage = process.memoryUsage();
+  const memUsageMB = {
+    rss: Math.round(memUsage.rss / 1024 / 1024 * 100) / 100,
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024 * 100) / 100,
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024 * 100) / 100
+  };
+  
+  console.log(`🧹 清理完成 - 訊息ID: ${oldSize}個, 過期提醒: ${cleanedCount}個`);
+  console.log(`📊 記憶體使用: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, 短期提醒: ${shortTermReminders.size}個`);
+  
+  // 如果記憶體使用過高，建議重啟（記錄警告）
+  if (memUsageMB.heapUsed > 200) {
+    console.log(`⚠️ 記憶體使用偏高: ${memUsageMB.heapUsed}MB`);
+  }
+  
+}, 1800000); // 30分鐘執行一次
+
+// 系統狀態監控（每10分鐘報告一次）
+setInterval(() => {
+  const uptime = process.uptime();
+  const uptimeHours = Math.floor(uptime / 3600);
+  const uptimeMinutes = Math.floor((uptime % 3600) / 60);
+  const currentTime = getTaiwanTime();
+  
+  console.log(`⏱️ [${currentTime}] 運行時間: ${uptimeHours}小時${uptimeMinutes}分鐘`);
+  console.log(`📊 活躍用戶: ${Object.keys(userData).length}, 短期提醒: ${shortTermReminders.size}, 資料載入: ${isDataLoaded ? '✅' : '❌'}`);
+}, 600000); // 10分鐘報告一次
+
+// 程序退出時的清理
+process.on('SIGTERM', () => {
+  console.log('收到 SIGTERM，正在清理資源...');
+  // 清理所有短期提醒的定時器
+  for (const [id, data] of shortTermReminders.entries()) {
+    if (data.timerId) {
+      clearTimeout(data.timerId);
+    }
+  }
+  shortTermReminders.clear();
+  console.log('資源清理完成');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('收到 SIGINT (Ctrl+C)，正在清理資源...');
+  // 清理所有短期提醒的定時器
+  for (const [id, data] of shortTermReminders.entries()) {
+    if (data.timerId) {
+      clearTimeout(data.timerId);
+    }
+  }
+  shortTermReminders.clear();
+  console.log('資源清理完成');
+  process.exit(0);
+});
+
+// 處理未捕獲的錯誤
+process.on('uncaughtException', (error) => {
+  console.error('❌ 未捕獲的異常:', error);
+  // 不要立即退出，讓程序繼續運行
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ 未處理的 Promise 拒絕:', reason);
+  // 不要立即退出，讓程序繼續運行
+});
+
+console.log('🚀 LINE Bot Keep-Alive 機制已啟動');
+console.log(`🌐 Keep-Alive URL: ${KEEP_ALIVE_URL}`);
