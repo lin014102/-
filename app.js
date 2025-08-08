@@ -110,8 +110,10 @@ async function loadData() {
 async function saveData() {
   try {
     await fs.writeFile(DATA_FILE, JSON.stringify(userData, null, 2));
+    console.log('資料已儲存，目前用戶數:', Object.keys(userData).length);
   } catch (error) {
     console.error('儲存資料失敗:', error);
+    throw error; // 拋出錯誤以便調試
   }
 }
 
@@ -124,7 +126,8 @@ function initUser(userId) {
       eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
     };
-    saveData();
+    console.log(`初始化用戶: ${userId}`);
+    saveData(); // 確保立即儲存新用戶資料
   }
 }
 
@@ -229,7 +232,13 @@ function addTodo(userId, todo) {
   };
   
   userData[userId].todos.push(todoItem);
-  saveData();
+  
+  // 立即儲存並等待完成
+  saveData().then(() => {
+    console.log(`用戶 ${userId} 新增事項: ${parsed.content}, 總數: ${userData[userId].todos.length}`);
+  }).catch(err => {
+    console.error('新增事項時儲存失敗:', err);
+  });
   
   let message = `✅ 已新增代辦事項：「${parsed.content}」\n`;
   
@@ -262,6 +271,8 @@ function deleteTodo(userId, index) {
 // 獲取代辦事項清單
 function getTodoList(userId) {
   const todos = userData[userId].todos;
+  
+  console.log(`用戶 ${userId} 查詢清單，總數: ${todos.length}`);
   
   if (todos.length === 0) {
     return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項';
@@ -440,12 +451,23 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    users: Object.keys(userData).length 
+    users: Object.keys(userData).length,
+    totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0)
+  });
+});
+
+// 新增調試端點
+app.get('/debug', (req, res) => {
+  res.json({
+    userData: userData,
+    dataFile: DATA_FILE,
+    timestamp: new Date().toISOString()
   });
 });
 
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+
 
 
 
