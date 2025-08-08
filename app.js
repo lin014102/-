@@ -235,6 +235,11 @@ async function handleEvent(event) {
       replyMessage = getReminderTimes(userId);
     } else if (userMessage === '狀態') {
       replyMessage = getSystemStatus(userId);
+    } else if (userMessage === '測試提醒') {
+      replyMessage = await testReminder(userId);
+    } else if (userMessage.startsWith('測試時間 ')) {
+      const time = userMessage.substring(5).trim();
+      replyMessage = await testTimeReminder(userId, time);
     } else {
       replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
     }
@@ -285,11 +290,17 @@ function getHelpMessage() {
 • 沒日期的事項：每天提醒
 • 每天早晚各提醒一次
 
+🧪 測試功能：
+• 狀態 - 查看系統狀態
+• 測試提醒 - 立即測試提醒功能
+• 測試時間 [HH:MM] - 測試特定時間提醒
+
 💡 範例：
 • 新增 8/15號繳電費
 • 新增 買午餐
 • 早上時間 08:30
 • 晚上時間 19:00
+• 測試時間 14:30
 
 輸入「幫助」可重複查看此說明`;
 }
@@ -554,22 +565,79 @@ async function sendReminderToUser(userId, timeType) {
 async function sendReminders(timeType) {
   const currentTime = getTaiwanTimeHHMM();
   
-  console.log(`檢查${timeType === 'morning' ? '早上' : '晚上'}提醒時間 (台灣時間): ${currentTime}`);
+  console.log(`🔔 檢查${timeType === 'morning' ? '早上' : '晚上'}提醒時間 (台灣時間): ${currentTime}`);
+  console.log(`📊 目前總用戶數: ${Object.keys(userData).length}`);
+  
+  let remindersSent = 0;
   
   for (const userId in userData) {
     const user = userData[userId];
+    if (!user) continue;
+    
     const targetTime = timeType === 'morning' ? user.morningReminderTime : user.eveningReminderTime;
     
+    console.log(`用戶 ${userId}: 目標時間=${targetTime}, 當前時間=${currentTime}, 待辦事項數=${user.todos?.length || 0}`);
+    
     if (targetTime === currentTime) {
+      console.log(`⏰ 時間匹配！為用戶 ${userId} 發送提醒`);
       await sendReminderToUser(userId, timeType);
+      remindersSent++;
     }
+  }
+  
+  if (remindersSent > 0) {
+    console.log(`✅ 共發送了 ${remindersSent} 個${timeType === 'morning' ? '早上' : '晚上'}提醒`);
   }
 }
 
-// 設定定時任務 - 每分鐘檢查一次
-cron.schedule('* * * * *', () => {
-  sendReminders('morning');
-  sendReminders('evening');
+// 設定定時任務 - 每分鐘檢查一次，但加入更詳細的日誌
+cron.schedule('* * * * *', async () => {
+  try {
+    const currentTime = getTaiwanTimeHHMM();
+    const currentDate = getTaiwanTime();
+    
+    // 每5分鐘顯示一次詳細狀態（避免日誌太多）
+    const minute = new Date().getMinutes();
+    const showDetailedLog = minute % 5 === 0;
+    
+    if (showDetailedLog) {
+      console.log(`📅 定時檢查 - ${currentDate} (${currentTime})`);
+      console.log(`📊 系統狀態 - 資料載入:${isDataLoaded}, 用戶數:${Object.keys(userData).length}`);
+    }
+    
+    if (!isDataLoaded) {
+      if (showDetailedLog) {
+        console.log('⚠️ 資料尚未載入，跳過提醒檢查');
+      }
+      return;
+    }
+    
+    if (Object.keys(userData).length === 0) {
+      if (showDetailedLog) {
+        console.log('📝 沒有用戶資料，跳過提醒檢查');
+      }
+      return;
+    }
+    
+    // 檢查是否有用戶需要在這個時間提醒
+    let needsReminder = false;
+    for (const userId in userData) {
+      const user = userData[userId];
+      if (user.morningReminderTime === currentTime || user.eveningReminderTime === currentTime) {
+        needsReminder = true;
+        break;
+      }
+    }
+    
+    if (needsReminder || showDetailedLog) {
+      console.log(`🔔 檢查提醒 - 時間:${currentTime}, 需要提醒:${needsReminder}`);
+    }
+    
+    await sendReminders('morning');
+    await sendReminders('evening');
+  } catch (error) {
+    console.error('❌ 定時任務執行錯誤:', error);
+  }
 });
 
 // 啟動伺服器
@@ -589,16 +657,33 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 新增調試端點
-app.get('/debug', (req, res) => {
-  res.json({
-    userData: userData,
-    dataFile: DATA_FILE,
-    timestamp: new Date().toISOString(),
-    isDataLoaded: isDataLoaded,
-    processedMessagesCount: processedMessages.size
-  });
-});
+// 新增測試提醒功能
+function getSystemStatus(userId) {
+  const user = userData[userId];
+  const todos = user.todos;
+  const activeTodos = todos.filter(todo => !isTodoExpired(todo) || !todo.hasDate);
+  const expiredTodos = todos.filter(todo => isTodoExpired(todo));
+  const remindableTodos = todos.filter(shouldRemindTodo);
+  
+  return `🔧 系統狀態：
+📊 資料統計：
+• 總代辦事項：${todos.length} 項
+• 活躍事項：${activeTodos.length} 項
+• 過期事項：${expiredTodos.length} 項
+• 今日可提醒：${remindableTodos.length} 項
+
+⏰ 提醒設定：
+• 早上：${user.morningReminderTime}
+• 晚上：${user.eveningReminderTime}
+
+🕐 目前時間：${getTaiwanTimeHHMM()} (台灣)
+💾 資料載入：${isDataLoaded ? '✅' : '❌'}
+
+📋 可提醒事項詳情：
+${remindableTodos.map((todo, i) => `${i+1}. ${todo.content} ${todo.hasDate ? '(有日期)' : '(每日)'}`).join('\n') || '無'}
+
+如有問題請聯繫管理員`;
+}
 
 // 新增清理過期事項的端點（手動觸發）
 app.get('/cleanup', async (req, res) => {
@@ -633,8 +718,42 @@ app.get('/cleanup', async (req, res) => {
   });
 });
 
+// 手動觸發提醒檢查
+app.get('/force-remind', async (req, res) => {
+  try {
+    console.log('🔧 手動觸發提醒檢查...');
+    await sendReminders('morning');
+    await sendReminders('evening');
+    res.json({
+      success: true,
+      message: '提醒檢查已執行',
+      currentTime: getTaiwanTimeHHMM(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 新增調試端點
+app.get('/debug', (req, res) => {
+  res.json({
+    userData: userData,
+    dataFile: DATA_FILE,
+    timestamp: new Date().toISOString(),
+    isDataLoaded: isDataLoaded,
+    processedMessagesCount: processedMessages.size,
+    currentTaiwanTime: getTaiwanTimeHHMM()
+  });
+});
+
 // 匯出模組 (用於測試)
 module.exports = { app, userData };
+
 
 
 
