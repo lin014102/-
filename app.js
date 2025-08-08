@@ -22,8 +22,8 @@ const DATA_FILE = path.join(__dirname, 'todos.json');
 let userData = {};
 let isDataLoaded = false;
 
-// 新增：短期提醒儲存 Map
-let shortTermReminders = new Map(); // 儲存短期提醒的 Map，格式：{timerId: reminderData}
+// 新增：短期提醒和時間提醒儲存 Map
+let shortTermReminders = new Map(); // 儲存短期提醒和時間提醒的 Map
 
 // 請求去重機制
 const processedMessages = new Set();
@@ -204,7 +204,47 @@ function parseShortTermReminder(text) {
   
   return { isValid: false, error: '格式不正確，請使用：數字+時間單位+後+內容\n例如：5分鐘後倒垃圾' };
 }
-// 修改後的 loadData 函數，加入短期提醒的恢復邏輯
+
+// 新增：解析時間提醒指令
+function parseTimeReminder(text) {
+  // 支援的格式：
+  // "12:00倒垃圾"
+  // "14:30開會"
+  // "23:59做某事"
+  
+  const timePattern = /(\d{1,2}):(\d{2})(.+)/;
+  const match = text.match(timePattern);
+  
+  if (match) {
+    const hours = parseInt(match[1]);
+    const minutes = parseInt(match[2]);
+    const content = match[3].trim();
+    
+    if (!content) {
+      return { isValid: false, error: '請輸入提醒內容' };
+    }
+    
+    // 驗證時間格式
+    if (hours < 0 || hours > 23) {
+      return { isValid: false, error: '小時請設定在 0-23 之間' };
+    }
+    
+    if (minutes < 0 || minutes > 59) {
+      return { isValid: false, error: '分鐘請設定在 0-59 之間' };
+    }
+    
+    return {
+      isValid: true,
+      hours: hours,
+      minutes: minutes,
+      timeString: `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`,
+      content: content
+    };
+  }
+  
+  return { isValid: false, error: '格式不正確，請使用：HH:MM+內容\n例如：12:00倒垃圾' };
+}
+// 修改後的 loadData 函數，加入短期提醒和時間提醒的恢復邏輯
 async function loadData() {
   try {
     const data = await fs.readFile(DATA_FILE, 'utf8');
@@ -212,8 +252,8 @@ async function loadData() {
     isDataLoaded = true;
     console.log('資料載入成功，用戶數:', Object.keys(userData).length);
     
-    // 恢復短期提醒的定時器
-    await restoreShortTermReminders();
+    // 恢復短期提醒和時間提醒的定時器
+    await restoreAllReminders();
     
   } catch (error) {
     console.log('初始化空的資料檔案');
@@ -224,47 +264,78 @@ async function loadData() {
   }
 }
 
-// 新增：恢復短期提醒定時器（系統重啟後使用）
-async function restoreShortTermReminders() {
+// 新增：恢復所有提醒定時器（系統重啟後使用）
+async function restoreAllReminders() {
   const currentTime = new Date();
-  let restoredCount = 0;
+  let restoredShortCount = 0;
+  let restoredTimeCount = 0;
   let expiredCount = 0;
   
-  console.log('🔄 開始恢復短期提醒...');
+  console.log('🔄 開始恢復所有提醒...');
   
   for (const userId in userData) {
     const user = userData[userId];
-    if (!user.shortTermReminders) continue;
     
-    // 倒序遍歷，避免索引問題
-    for (let i = user.shortTermReminders.length - 1; i >= 0; i--) {
-      const reminder = user.shortTermReminders[i];
-      const reminderTime = new Date(reminder.reminderTime);
-      const timeLeft = reminderTime - currentTime;
-      
-      if (timeLeft <= 0) {
-        // 過期的提醒，如果超過1小時就清理掉
-        if (currentTime - reminderTime > 3600000) { // 1小時
-          user.shortTermReminders.splice(i, 1);
-          expiredCount++;
+    // 恢復短期提醒
+    if (user.shortTermReminders) {
+      for (let i = user.shortTermReminders.length - 1; i >= 0; i--) {
+        const reminder = user.shortTermReminders[i];
+        const reminderTime = new Date(reminder.reminderTime);
+        const timeLeft = reminderTime - currentTime;
+        
+        if (timeLeft <= 0) {
+          if (currentTime - reminderTime > 3600000) { // 1小時
+            user.shortTermReminders.splice(i, 1);
+            expiredCount++;
+          }
+          continue;
         }
-        continue;
+        
+        const reminderId = reminder.id;
+        const timerId = setTimeout(async () => {
+          await sendShortTermReminder(reminder);
+          shortTermReminders.delete(reminderId);
+          await removeShortTermReminderFromUser(userId, reminderId);
+        }, timeLeft);
+        
+        shortTermReminders.set(reminderId, {
+          ...reminder,
+          timerId: timerId
+        });
+        
+        restoredShortCount++;
       }
-      
-      // 未過期的提醒，重新設定定時器
-      const reminderId = reminder.id;
-      const timerId = setTimeout(async () => {
-        await sendShortTermReminder(reminder);
-        shortTermReminders.delete(reminderId);
-        await removeShortTermReminderFromUser(userId, reminderId);
-      }, timeLeft);
-      
-      shortTermReminders.set(reminderId, {
-        ...reminder,
-        timerId: timerId
-      });
-      
-      restoredCount++;
+    }
+    
+    // 恢復時間提醒
+    if (user.timeReminders) {
+      for (let i = user.timeReminders.length - 1; i >= 0; i--) {
+        const reminder = user.timeReminders[i];
+        const reminderTime = new Date(reminder.reminderTime);
+        const timeLeft = reminderTime - currentTime;
+        
+        if (timeLeft <= 0) {
+          if (currentTime - reminderTime > 3600000) { // 1小時
+            user.timeReminders.splice(i, 1);
+            expiredCount++;
+          }
+          continue;
+        }
+        
+        const reminderId = reminder.id;
+        const timerId = setTimeout(async () => {
+          await sendTimeReminder(reminder);
+          shortTermReminders.delete(reminderId);
+          await removeTimeReminderFromUser(userId, reminderId);
+        }, timeLeft);
+        
+        shortTermReminders.set(reminderId, {
+          ...reminder,
+          timerId: timerId
+        });
+        
+        restoredTimeCount++;
+      }
     }
   }
   
@@ -272,7 +343,7 @@ async function restoreShortTermReminders() {
     await saveData(); // 保存清理後的資料
   }
   
-  console.log(`✅ 恢復短期提醒完成 - 恢復: ${restoredCount} 項，清理過期: ${expiredCount} 項`);
+  console.log(`✅ 恢復提醒完成 - 短期: ${restoredShortCount} 項，時間: ${restoredTimeCount} 項，清理過期: ${expiredCount} 項`);
 }
 
 // 儲存資料（使用檔案鎖定機制）
@@ -297,13 +368,14 @@ async function saveData() {
   }
 }
 
-// 修改：初始化用戶資料（新增 shortTermReminders）
+// 修改：初始化用戶資料（新增 timeReminders）
 function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
       todos: [],
       monthlyTodos: [], // 每月固定事項
-      shortTermReminders: [], // 新增：短期提醒列表
+      shortTermReminders: [], // 短期提醒列表
+      timeReminders: [], // 新增：時間提醒列表
       morningReminderTime: '09:00', // 早上提醒時間
       eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
@@ -318,6 +390,9 @@ function initUser(userId) {
   }
   if (!userData[userId].shortTermReminders) {
     userData[userId].shortTermReminders = [];
+  }
+  if (!userData[userId].timeReminders) {
+    userData[userId].timeReminders = [];
     saveData();
   }
 }
@@ -329,7 +404,7 @@ async function createShortTermReminder(userId, reminderText) {
     return `❌ ${parsed.error}`;
   }
   
-  const reminderId = `${userId}_${Date.now()}`;
+  const reminderId = `${userId}_short_${Date.now()}`;
   const reminderTime = new Date(Date.now() + (parsed.minutes * 60 * 1000));
   
   const reminderData = {
@@ -341,7 +416,8 @@ async function createShortTermReminder(userId, reminderText) {
     minutes: parsed.minutes,
     originalValue: parsed.originalValue,
     unit: parsed.unit,
-    completed: false
+    completed: false,
+    type: 'short' // 標記為短期提醒
   };
   
   // 設定定時器
@@ -384,6 +460,81 @@ async function createShortTermReminder(userId, reminderText) {
   return `⏰ 已設定短期提醒：「${parsed.content}」\n⏳ ${parsed.originalValue}${parsed.unit}後提醒 (${reminderTimeStr})\n📝 輸入「短期清單」可查看所有短期提醒`;
 }
 
+// 新增：創建時間提醒
+async function createTimeReminder(userId, reminderText) {
+  const parsed = parseTimeReminder(reminderText);
+  
+  if (!parsed.isValid) {
+    return `❌ ${parsed.error}`;
+  }
+  
+  const reminderId = `${userId}_time_${Date.now()}`;
+  const now = getTaiwanDate();
+  const targetTime = new Date(now);
+  
+  // 設定目標時間
+  targetTime.setHours(parsed.hours, parsed.minutes, 0, 0);
+  
+  // 如果時間已過，設為明天
+  if (targetTime <= now) {
+    targetTime.setDate(targetTime.getDate() + 1);
+  }
+  
+  const timeLeft = targetTime - now;
+  
+  const reminderData = {
+    id: reminderId,
+    userId: userId,
+    content: parsed.content,
+    timeString: parsed.timeString,
+    createdAt: getTaiwanTime(),
+    reminderTime: targetTime,
+    completed: false,
+    type: 'time' // 標記為時間提醒
+  };
+  
+  // 設定定時器
+  const timerId = setTimeout(async () => {
+    await sendTimeReminder(reminderData);
+    // 清理已完成的提醒
+    shortTermReminders.delete(reminderId);
+    removeTimeReminderFromUser(userId, reminderId);
+  }, timeLeft);
+  
+  // 儲存到記憶體 Map 中
+  shortTermReminders.set(reminderId, {
+    ...reminderData,
+    timerId: timerId
+  });
+  
+  // 儲存到用戶資料中
+  userData[userId].timeReminders.push(reminderData);
+  
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 設定時間提醒: ${parsed.content} (${parsed.timeString})`);
+  } catch (err) {
+    console.error('設定時間提醒時儲存失敗:', err);
+    clearTimeout(timerId);
+    shortTermReminders.delete(reminderId);
+    return '❌ 設定失敗，請稍後再試';
+  }
+  
+  const targetTimeStr = targetTime.toLocaleString('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  
+  const isToday = targetTime.toDateString() === now.toDateString();
+  const dateText = isToday ? '今天' : '明天';
+  
+  return `⏰ 已設定時間提醒：「${parsed.content}」\n🕐 ${dateText} ${parsed.timeString} 提醒 (${targetTimeStr})\n📝 輸入「時間清單」可查看所有時間提醒`;
+}
+
 // 新增：發送短期提醒
 async function sendShortTermReminder(reminderData) {
   try {
@@ -404,6 +555,27 @@ async function sendShortTermReminder(reminderData) {
   }
 }
 
+// 新增：發送時間提醒
+async function sendTimeReminder(reminderData) {
+  try {
+    const message = `⏰ 時間提醒！
+    
+📋 提醒事項：${reminderData.content}
+🕐 設定時間：${reminderData.timeString}
+⏳ 建立時間：${reminderData.createdAt}
+🎯 現在該去執行了！`;
+
+    await client.pushMessage(reminderData.userId, {
+      type: 'text',
+      text: message
+    });
+    
+    console.log(`✅ 已發送時間提醒給用戶 ${reminderData.userId}: ${reminderData.content}`);
+  } catch (error) {
+    console.error(`❌ 發送時間提醒失敗 ${reminderData.userId}:`, error);
+  }
+}
+
 // 新增：從用戶資料中移除已完成的短期提醒
 async function removeShortTermReminderFromUser(userId, reminderId) {
   if (userData[userId] && userData[userId].shortTermReminders) {
@@ -414,6 +586,20 @@ async function removeShortTermReminderFromUser(userId, reminderId) {
       await saveData();
     } catch (err) {
       console.error('移除短期提醒時儲存失敗:', err);
+    }
+  }
+}
+
+// 新增：從用戶資料中移除已完成的時間提醒
+async function removeTimeReminderFromUser(userId, reminderId) {
+  if (userData[userId] && userData[userId].timeReminders) {
+    userData[userId].timeReminders = userData[userId].timeReminders.filter(
+      reminder => reminder.id !== reminderId
+    );
+    try {
+      await saveData();
+    } catch (err) {
+      console.error('移除時間提醒時儲存失敗:', err);
     }
   }
 }
@@ -468,6 +654,56 @@ function getShortTermReminderList(userId) {
   return message;
 }
 
+// 新增：獲取時間提醒清單
+function getTimeReminderList(userId) {
+  const reminders = userData[userId].timeReminders || [];
+  
+  if (reminders.length === 0) {
+    return '📝 目前沒有時間提醒\n輸入格式：「12:00倒垃圾」來設定時間提醒\n\n🕐 支援格式：\n• HH:MM+事項內容\n• 例如：14:30開會、09:00運動';
+  }
+  
+  let message = `🕐 時間提醒清單 (${reminders.length} 項)：\n\n`;
+  
+  const currentTime = new Date();
+  
+  reminders.forEach((reminder, index) => {
+    const reminderTime = new Date(reminder.reminderTime);
+    const timeLeft = reminderTime - currentTime;
+    const isExpired = timeLeft <= 0;
+    
+    const reminderTimeStr = reminderTime.toLocaleString('zh-TW', {
+      timeZone: 'Asia/Taipei',
+      hour12: false,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    
+    let timeLeftStr = '';
+    if (isExpired) {
+      timeLeftStr = '⏰ 已到期';
+    } else {
+      const hoursLeft = Math.floor(timeLeft / 3600000);
+      const minutesLeft = Math.floor((timeLeft % 3600000) / 60000);
+      
+      if (hoursLeft > 0) {
+        timeLeftStr = `⏳ 剩餘 ${hoursLeft}小時${minutesLeft}分鐘`;
+      } else {
+        timeLeftStr = `⏳ 剩餘 ${minutesLeft}分鐘`;
+      }
+    }
+    
+    message += `${index + 1}. ${reminder.content}\n`;
+    message += `   🕐 ${reminderTimeStr}\n`;
+    message += `   ${timeLeftStr}\n\n`;
+  });
+  
+  message += '💡 輸入「時間刪除 [編號]」可取消提醒\n💡 輸入「清理時間」可清理已過期的提醒';
+  
+  return message;
+}
+
 // 新增：取消短期提醒
 async function cancelShortTermReminder(userId, index) {
   const reminders = userData[userId].shortTermReminders || [];
@@ -498,6 +734,38 @@ async function cancelShortTermReminder(userId, index) {
   }
   
   return `🗑️ 已取消短期提醒：「${reminder.content}」\n剩餘 ${reminders.length} 項短期提醒`;
+}
+
+// 新增：取消時間提醒
+async function cancelTimeReminder(userId, index) {
+  const reminders = userData[userId].timeReminders || [];
+  
+  if (index < 0 || index >= reminders.length) {
+    return `❌ 編號不正確，請輸入 1 到 ${reminders.length} 之間的數字`;
+  }
+  
+  const reminder = reminders[index];
+  const reminderId = reminder.id;
+  
+  // 清理記憶體中的定時器
+  if (shortTermReminders.has(reminderId)) {
+    const timerData = shortTermReminders.get(reminderId);
+    clearTimeout(timerData.timerId);
+    shortTermReminders.delete(reminderId);
+  }
+  
+  // 從用戶資料中移除
+  reminders.splice(index, 1);
+  
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 取消時間提醒: ${reminder.content}`);
+  } catch (err) {
+    console.error('取消時間提醒時儲存失敗:', err);
+    return '❌ 取消失敗，請稍後再試';
+  }
+  
+  return `🗑️ 已取消時間提醒：「${reminder.content}」(${reminder.timeString})\n剩餘 ${reminders.length} 項時間提醒`;
 }
 
 // 新增：清理過期的短期提醒
@@ -544,6 +812,51 @@ async function cleanupExpiredShortTermReminders(userId) {
     return `✨ 沒有需要清理的過期提醒\n目前有 ${reminders.length} 項短期提醒`;
   }
 }
+
+// 新增：清理過期的時間提醒
+async function cleanupExpiredTimeReminders(userId) {
+  const reminders = userData[userId].timeReminders || [];
+  const currentTime = new Date();
+  
+  let cleanedCount = 0;
+  let i = reminders.length - 1;
+  
+  // 倒序遍歷，避免索引問題
+  while (i >= 0) {
+    const reminder = reminders[i];
+    const reminderTime = new Date(reminder.reminderTime);
+    
+    // 清理超過1小時的過期提醒
+    if (reminderTime < currentTime - 3600000) {
+      const reminderId = reminder.id;
+      
+      // 清理記憶體中的定時器
+      if (shortTermReminders.has(reminderId)) {
+        const timerData = shortTermReminders.get(reminderId);
+        clearTimeout(timerData.timerId);
+        shortTermReminders.delete(reminderId);
+      }
+      
+      reminders.splice(i, 1);
+      cleanedCount++;
+    }
+    i--;
+  }
+  
+  if (cleanedCount > 0) {
+    try {
+      await saveData();
+      console.log(`用戶 ${userId} 清理過期時間提醒: ${cleanedCount} 項`);
+    } catch (err) {
+      console.error('清理時間提醒時儲存失敗:', err);
+      return '❌ 清理失敗，請稍後再試';
+    }
+    
+    return `🧹 已清理 ${cleanedCount} 項過期的時間提醒\n剩餘 ${reminders.length} 項時間提醒`;
+  } else {
+    return `✨ 沒有需要清理的過期提醒\n目前有 ${reminders.length} 項時間提醒`;
+  }
+}
 // 處理 LINE webhook
 app.post('/webhook', line.middleware(config), async (req, res) => {
   try {
@@ -561,7 +874,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
-// 修改：處理訊息事件（新增短期提醒指令）
+// 修改：處理訊息事件（新增時間提醒指令）
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
@@ -640,9 +953,8 @@ async function handleEvent(event) {
     } else if (userMessage === '生成本月') {
       replyMessage = await generateMonthlyTodos(userId);
     } 
-    // 新增：短期提醒指令
+    // 短期提醒指令
     else if (userMessage.includes('分鐘後') || userMessage.includes('小時後') || userMessage.includes('秒後')) {
-      // 短期提醒指令
       replyMessage = await createShortTermReminder(userId, userMessage);
     } else if (userMessage === '短期清單' || userMessage === '短期查詢') {
       replyMessage = getShortTermReminderList(userId);
@@ -651,6 +963,18 @@ async function handleEvent(event) {
       replyMessage = await cancelShortTermReminder(userId, index);
     } else if (userMessage === '清理短期') {
       replyMessage = await cleanupExpiredShortTermReminders(userId);
+    } 
+    // 新增：時間提醒指令
+    else if (/^\d{1,2}:\d{2}.+/.test(userMessage)) {
+      // 時間提醒指令 (格式：HH:MM+內容)
+      replyMessage = await createTimeReminder(userId, userMessage);
+    } else if (userMessage === '時間清單' || userMessage === '時間查詢') {
+      replyMessage = getTimeReminderList(userId);
+    } else if (userMessage.startsWith('時間刪除 ')) {
+      const index = parseInt(userMessage.substring(5).trim()) - 1;
+      replyMessage = await cancelTimeReminder(userId, index);
+    } else if (userMessage === '清理時間') {
+      replyMessage = await cleanupExpiredTimeReminders(userId);
     } else {
       replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
     }
@@ -680,7 +1004,7 @@ async function handleEvent(event) {
     return null;
   }
 }
-// 修改：獲取幫助訊息（新增短期提醒說明）
+// 修改：獲取幫助訊息（新增時間提醒說明）
 function getHelpMessage() {
   return `📋 代辦事項機器人使用說明：
 
@@ -696,6 +1020,12 @@ function getHelpMessage() {
 • 短期刪除 [編號] - 取消短期提醒
 • 清理短期 - 清理過期的短期提醒
 
+🕐 時間提醒：
+• [HH:MM][事項] - 設定時間提醒
+• 時間清單 - 查看時間提醒清單
+• 時間刪除 [編號] - 取消時間提醒
+• 清理時間 - 清理過期的時間提醒
+
 🔄 每月固定事項：
 • 每月新增 [事項] - 新增每月固定事項
 • 每月新增 5號繳卡費 - 新增每月固定日期事項
@@ -710,6 +1040,7 @@ function getHelpMessage() {
 
 🔔 智能提醒說明：
 • 短期提醒：立即設定，到時間自動提醒
+• 時間提醒：今天指定時間提醒（過時則明天）
 • 有日期的事項：只在前一天提醒
 • 沒日期的事項：每天提醒
 • 每月固定事項：需手動生成到代辦清單
@@ -719,17 +1050,16 @@ function getHelpMessage() {
 • 測試提醒 - 立即測試提醒功能
 • 測試時間 [HH:MM] - 測試特定時間提醒
 
-💡 短期提醒範例：
-• 5分鐘後倒垃圾
-• 10分鐘後開會
-• 1小時後吃飯
-• 30秒後測試
-支援：1-1440分鐘、1-24小時、10-3600秒
+💡 提醒範例：
+短期提醒：5分鐘後倒垃圾、1小時後開會
+時間提醒：12:00倒垃圾、14:30開會
+日期提醒：8/15號繳電費
+每月提醒：每月5號繳信用卡費
 
 💡 其他使用範例：
-• 每月新增 5號繳信用卡費
-• 新增 8/15號繳電費
 • 早上時間 08:30
+• 12:00吃午餐
+• 18:30下班
 
 輸入「幫助」可重複查看此說明`;
 }
@@ -869,7 +1199,7 @@ function getTodoList(userId) {
   console.log(`用戶 ${userId} 查詢清單，總數: ${todos.length}`);
   
   if (todos.length === 0) {
-    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項\n或輸入「每月新增 5號繳卡費」來新增每月固定事項\n或輸入「5分鐘後倒垃圾」來設定短期提醒';
+    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項\n或輸入「每月新增 5號繳卡費」來新增每月固定事項\n或輸入「5分鐘後倒垃圾」來設定短期提醒\n或輸入「12:00倒垃圾」來設定時間提醒';
   }
   
   let message = `📋 您的代辦事項清單 (${todos.length} 項)：\n\n`;
@@ -904,7 +1234,7 @@ function getTodoList(userId) {
     });
   }
   
-  message += '💡 輸入「刪除 [編號]」可刪除指定項目\n💡 輸入「每月清單」查看每月固定事項\n💡 輸入「短期清單」查看短期提醒';
+  message += '💡 輸入「刪除 [編號]」可刪除指定項目\n💡 輸入「每月清單」查看每月固定事項\n💡 輸入「短期清單」查看短期提醒\n💡 輸入「時間清單」查看時間提醒';
   return message;
 }
 
@@ -1212,22 +1542,29 @@ async function testTimeReminder(userId, time) {
     return `⏰ 測試時間：${time}\n目前時間：${currentTime}\n時間不匹配，未發送提醒\n\n💡 提示：您可以等到 ${time} 時自動收到提醒，或輸入「測試提醒」立即測試`;
   }
 }
-// 修改：系統狀態檢查（加入短期提醒統計）
+// 修改：系統狀態檢查（加入時間提醒統計）
 function getSystemStatus(userId) {
   const user = userData[userId];
   const todos = user.todos;
   const monthlyTodos = user.monthlyTodos || [];
   const shortTermReminders = user.shortTermReminders || [];
+  const timeReminders = user.timeReminders || [];
   const activeTodos = todos.filter(todo => !isTodoExpired(todo) || !todo.hasDate);
   const expiredTodos = todos.filter(todo => isTodoExpired(todo));
   const remindableTodos = todos.filter(shouldRemindTodo);
   
-  // 短期提醒統計
+  // 短期提醒和時間提醒統計
   const currentTime = new Date();
   const activeShortReminders = shortTermReminders.filter(reminder => 
     new Date(reminder.reminderTime) > currentTime
   );
   const expiredShortReminders = shortTermReminders.filter(reminder => 
+    new Date(reminder.reminderTime) <= currentTime
+  );
+  const activeTimeReminders = timeReminders.filter(reminder => 
+    new Date(reminder.reminderTime) > currentTime
+  );
+  const expiredTimeReminders = timeReminders.filter(reminder => 
     new Date(reminder.reminderTime) <= currentTime
   );
   
@@ -1236,10 +1573,13 @@ function getSystemStatus(userId) {
 • 總代辦事項：${todos.length} 項
 • 每月固定事項：${monthlyTodos.length} 項
 • 短期提醒：${shortTermReminders.length} 項
+• 時間提醒：${timeReminders.length} 項
 • 活躍代辦：${activeTodos.length} 項
 • 過期代辦：${expiredTodos.length} 項
 • 活躍短期提醒：${activeShortReminders.length} 項
 • 過期短期提醒：${expiredShortReminders.length} 項
+• 活躍時間提醒：${activeTimeReminders.length} 項
+• 過期時間提醒：${expiredTimeReminders.length} 項
 • 今日可提醒：${remindableTodos.length} 項
 
 ⏰ 提醒設定：
@@ -1248,7 +1588,7 @@ function getSystemStatus(userId) {
 
 🕐 目前時間：${getTaiwanTimeHHMM()} (台灣)
 💾 資料載入：${isDataLoaded ? '✅' : '❌'}
-🗂️ 記憶體中短期提醒：${shortTermReminders.size} 項
+🗂️ 記憶體中提醒：${shortTermReminders.size} 項
 
 📋 可提醒事項詳情：
 ${remindableTodos.map((todo, i) => `${i+1}. ${todo.content} ${todo.hasDate ? '(有日期)' : '(每日)'}`).join('\n') || '無'}
@@ -1258,6 +1598,14 @@ ${activeShortReminders.map((reminder, i) => {
   const timeLeft = new Date(reminder.reminderTime) - currentTime;
   const minutesLeft = Math.ceil(timeLeft / 60000);
   return `${i+1}. ${reminder.content} (${minutesLeft}分鐘後)`;
+}).join('\n') || '無'}
+
+🕐 時間提醒詳情：
+${activeTimeReminders.map((reminder, i) => {
+  const timeLeft = new Date(reminder.reminderTime) - currentTime;
+  const hoursLeft = Math.floor(timeLeft / 3600000);
+  const minutesLeft = Math.floor((timeLeft % 3600000) / 60000);
+  return `${i+1}. ${reminder.content} (${hoursLeft > 0 ? `${hoursLeft}小時${minutesLeft}分鐘` : `${minutesLeft}分鐘`}後)`;
 }).join('\n') || '無'}
 
 🔄 每月固定事項：
@@ -1396,39 +1744,63 @@ async function generateMonthlyTodosForUser(userId) {
 // 啟動伺服器
 app.listen(PORT, async () => {
   console.log(`LINE Bot 伺服器運行於 port ${PORT}`);
-  await loadData(); // 這個函數現在會自動恢復短期提醒
-  console.log('資料載入完成，短期提醒已恢復');
+  await loadData(); // 這個函數現在會自動恢復所有提醒
+  console.log('資料載入完成，所有提醒已恢復');
 });
 
-// 修改：健康檢查端點（加入短期提醒統計）
+// 修改：健康檢查端點（加入時間提醒統計）
 app.get('/health', (req, res) => {
   const totalShortReminders = Object.values(userData).reduce(
     (sum, user) => sum + (user.shortTermReminders?.length || 0), 0
+  );
+  const totalTimeReminders = Object.values(userData).reduce(
+    (sum, user) => sum + (user.timeReminders?.length || 0), 0
   );
   
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
+    taiwanTime: getTaiwanTime(),
     users: Object.keys(userData).length,
     totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0),
     totalMonthlyTodos: Object.values(userData).reduce((sum, user) => sum + (user.monthlyTodos?.length || 0), 0),
     totalShortTermReminders: totalShortReminders,
-    activeShortTermReminders: shortTermReminders.size
+    totalTimeReminders: totalTimeReminders,
+    activeReminders: shortTermReminders.size,
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage()
   });
 });
 
-// 新增：短期提醒管理端點
-app.get('/short-reminders', (req, res) => {
+// 新增：提醒管理端點
+app.get('/reminders', (req, res) => {
   const currentTime = new Date();
   const allReminders = [];
   
   for (const userId in userData) {
     const user = userData[userId];
+    
+    // 短期提醒
     if (user.shortTermReminders) {
       user.shortTermReminders.forEach(reminder => {
         const timeLeft = new Date(reminder.reminderTime) - currentTime;
         allReminders.push({
           ...reminder,
+          type: 'short',
+          timeLeftMs: timeLeft,
+          timeLeftMinutes: Math.ceil(timeLeft / 60000),
+          isActive: shortTermReminders.has(reminder.id)
+        });
+      });
+    }
+    
+    // 時間提醒
+    if (user.timeReminders) {
+      user.timeReminders.forEach(reminder => {
+        const timeLeft = new Date(reminder.reminderTime) - currentTime;
+        allReminders.push({
+          ...reminder,
+          type: 'time',
           timeLeftMs: timeLeft,
           timeLeftMinutes: Math.ceil(timeLeft / 60000),
           isActive: shortTermReminders.has(reminder.id)
@@ -1479,35 +1851,49 @@ app.get('/cleanup', async (req, res) => {
   });
 });
 
-// 新增：清理所有過期短期提醒的端點
-app.get('/cleanup-short-reminders', async (req, res) => {
+// 新增：清理所有過期提醒的端點
+app.get('/cleanup-reminders', async (req, res) => {
   const currentTime = new Date();
   let totalCleaned = 0;
   
   for (const userId in userData) {
     const user = userData[userId];
-    if (!user.shortTermReminders) continue;
     
-    const originalLength = user.shortTermReminders.length;
-    
-    // 清理超過1小時的過期提醒
-    user.shortTermReminders = user.shortTermReminders.filter(reminder => {
-      const reminderTime = new Date(reminder.reminderTime);
-      const shouldKeep = reminderTime > currentTime - 3600000;
-      
-      if (!shouldKeep) {
-        // 清理記憶體中的定時器
-        if (shortTermReminders.has(reminder.id)) {
+    // 清理短期提醒
+    if (user.shortTermReminders) {
+      const originalLength = user.shortTermReminders.length;
+      user.shortTermReminders = user.shortTermReminders.filter(reminder => {
+        const reminderTime = new Date(reminder.reminderTime);
+        const shouldKeep = reminderTime > currentTime - 3600000;
+        
+        if (!shouldKeep && shortTermReminders.has(reminder.id)) {
           const timerData = shortTermReminders.get(reminder.id);
           clearTimeout(timerData.timerId);
           shortTermReminders.delete(reminder.id);
         }
-      }
-      
-      return shouldKeep;
-    });
+        
+        return shouldKeep;
+      });
+      totalCleaned += (originalLength - user.shortTermReminders.length);
+    }
     
-    totalCleaned += (originalLength - user.shortTermReminders.length);
+    // 清理時間提醒
+    if (user.timeReminders) {
+      const originalLength = user.timeReminders.length;
+      user.timeReminders = user.timeReminders.filter(reminder => {
+        const reminderTime = new Date(reminder.reminderTime);
+        const shouldKeep = reminderTime > currentTime - 3600000;
+        
+        if (!shouldKeep && shortTermReminders.has(reminder.id)) {
+          const timerData = shortTermReminders.get(reminder.id);
+          clearTimeout(timerData.timerId);
+          shortTermReminders.delete(reminder.id);
+        }
+        
+        return shouldKeep;
+      });
+      totalCleaned += (originalLength - user.timeReminders.length);
+    }
   }
   
   if (totalCleaned > 0) {
@@ -1543,27 +1929,28 @@ app.get('/force-remind', async (req, res) => {
   }
 });
 
-// 修改：調試端點（加入短期提醒資訊）
+// 修改：調試端點（加入時間提醒資訊）
 app.get('/debug', (req, res) => {
-  const shortReminderDetails = {};
+  const reminderDetails = {};
   for (const [id, data] of shortTermReminders.entries()) {
-    shortReminderDetails[id] = {
+    reminderDetails[id] = {
       userId: data.userId,
       content: data.content,
       reminderTime: data.reminderTime,
+      type: data.type || 'unknown',
       hasTimer: !!data.timerId
     };
   }
   
   res.json({
     userData: userData,
-    shortTermReminders: shortReminderDetails,
+    activeReminders: reminderDetails,
     dataFile: DATA_FILE,
     timestamp: new Date().toISOString(),
     isDataLoaded: isDataLoaded,
     processedMessagesCount: processedMessages.size,
     currentTaiwanTime: getTaiwanTimeHHMM(),
-    activeShortRemindersCount: shortTermReminders.size
+    activeRemindersCount: shortTermReminders.size
   });
 });
 
@@ -1648,7 +2035,7 @@ setInterval(() => {
   const oldSize = processedMessages.size;
   processedMessages.clear();
   
-  // 新增：清理過期的短期提醒
+  // 新增：清理過期的所有提醒
   const currentTime = new Date();
   let cleanedCount = 0;
   
@@ -1673,7 +2060,7 @@ setInterval(() => {
   };
   
   console.log(`🧹 清理完成 - 訊息ID: ${oldSize}個, 過期提醒: ${cleanedCount}個`);
-  console.log(`📊 記憶體使用: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, 短期提醒: ${shortTermReminders.size}個`);
+  console.log(`📊 記憶體使用: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, 活躍提醒: ${shortTermReminders.size}個`);
   
   // 如果記憶體使用過高，建議重啟（記錄警告）
   if (memUsageMB.heapUsed > 200) {
@@ -1689,14 +2076,21 @@ setInterval(() => {
   const uptimeMinutes = Math.floor((uptime % 3600) / 60);
   const currentTime = getTaiwanTime();
   
+  const totalShortReminders = Object.values(userData).reduce(
+    (sum, user) => sum + (user.shortTermReminders?.length || 0), 0
+  );
+  const totalTimeReminders = Object.values(userData).reduce(
+    (sum, user) => sum + (user.timeReminders?.length || 0), 0
+  );
+  
   console.log(`⏱️ [${currentTime}] 運行時間: ${uptimeHours}小時${uptimeMinutes}分鐘`);
-  console.log(`📊 活躍用戶: ${Object.keys(userData).length}, 短期提醒: ${shortTermReminders.size}, 資料載入: ${isDataLoaded ? '✅' : '❌'}`);
+  console.log(`📊 活躍用戶: ${Object.keys(userData).length}, 短期提醒: ${totalShortReminders}, 時間提醒: ${totalTimeReminders}, 記憶體提醒: ${shortTermReminders.size}, 資料載入: ${isDataLoaded ? '✅' : '❌'}`);
 }, 600000); // 10分鐘報告一次
 
 // 程序退出時的清理
 process.on('SIGTERM', () => {
   console.log('收到 SIGTERM，正在清理資源...');
-  // 清理所有短期提醒的定時器
+  // 清理所有提醒的定時器
   for (const [id, data] of shortTermReminders.entries()) {
     if (data.timerId) {
       clearTimeout(data.timerId);
@@ -1709,7 +2103,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('收到 SIGINT (Ctrl+C)，正在清理資源...');
-  // 清理所有短期提醒的定時器
+  // 清理所有提醒的定時器
   for (const [id, data] of shortTermReminders.entries()) {
     if (data.timerId) {
       clearTimeout(data.timerId);
@@ -1733,3 +2127,5 @@ process.on('unhandledRejection', (reason, promise) => {
 
 console.log('🚀 LINE Bot Keep-Alive 機制已啟動');
 console.log(`🌐 Keep-Alive URL: ${KEEP_ALIVE_URL}`);
+console.log('🕐 時間提醒功能已就緒');
+console.log('💡 使用說明：輸入「12:00倒垃圾」設定時間提醒');
