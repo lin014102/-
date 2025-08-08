@@ -25,6 +25,9 @@ let isDataLoaded = false;
 // 請求去重機制
 const processedMessages = new Set();
 
+// 新增：定時提醒任務儲存
+const timerReminders = new Map(); // 儲存定時提醒任務
+
 // 定期清理處理過的訊息ID（避免記憶體洩漏）
 setInterval(() => {
   processedMessages.clear();
@@ -106,6 +109,45 @@ function parseDate(text) {
   };
 }
 
+// 新增：解析定時提醒格式
+function parseTimerReminder(text) {
+  // 支援格式：5分鐘後提醒喝水、10分鐘後提醒開會、1小時後提醒吃飯
+  const timerPattern = /(\d+)(分鐘|小時)後提醒(.+)|(.+?)(\d+)(分鐘|小時)後提醒/;
+  const match = text.match(timerPattern);
+  
+  if (match) {
+    let minutes, content;
+    
+    if (match[1] && match[2] && match[3]) {
+      // 格式：5分鐘後提醒喝水
+      const amount = parseInt(match[1]);
+      const unit = match[2];
+      content = match[3].trim();
+      minutes = unit === '小時' ? amount * 60 : amount;
+    } else if (match[4] && match[5] && match[6]) {
+      // 格式：喝水5分鐘後提醒
+      const amount = parseInt(match[5]);
+      const unit = match[6];
+      content = match[4].trim();
+      minutes = unit === '小時' ? amount * 60 : amount;
+    }
+    
+    if (minutes && content && minutes > 0 && minutes <= 1440) { // 限制最多24小時
+      return {
+        hasTimer: true,
+        minutes: minutes,
+        content: content
+      };
+    }
+  }
+  
+  return {
+    hasTimer: false,
+    minutes: null,
+    content: text
+  };
+}
+
 // 新增：解析每月事項的日期格式
 function parseMonthlyDate(text) {
   const monthlyPattern = /(?:每月)?(\d{1,2})號(.+)|(.+?)(?:每月)?(\d{1,2})號/;
@@ -175,12 +217,13 @@ async function saveData() {
   }
 }
 
-// 修改：初始化用戶資料（新增 monthlyTodos）
+// 修改：初始化用戶資料（新增 monthlyTodos 和 timerReminders）
 function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
       todos: [],
       monthlyTodos: [], // 新增：每月固定事項
+      timerReminders: [], // 新增：定時提醒歷史
       morningReminderTime: '09:00', // 早上提醒時間
       eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
@@ -189,11 +232,192 @@ function initUser(userId) {
     saveData(); // 確保立即儲存新用戶資料
   }
   
-  // 為舊用戶添加 monthlyTodos 欄位
+  // 為舊用戶添加新欄位
   if (!userData[userId].monthlyTodos) {
     userData[userId].monthlyTodos = [];
+  }
+  if (!userData[userId].timerReminders) {
+    userData[userId].timerReminders = [];
+  }
+  
+  if (!userData[userId].monthlyTodos || !userData[userId].timerReminders) {
     saveData();
   }
+}
+
+// 新增：設定定時提醒
+async function setTimerReminder(userId, minutes, content) {
+  const now = getTaiwanDate();
+  const reminderTime = new Date(now.getTime() + minutes * 60000); // 加上指定分鐘數
+  const timerId = `${userId}_${Date.now()}`;
+  
+  // 記錄到用戶資料中
+  const timerRecord = {
+    id: timerId,
+    content: content,
+    minutes: minutes,
+    setTime: now.toISOString(),
+    reminderTime: reminderTime.toISOString(),
+    status: 'active'
+  };
+  
+  userData[userId].timerReminders.push(timerRecord);
+  
+  // 設定 setTimeout
+  const timeout = setTimeout(async () => {
+    try {
+      await sendTimerReminder(userId, content, timerId);
+    } catch (error) {
+      console.error(`定時提醒執行錯誤 ${timerId}:`, error);
+    }
+    
+    // 清理記憶體中的任務
+    timerReminders.delete(timerId);
+  }, minutes * 60000);
+  
+  // 儲存到記憶體中以便取消
+  timerReminders.set(timerId, {
+    userId: userId,
+    timeout: timeout,
+    content: content,
+    reminderTime: reminderTime
+  });
+  
+  try {
+    await saveData();
+    console.log(`設定定時提醒: ${userId} - ${content} (${minutes}分鐘)`);
+  } catch (err) {
+    console.error('設定定時提醒時儲存失敗:', err);
+    // 清理已設定的 timeout
+    clearTimeout(timeout);
+    timerReminders.delete(timerId);
+    throw err;
+  }
+  
+  return timerId;
+}
+
+// 新增：發送定時提醒
+async function sendTimerReminder(userId, content, timerId) {
+  try {
+    const message = `⏰ 定時提醒到了！\n\n📝 ${content}\n\n⏱️ 提醒時間：${getTaiwanTime()}`;
+    
+    await client.pushMessage(userId, {
+      type: 'text',
+      text: message
+    });
+    
+    // 更新用戶資料中的狀態
+    const userTimers = userData[userId].timerReminders;
+    const timerIndex = userTimers.findIndex(t => t.id === timerId);
+    if (timerIndex !== -1) {
+      userTimers[timerIndex].status = 'completed';
+      userTimers[timerIndex].completedTime = new Date().toISOString();
+      await saveData();
+    }
+    
+    console.log(`✅ 定時提醒已發送: ${userId} - ${content}`);
+  } catch (error) {
+    console.error(`❌ 發送定時提醒失敗 ${userId}:`, error);
+    
+    // 更新狀態為失敗
+    const userTimers = userData[userId].timerReminders;
+    const timerIndex = userTimers.findIndex(t => t.id === timerId);
+    if (timerIndex !== -1) {
+      userTimers[timerIndex].status = 'failed';
+      userTimers[timerIndex].errorTime = new Date().toISOString();
+      await saveData();
+    }
+  }
+}
+
+// 新增：取消定時提醒
+async function cancelTimerReminder(userId, index) {
+  const userTimers = userData[userId].timerReminders;
+  const activeTimers = userTimers.filter(timer => timer.status === 'active');
+  
+  if (index < 0 || index >= activeTimers.length) {
+    return `❌ 編號不正確，請輸入 1 到 ${activeTimers.length} 之間的數字`;
+  }
+  
+  const timerToCancel = activeTimers[index];
+  const timerInMemory = timerReminders.get(timerToCancel.id);
+  
+  if (timerInMemory) {
+    clearTimeout(timerInMemory.timeout);
+    timerReminders.delete(timerToCancel.id);
+  }
+  
+  // 更新狀態
+  const timerIndex = userTimers.findIndex(t => t.id === timerToCancel.id);
+  if (timerIndex !== -1) {
+    userTimers[timerIndex].status = 'cancelled';
+    userTimers[timerIndex].cancelledTime = new Date().toISOString();
+  }
+  
+  try {
+    await saveData();
+    return `🚫 已取消定時提醒：「${timerToCancel.content}」`;
+  } catch (err) {
+    console.error('取消定時提醒時儲存失敗:', err);
+    return '❌ 取消失敗，請稍後再試';
+  }
+}
+
+// 新增：查看定時提醒列表
+function getTimerReminderList(userId) {
+  const userTimers = userData[userId].timerReminders;
+  const activeTimers = userTimers.filter(timer => timer.status === 'active');
+  const recentCompleted = userTimers.filter(timer => timer.status === 'completed' || timer.status === 'cancelled')
+                                   .slice(-5); // 只顯示最近5個已完成的
+  
+  if (activeTimers.length === 0 && recentCompleted.length === 0) {
+    return `⏰ 目前沒有定時提醒
+    
+💡 使用方式：
+• 輸入「5分鐘後提醒喝水」
+• 輸入「30分鐘後提醒開會」
+• 輸入「1小時後提醒休息」`;
+  }
+  
+  let message = '';
+  
+  if (activeTimers.length > 0) {
+    message += `⏰ 進行中的定時提醒 (${activeTimers.length} 項)：\n\n`;
+    
+    activeTimers.forEach((timer, index) => {
+      const reminderTime = new Date(timer.reminderTime);
+      const now = getTaiwanDate();
+      const remainingMinutes = Math.max(0, Math.round((reminderTime - now) / 60000));
+      
+      const hours = Math.floor(remainingMinutes / 60);
+      const minutes = remainingMinutes % 60;
+      let timeText = '';
+      
+      if (hours > 0) {
+        timeText = `${hours}小時${minutes}分鐘`;
+      } else {
+        timeText = `${minutes}分鐘`;
+      }
+      
+      message += `${index + 1}. ${timer.content}\n`;
+      message += `   ⏱️ 還剩 ${timeText}\n`;
+      message += `   🕐 提醒時間：${reminderTime.toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})}\n\n`;
+    });
+    
+    message += '💡 輸入「取消提醒 [編號]」可取消指定提醒\n\n';
+  }
+  
+  if (recentCompleted.length > 0) {
+    message += `📋 最近的提醒記錄：\n`;
+    recentCompleted.forEach((timer) => {
+      const statusIcon = timer.status === 'completed' ? '✅' : '🚫';
+      const statusText = timer.status === 'completed' ? '已完成' : '已取消';
+      message += `${statusIcon} ${timer.content} (${statusText})\n`;
+    });
+  }
+  
+  return message;
 }
 
 // 處理 LINE webhook
@@ -213,7 +437,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
-// 修改：處理訊息事件（新增每月事項指令）
+// 修改：處理訊息事件（新增定時提醒指令）
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
@@ -253,8 +477,24 @@ async function handleEvent(event) {
   let replyMessage = '';
 
   try {
-    // 解析用戶指令
-    if (userMessage === '幫助' || userMessage === 'help') {
+    // 檢查是否為定時提醒格式
+    const timerParsed = parseTimerReminder(userMessage);
+    
+    if (timerParsed.hasTimer) {
+      // 處理定時提醒
+      try {
+        const timerId = await setTimerReminder(userId, timerParsed.minutes, timerParsed.content);
+        const unit = timerParsed.minutes >= 60 ? 
+          `${Math.floor(timerParsed.minutes/60)}小時${timerParsed.minutes%60 > 0 ? (timerParsed.minutes%60) + '分鐘' : ''}` :
+          `${timerParsed.minutes}分鐘`;
+        
+        replyMessage = `⏰ 定時提醒已設定！\n\n📝 提醒內容：${timerParsed.content}\n⏱️ 提醒時間：${unit}後\n🕐 預計時間：${new Date(getTaiwanDate().getTime() + timerParsed.minutes * 60000).toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})}\n\n💡 輸入「定時清單」可查看所有定時提醒`;
+      } catch (error) {
+        replyMessage = '❌ 設定定時提醒失敗，請稍後再試';
+      }
+    }
+    // 解析其他指令
+    else if (userMessage === '幫助' || userMessage === 'help') {
       replyMessage = getHelpMessage();
     } else if (userMessage === '查詢' || userMessage === '清單') {
       replyMessage = getTodoList(userId);
@@ -280,7 +520,7 @@ async function handleEvent(event) {
       const time = userMessage.substring(5).trim();
       replyMessage = await testTimeReminder(userId, time);
     }
-    // 新增：每月固定事項指令
+    // 每月固定事項指令
     else if (userMessage.startsWith('每月新增 ')) {
       const todo = userMessage.substring(5).trim();
       replyMessage = await addMonthlyTodo(userId, todo);
@@ -291,6 +531,13 @@ async function handleEvent(event) {
       replyMessage = getMonthlyTodoList(userId);
     } else if (userMessage === '生成本月') {
       replyMessage = await generateMonthlyTodos(userId);
+    }
+    // 新增：定時提醒相關指令
+    else if (userMessage === '定時清單') {
+      replyMessage = getTimerReminderList(userId);
+    } else if (userMessage.startsWith('取消提醒 ')) {
+      const index = parseInt(userMessage.substring(5).trim()) - 1;
+      replyMessage = await cancelTimerReminder(userId, index);
     } else {
       replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
     }
@@ -321,7 +568,7 @@ async function handleEvent(event) {
   }
 }
 
-// 修改：獲取幫助訊息（新增每月事項說明）
+// 修改：獲取幫助訊息（新增定時提醒說明）
 function getHelpMessage() {
   return `📋 代辦事項機器人使用說明：
 
@@ -330,6 +577,13 @@ function getHelpMessage() {
 • 新增 8/9號繳卡費 - 新增有日期的事項
 • 刪除 [編號] - 刪除指定代辦事項
 • 查詢 或 清單 - 查看所有代辦事項
+
+⏰ 定時提醒（新功能）：
+• 5分鐘後提醒喝水 - 5分鐘後提醒
+• 30分鐘後提醒開會 - 30分鐘後提醒
+• 1小時後提醒休息 - 1小時後提醒
+• 定時清單 - 查看所有定時提醒
+• 取消提醒 [編號] - 取消指定定時提醒
 
 🔄 每月固定事項：
 • 每月新增 [事項] - 新增每月固定事項
@@ -346,6 +600,7 @@ function getHelpMessage() {
 🔔 智能提醒：
 • 有日期的事項：只在前一天提醒
 • 沒日期的事項：每天提醒
+• 定時提醒：設定後自動在指定時間提醒
 • 每月固定事項：需手動生成到代辦清單
 
 🧪 測試功能：
@@ -354,10 +609,10 @@ function getHelpMessage() {
 • 測試時間 [HH:MM] - 測試特定時間提醒
 
 💡 使用範例：
+• 5分鐘後提醒喝水
+• 30分鐘後提醒開會
+• 1小時後提醒吃藥
 • 每月新增 5號繳信用卡費
-• 每月新增 15號繳房租
-• 每月新增 買日用品
-• 生成本月
 • 新增 8/15號繳電費
 • 早上時間 08:30
 
@@ -500,7 +755,7 @@ function getTodoList(userId) {
   console.log(`用戶 ${userId} 查詢清單，總數: ${todos.length}`);
   
   if (todos.length === 0) {
-    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項\n或輸入「每月新增 5號繳卡費」來新增每月固定事項';
+    return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項\n或輸入「每月新增 5號繳卡費」來新增每月固定事項\n\n⏰ 想要短時間提醒？試試「5分鐘後提醒喝水」';
   }
   
   let message = `📋 您的代辦事項清單 (${todos.length} 項)：\n\n`;
@@ -535,7 +790,7 @@ function getTodoList(userId) {
     });
   }
   
-  message += '💡 輸入「刪除 [編號]」可刪除指定項目\n💡 輸入「每月清單」查看每月固定事項';
+  message += '💡 輸入「刪除 [編號]」可刪除指定項目\n💡 輸入「每月清單」查看每月固定事項\n💡 輸入「定時清單」查看定時提醒';
   return message;
 }
 
@@ -857,7 +1112,7 @@ cron.schedule('* * * * *', async () => {
     
     if (showDetailedLog) {
       console.log(`📅 定時檢查 - ${currentDate} (${currentTime})`);
-      console.log(`📊 系統狀態 - 資料載入:${isDataLoaded}, 用戶數:${Object.keys(userData).length}`);
+      console.log(`📊 系統狀態 - 資料載入:${isDataLoaded}, 用戶數:${Object.keys(userData).length}, 定時提醒任務數:${timerReminders.size}`);
     }
     
     if (!isDataLoaded) {
@@ -885,7 +1140,7 @@ cron.schedule('* * * * *', async () => {
     }
     
     if (needsReminder || showDetailedLog) {
-      console.log(`🔔 檢查提醒 - 時間:${currentTime}, 需要提醒:${needsReminder}`);
+      console.log(`🔔 檢查提醒 - 時間:${currentTime}, 需要提醒:${needsReminder}, 定時任務:${timerReminders.size}個`);
     }
     
     await sendReminders('morning');
@@ -972,37 +1227,23 @@ async function generateMonthlyTodosForUser(userId) {
   return generatedCount;
 }
 
-// 啟動伺服器
-app.listen(PORT, async () => {
-  console.log(`LINE Bot 伺服器運行於 port ${PORT}`);
-  await loadData();
-  console.log('資料載入完成');
-});
-
-// 健康檢查端點
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    users: Object.keys(userData).length,
-    totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0),
-    totalMonthlyTodos: Object.values(userData).reduce((sum, user) => sum + (user.monthlyTodos?.length || 0), 0)
-  });
-});
-
 // 系統狀態檢查
 function getSystemStatus(userId) {
   const user = userData[userId];
   const todos = user.todos;
   const monthlyTodos = user.monthlyTodos || [];
+  const timerReminders = user.timerReminders || [];
   const activeTodos = todos.filter(todo => !isTodoExpired(todo) || !todo.hasDate);
   const expiredTodos = todos.filter(todo => isTodoExpired(todo));
   const remindableTodos = todos.filter(shouldRemindTodo);
+  const activeTimers = timerReminders.filter(timer => timer.status === 'active');
   
   return `🔧 系統狀態：
 📊 資料統計：
 • 總代辦事項：${todos.length} 項
 • 每月固定事項：${monthlyTodos.length} 項
+• 定時提醒記錄：${timerReminders.length} 項
+• 進行中定時提醒：${activeTimers.length} 項
 • 活躍事項：${activeTodos.length} 項
 • 過期事項：${expiredTodos.length} 項
 • 今日可提醒：${remindableTodos.length} 項
@@ -1020,8 +1261,36 @@ ${remindableTodos.map((todo, i) => `${i+1}. ${todo.content} ${todo.hasDate ? '(�
 🔄 每月固定事項：
 ${monthlyTodos.map((todo, i) => `${i+1}. ${todo.content} ${todo.hasFixedDate ? `(每月${todo.day}號)` : '(手動)'}`).join('\n') || '無'}
 
+⏰ 進行中的定時提醒：
+${activeTimers.map((timer, i) => {
+  const remainingTime = new Date(timer.reminderTime) - getTaiwanDate();
+  const minutes = Math.max(0, Math.round(remainingTime / 60000));
+  return `${i+1}. ${timer.content} (還剩${minutes}分鐘)`;
+}).join('\n') || '無'}
+
 如有問題請聯繫管理員`;
 }
+
+// 啟動伺服器
+app.listen(PORT, async () => {
+  console.log(`LINE Bot 伺服器運行於 port ${PORT}`);
+  await loadData();
+  console.log('資料載入完成');
+  console.log('⏰ 定時提醒功能已啟用！');
+});
+
+// 健康檢查端點
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    users: Object.keys(userData).length,
+    totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0),
+    totalMonthlyTodos: Object.values(userData).reduce((sum, user) => sum + (user.monthlyTodos?.length || 0), 0),
+    activeTimerReminders: timerReminders.size,
+    totalTimerRecords: Object.values(userData).reduce((sum, user) => sum + (user.timerReminders?.length || 0), 0)
+  });
+});
 
 // 新增清理過期事項的端點（手動觸發）
 app.get('/cleanup', async (req, res) => {
@@ -1070,7 +1339,47 @@ app.get('/force-remind', async (req, res) => {
     });
   } catch (error) {
     res.json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 新增：查看所有定時提醒端點
+app.get('/timers', (req, res) => {
+  try {
+    const allTimers = {};
+    
+    for (const userId in userData) {
+      const user = userData[userId];
+      if (user.timerReminders && user.timerReminders.length > 0) {
+        allTimers[userId] = {
+          total: user.timerReminders.length,
+          active: user.timerReminders.filter(t => t.status === 'active').length,
+          completed: user.timerReminders.filter(t => t.status === 'completed').length,
+          cancelled: user.timerReminders.filter(t => t.status === 'cancelled').length,
+          failed: user.timerReminders.filter(t => t.status === 'failed').length
+        };
+      }
+    }
+    
+    res.json({
+      success: true,
+      activeTimerTasks: timerReminders.size,
+      userTimers: allTimers,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
       success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 匯出模組 (用於測試)
+module.exports = { app, userData, timerReminders };
       error: error.message,
       timestamp: new Date().toISOString()
     });
@@ -1085,7 +1394,8 @@ app.get('/debug', (req, res) => {
     timestamp: new Date().toISOString(),
     isDataLoaded: isDataLoaded,
     processedMessagesCount: processedMessages.size,
-    currentTaiwanTime: getTaiwanTimeHHMM()
+    currentTaiwanTime: getTaiwanTimeHHMM(),
+    activeTimerTasks: Array.from(timerReminders.keys())
   });
 });
 
@@ -1118,6 +1428,36 @@ app.get('/generate-monthly', async (req, res) => {
   }
 });
 
-// 匯出模組 (用於測試)
-module.exports = { app, userData };
-
+// 新增：測試定時提醒端點
+app.get('/test-timer', async (req, res) => {
+  try {
+    const { userId, minutes = 1, content = '測試定時提醒' } = req.query;
+    
+    if (!userId) {
+      return res.json({
+        success: false,
+        error: 'userId 參數必填',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    if (!userData[userId]) {
+      return res.json({
+        success: false,
+        error: '用戶不存在',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const timerId = await setTimerReminder(userId, parseInt(minutes), content);
+    
+    res.json({
+      success: true,
+      message: `已設定 ${minutes} 分鐘後的測試提醒`,
+      timerId: timerId,
+      reminderTime: new Date(getTaiwanDate().getTime() + parseInt(minutes) * 60000).toISOString(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      success: false,
