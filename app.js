@@ -20,6 +20,16 @@ const DATA_FILE = path.join(__dirname, 'todos.json');
 
 // 初始化資料結構
 let userData = {};
+let isDataLoaded = false;
+
+// 請求去重機制
+const processedMessages = new Set();
+
+// 定期清理處理過的訊息ID（避免記憶體洩漏）
+setInterval(() => {
+  processedMessages.clear();
+  console.log('已清理處理過的訊息記錄');
+}, 3600000); // 1小時清理一次
 
 // 獲取台灣時間
 function getTaiwanTime() {
@@ -96,65 +106,44 @@ function parseDate(text) {
   };
 }
 
-// 載入資料 - 添加重試機制
 async function loadData() {
-  let retryCount = 0;
-  const maxRetries = 3;
-  
-  while (retryCount < maxRetries) {
-    try {
-      const data = await fs.readFile(DATA_FILE, 'utf8');
-      userData = JSON.parse(data);
-      console.log(`資料載入成功，共有 ${Object.keys(userData).length} 個用戶`);
-      return;
-    } catch (error) {
-      retryCount++;
-      if (error.code === 'ENOENT') {
-        console.log('資料檔案不存在，初始化空的資料檔案');
-        userData = {};
-        await saveData();
-        return;
-      } else if (retryCount < maxRetries) {
-        console.log(`載入資料失敗，第 ${retryCount} 次重試...`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } else {
-        console.error('載入資料失敗，使用空資料:', error);
-        userData = {};
-      }
-    }
+  try {
+    const data = await fs.readFile(DATA_FILE, 'utf8');
+    userData = JSON.parse(data);
+    isDataLoaded = true;
+    console.log('資料載入成功，用戶數:', Object.keys(userData).length);
+  } catch (error) {
+    console.log('初始化空的資料檔案');
+    userData = {};
+    isDataLoaded = true;
+    // 創建空檔案
+    await saveData();
   }
 }
 
-// 儲存資料 - 添加重試機制和鎖定
+// 儲存資料（使用檔案鎖定機制）
 let isSaving = false;
 async function saveData() {
   if (isSaving) {
-    console.log('正在儲存中，跳過此次儲存');
+    console.log('正在儲存中，跳過重複儲存');
     return;
   }
   
   isSaving = true;
   try {
-    const dataToSave = JSON.stringify(userData, null, 2);
-    await fs.writeFile(DATA_FILE, dataToSave, 'utf8');
-    console.log('資料儲存成功');
+    const tempFile = DATA_FILE + '.tmp';
+    await fs.writeFile(tempFile, JSON.stringify(userData, null, 2));
+    await fs.rename(tempFile, DATA_FILE); // 原子性操作
+    console.log('資料已儲存，目前用戶數:', Object.keys(userData).length);
   } catch (error) {
     console.error('儲存資料失敗:', error);
-    // 重試一次
-    try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const dataToSave = JSON.stringify(userData, null, 2);
-      await fs.writeFile(DATA_FILE, dataToSave, 'utf8');
-      console.log('重試儲存成功');
-    } catch (retryError) {
-      console.error('重試儲存也失敗:', retryError);
-    }
+    throw error;
   } finally {
     isSaving = false;
   }
 }
 
-// 初始化用戶資料 - 確保資料同步
+// 初始化用戶資料
 function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
@@ -163,24 +152,29 @@ function initUser(userId) {
       eveningReminderTime: '18:00', // 晚上提醒時間
       timezone: 'Asia/Taipei'
     };
-    // 立即儲存新用戶資料
-    saveData().catch(err => console.error('初始化用戶資料儲存失敗:', err));
-    console.log(`初始化新用戶: ${userId}`);
+    console.log(`初始化用戶: ${userId}`);
+    saveData(); // 確保立即儲存新用戶資料
   }
 }
 
 // 處理 LINE webhook
-app.post('/webhook', line.middleware(config), (req, res) => {
-  Promise
-    .all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
-    .catch((err) => {
-      console.error(err);
-      res.status(500).end();
-    });
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  try {
+    console.log('收到 webhook 請求:', req.body);
+    
+    const results = await Promise.all(req.body.events.map(handleEvent));
+    
+    // 立即回應 LINE 平台
+    res.status(200).json({ success: true });
+    
+    console.log('Webhook 處理完成');
+  } catch (err) {
+    console.error('Webhook 處理錯誤:', err);
+    res.status(200).json({ success: false, error: err.message });
+  }
 });
 
-// 處理訊息事件 - 加強錯誤處理和日誌
+// 處理訊息事件
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
@@ -188,10 +182,33 @@ async function handleEvent(event) {
 
   const userId = event.source.userId;
   const userMessage = event.message.text.trim();
+  const messageId = event.message.id;
   
-  console.log(`收到用戶 ${userId} 的訊息: "${userMessage}"`);
+  // 請求去重：檢查是否已處理過這個訊息
+  if (processedMessages.has(messageId)) {
+    console.log(`重複訊息被忽略: ${messageId} from ${userId}`);
+    return null;
+  }
   
-  // 確保用戶初始化
+  // 標記訊息已處理
+  processedMessages.add(messageId);
+  
+  console.log(`用戶 ${userId} 發送訊息: ${userMessage} (ID: ${messageId})`);
+  
+  // 確保資料已載入
+  if (!isDataLoaded) {
+    console.log('資料尚未載入完成，等待...');
+    try {
+      await loadData();
+    } catch (error) {
+      console.error('載入資料失敗:', error);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '⚠️ 系統初始化中，請稍後再試'
+      });
+    }
+  }
+  
   initUser(userId);
   
   let replyMessage = '';
@@ -204,37 +221,47 @@ async function handleEvent(event) {
       replyMessage = getTodoList(userId);
     } else if (userMessage.startsWith('新增 ')) {
       const todo = userMessage.substring(3).trim();
-      replyMessage = addTodo(userId, todo);
+      replyMessage = await addTodo(userId, todo);
     } else if (userMessage.startsWith('刪除 ')) {
       const index = parseInt(userMessage.substring(3).trim()) - 1;
-      replyMessage = deleteTodo(userId, index);
+      replyMessage = await deleteTodo(userId, index);
     } else if (userMessage.startsWith('早上時間 ')) {
       const time = userMessage.substring(5).trim();
-      replyMessage = setMorningTime(userId, time);
+      replyMessage = await setMorningTime(userId, time);
     } else if (userMessage.startsWith('晚上時間 ')) {
       const time = userMessage.substring(5).trim();
-      replyMessage = setEveningTime(userId, time);
+      replyMessage = await setEveningTime(userId, time);
     } else if (userMessage === '查詢時間') {
       replyMessage = getReminderTimes(userId);
     } else if (userMessage === '狀態') {
-      // 添加狀態檢查指令
-      replyMessage = getStatusMessage(userId);
+      replyMessage = getSystemStatus(userId);
     } else {
       replyMessage = '指令不正確，請輸入「幫助」查看使用說明';
     }
 
-    console.log(`回覆用戶 ${userId}: "${replyMessage.substring(0, 50)}..."`);
-    
-    return client.replyMessage(event.replyToken, {
+    // 使用 replyMessage 回覆
+    const response = await client.replyMessage(event.replyToken, {
       type: 'text',
       text: replyMessage
     });
+    
+    console.log(`成功回覆用戶 ${userId}: ${replyMessage.substring(0, 50)}...`);
+    return response;
+    
   } catch (error) {
-    console.error('處理訊息時發生錯誤:', error);
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '處理您的訊息時發生錯誤，請稍後再試或輸入「幫助」查看使用說明'
-    });
+    console.error(`處理用戶 ${userId} 訊息時發生錯誤:`, error);
+    
+    // 錯誤處理：嘗試回覆錯誤訊息
+    try {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '抱歉，處理您的請求時發生錯誤，請稍後再試 🙏\n如果問題持續，請輸入「狀態」檢查系統狀態'
+      });
+    } catch (replyError) {
+      console.error('回覆錯誤訊息失敗:', replyError);
+    }
+    
+    return null;
   }
 }
 
@@ -267,14 +294,13 @@ function getHelpMessage() {
 輸入「幫助」可重複查看此說明`;
 }
 
-// 新增代辦事項 - 加強錯誤處理和日誌
-function addTodo(userId, todo) {
+// 新增代辦事項
+async function addTodo(userId, todo) {
   if (!todo) {
     return '請輸入要新增的代辦事項\n格式：新增 [事項內容] 或 新增 8/9號[事項內容]';
   }
   
   const parsed = parseDate(todo);
-  console.log(`用戶 ${userId} 新增事項:`, { parsed, originalTodo: todo });
   
   const todoItem = {
     id: Date.now(),
@@ -286,16 +312,16 @@ function addTodo(userId, todo) {
     dateString: parsed.dateString
   };
   
-  // 確保用戶存在
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
   userData[userId].todos.push(todoItem);
-  console.log(`新增後用戶 ${userId} 的代辦事項數量: ${userData[userId].todos.length}`);
   
-  // 立即儲存資料
-  saveData().catch(err => console.error('新增代辦事項儲存失敗:', err));
+  // 立即儲存並等待完成
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 新增事項: ${parsed.content}, 總數: ${userData[userId].todos.length}`);
+  } catch (err) {
+    console.error('新增事項時儲存失敗:', err);
+    return '❌ 新增失敗，請稍後再試';
+  }
   
   let message = `✅ 已新增代辦事項：「${parsed.content}」\n`;
   
@@ -311,12 +337,8 @@ function addTodo(userId, todo) {
   return message;
 }
 
-// 刪除代辦事項 - 加強錯誤處理
-function deleteTodo(userId, index) {
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
+// 刪除代辦事項
+async function deleteTodo(userId, index) {
   const todos = userData[userId].todos;
   
   if (index < 0 || index >= todos.length) {
@@ -324,44 +346,25 @@ function deleteTodo(userId, index) {
   }
   
   const deletedTodo = todos.splice(index, 1)[0];
-  console.log(`用戶 ${userId} 刪除事項: ${deletedTodo.content}`);
   
-  // 立即儲存資料
-  saveData().catch(err => console.error('刪除代辦事項儲存失敗:', err));
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 刪除事項: ${deletedTodo.content}, 剩餘: ${todos.length}`);
+  } catch (err) {
+    console.error('刪除事項時儲存失敗:', err);
+    // 如果儲存失敗，恢復刪除的項目
+    todos.splice(index, 0, deletedTodo);
+    return '❌ 刪除失敗，請稍後再試';
+  }
   
   return `🗑️ 已刪除代辦事項：「${deletedTodo.content}」\n剩餘 ${todos.length} 項代辦事項`;
 }
 
-// 狀態檢查功能
-function getStatusMessage(userId) {
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
-  const user = userData[userId];
-  const currentTime = getTaiwanTimeHHMM();
-  
-  return `📊 系統狀態：
-👤 用戶ID: ${userId.substring(0, 8)}...
-📋 代辦事項數量: ${user.todos.length}
-🌅 早上提醒時間: ${user.morningReminderTime}
-🌙 晚上提醒時間: ${user.eveningReminderTime}
-🕐 目前台灣時間: ${currentTime}
-💾 資料載入狀態: 正常
-
-如果發現資料不同步，請聯繫管理員`;
-}
-
-// 獲取代辦事項清單 - 加強錯誤處理
+// 獲取代辦事項清單
 function getTodoList(userId) {
-  // 確保用戶資料存在
-  if (!userData[userId]) {
-    console.log(`用戶 ${userId} 不存在，初始化中...`);
-    initUser(userId);
-  }
-  
   const todos = userData[userId].todos;
-  console.log(`查詢用戶 ${userId} 的代辦事項，共 ${todos.length} 項`);
+  
+  console.log(`用戶 ${userId} 查詢清單，總數: ${todos.length}`);
   
   if (todos.length === 0) {
     return '📝 目前沒有代辦事項\n輸入「新增 [事項]」來新增代辦事項\n也可以輸入「新增 8/9號繳卡費」來新增有日期的事項';
@@ -379,7 +382,11 @@ function getTodoList(userId) {
     message += '📅 有日期的事項：\n';
     datedTodos.forEach((todo) => {
       const targetDate = new Date(todo.targetDate).toLocaleDateString('zh-TW');
-      message += `${index}. ${todo.content}\n   📅 ${targetDate} (前一天提醒)\n\n`;
+      const isExpired = isTodoExpired(todo);
+      const statusIcon = isExpired ? '⏰' : '📅';
+      const statusText = isExpired ? '(已到期)' : '(前一天提醒)';
+      
+      message += `${index}. ${todo.content}\n   ${statusIcon} ${targetDate} ${statusText}\n\n`;
       index++;
     });
   }
@@ -398,47 +405,49 @@ function getTodoList(userId) {
 }
 
 // 設定早上提醒時間
-function setMorningTime(userId, time) {
+async function setMorningTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
   
   if (!timeRegex.test(time)) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：08:30';
   }
   
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
   userData[userId].morningReminderTime = time;
-  saveData().catch(err => console.error('設定早上時間儲存失敗:', err));
+  
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 設定早上提醒時間: ${time}`);
+  } catch (err) {
+    console.error('設定提醒時間時儲存失敗:', err);
+    return '❌ 設定失敗，請稍後再試';
+  }
   
   return `🌅 已設定早上提醒時間為：${time}`;
 }
 
 // 設定晚上提醒時間
-function setEveningTime(userId, time) {
+async function setEveningTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
   
   if (!timeRegex.test(time)) {
     return '❌ 時間格式不正確\n請使用 HH:MM 格式，例如：19:00';
   }
   
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
   userData[userId].eveningReminderTime = time;
-  saveData().catch(err => console.error('設定晚上時間儲存失敗:', err));
+  
+  try {
+    await saveData();
+    console.log(`用戶 ${userId} 設定晚上提醒時間: ${time}`);
+  } catch (err) {
+    console.error('設定提醒時間時儲存失敗:', err);
+    return '❌ 設定失敗，請稍後再試';
+  }
   
   return `🌙 已設定晚上提醒時間為：${time}`;
 }
 
 // 獲取提醒時間
 function getReminderTimes(userId) {
-  if (!userData[userId]) {
-    initUser(userId);
-  }
-  
   const morningTime = userData[userId].morningReminderTime;
   const eveningTime = userData[userId].eveningReminderTime;
   const currentTaiwanTime = getTaiwanTimeHHMM();
@@ -451,7 +460,7 @@ function getReminderTimes(userId) {
 輸入「早上時間 [HH:MM]」或「晚上時間 [HH:MM]」可修改提醒時間`;
 }
 
-// 檢查是否需要提醒
+// 檢查是否需要提醒（修正版本 - 不會刪除代辦事項）
 function shouldRemindTodo(todo) {
   const today = getTaiwanDate();
   
@@ -460,7 +469,7 @@ function shouldRemindTodo(todo) {
     return true;
   }
   
-  // 有日期的事項，只在前一天提醒
+  // 有日期的事項，只在前一天提醒，但不刪除
   const targetDate = new Date(todo.targetDate);
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
@@ -471,6 +480,19 @@ function shouldRemindTodo(todo) {
     tomorrow.getMonth() === targetDate.getMonth() &&
     tomorrow.getDate() === targetDate.getDate()
   );
+}
+
+// 新增：檢查代辦事項是否已過期（用於顯示）
+function isTodoExpired(todo) {
+  if (!todo.hasDate) {
+    return false; // 沒有日期的事項不會過期
+  }
+  
+  const today = getTaiwanDate();
+  const targetDate = new Date(todo.targetDate);
+  
+  // 如果目標日期已過，標記為過期
+  return targetDate < today;
 }
 
 // 發送提醒訊息給單一用戶
@@ -552,7 +574,52 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    users: Object.keys(userData).length 
+    users: Object.keys(userData).length,
+    totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0)
+  });
+});
+
+// 新增調試端點
+app.get('/debug', (req, res) => {
+  res.json({
+    userData: userData,
+    dataFile: DATA_FILE,
+    timestamp: new Date().toISOString(),
+    isDataLoaded: isDataLoaded,
+    processedMessagesCount: processedMessages.size
+  });
+});
+
+// 新增清理過期事項的端點（手動觸發）
+app.get('/cleanup', async (req, res) => {
+  let totalCleaned = 0;
+  
+  for (const userId in userData) {
+    const user = userData[userId];
+    const originalLength = user.todos.length;
+    
+    // 可選：清理超過30天的過期事項
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    user.todos = user.todos.filter(todo => {
+      if (!todo.hasDate) return true; // 保留沒日期的事項
+      
+      const targetDate = new Date(todo.targetDate);
+      return targetDate >= thirtyDaysAgo; // 保留30天內的事項
+    });
+    
+    totalCleaned += (originalLength - user.todos.length);
+  }
+  
+  if (totalCleaned > 0) {
+    await saveData();
+  }
+  
+  res.json({
+    success: true,
+    cleaned: totalCleaned,
+    timestamp: new Date().toISOString()
   });
 });
 
