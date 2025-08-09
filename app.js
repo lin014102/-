@@ -56,7 +56,6 @@ function getTaiwanDate() {
   const taiwanTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
   return taiwanTime;
 }
-
 // 解析日期格式 (支援 M/D 或 MM/DD 格式)
 function parseDate(text) {
   const currentYear = getTaiwanDate().getFullYear();
@@ -231,7 +230,10 @@ function parseTimeReminder(text) {
       content: content
     };
   }
-  // 連接 MongoDB 資料庫
+  
+  return { isValid: false, error: '格式不正確，請使用：HH:MM+內容\n例如：12:00倒垃圾' };
+}
+// 連接 MongoDB 資料庫
 async function connectDatabase() {
   try {
     console.log('🔗 正在連接 MongoDB...');
@@ -371,6 +373,34 @@ async function saveUserData(userId) {
   }
 }
 
+// 初始化用戶資料
+function initUser(userId) {
+  if (!userData[userId]) {
+    userData[userId] = {
+      todos: [],
+      monthlyTodos: [],
+      shortTermReminders: [],
+      timeReminders: [],
+      morningReminderTime: '09:00',
+      eveningReminderTime: '18:00',
+      timezone: 'Asia/Taipei'
+    };
+    console.log(`初始化用戶: ${userId}`);
+    saveUserData(userId); // 立即儲存新用戶資料
+  }
+  
+  // 為舊用戶添加新欄位
+  if (!userData[userId].monthlyTodos) {
+    userData[userId].monthlyTodos = [];
+  }
+  if (!userData[userId].shortTermReminders) {
+    userData[userId].shortTermReminders = [];
+  }
+  if (!userData[userId].timeReminders) {
+    userData[userId].timeReminders = [];
+    saveUserData(userId);
+  }
+}
 // 恢復所有提醒定時器
 async function restoreAllReminders() {
   const currentTime = new Date();
@@ -453,36 +483,6 @@ async function restoreAllReminders() {
   console.log(`✅ 恢復提醒完成 - 短期: ${restoredShortCount} 項，時間: ${restoredTimeCount} 項，清理過期: ${expiredCount} 項`);
 }
 
-// 初始化用戶資料
-function initUser(userId) {
-  if (!userData[userId]) {
-    userData[userId] = {
-      todos: [],
-      monthlyTodos: [],
-      shortTermReminders: [],
-      timeReminders: [],
-      morningReminderTime: '09:00',
-      eveningReminderTime: '18:00',
-      timezone: 'Asia/Taipei'
-    };
-    console.log(`初始化用戶: ${userId}`);
-    saveUserData(userId); // 立即儲存新用戶資料
-  }
-  
-  // 為舊用戶添加新欄位
-  if (!userData[userId].monthlyTodos) {
-    userData[userId].monthlyTodos = [];
-  }
-  if (!userData[userId].shortTermReminders) {
-    userData[userId].shortTermReminders = [];
-  }
-  if (!userData[userId].timeReminders) {
-    userData[userId].timeReminders = [];
-    saveUserData(userId);
-  }
-}
-  return { isValid: false, error: '格式不正確，請使用：HH:MM+內容\n例如：12:00倒垃圾' };
-}
 // 創建短期提醒
 async function createShortTermReminder(userId, reminderText) {
   const parsed = parseShortTermReminder(reminderText);
@@ -1306,113 +1306,7 @@ function getTodoList(userId) {
       index++;
     });
   }
-  
-  message += '💡 輸入「刪除 [編號]」可刪除指定項目\n💡 輸入「每月清單」查看每月固定事項\n💡 輸入「短期清單」查看短期提醒\n💡 輸入「時間清單」查看時間提醒';
-  return message;
-}
-
-// 獲取每月固定事項清單
-function getMonthlyTodoList(userId) {
-  const monthlyTodos = userData[userId].monthlyTodos;
-  
-  if (monthlyTodos.length === 0) {
-    return '📝 目前沒有每月固定事項\n輸入「每月新增 [事項]」來新增每月固定事項\n例如：每月新增 5號繳卡費';
-  }
-  
-  let message = `🔄 每月固定事項清單 (${monthlyTodos.length} 項)：\n\n`;
-  
-  monthlyTodos.forEach((todo, index) => {
-    const statusIcon = todo.enabled ? '✅' : '⏸️';
-    const dateText = todo.hasFixedDate ? `每月 ${todo.day} 號` : '手動生成';
-    message += `${index + 1}. ${statusIcon} ${todo.content}\n   📅 ${dateText}\n\n`;
-  });
-  
-  message += '💡 輸入「每月刪除 [編號]」可刪除指定項目\n';
-  message += '🔄 輸入「生成本月」可將固定事項加入本月代辦';
-  
-  return message;
-}
-
-// 生成本月的固定事項
-async function generateMonthlyTodos(userId) {
-  const monthlyTodos = userData[userId].monthlyTodos.filter(todo => todo.enabled);
-  const currentMonth = getTaiwanDate().getMonth() + 1;
-  const currentYear = getTaiwanDate().getFullYear();
-  
-  if (monthlyTodos.length === 0) {
-    return '📝 沒有啟用的每月固定事項\n請先使用「每月新增」來新增固定事項';
-  }
-  
-  let generatedCount = 0;
-  let message = `🔄 生成 ${currentYear}/${currentMonth} 月的固定事項：\n\n`;
-  
-  for (const monthlyTodo of monthlyTodos) {
-    let todoItem;
-    
-    if (monthlyTodo.hasFixedDate) {
-      const targetDate = new Date(currentYear, currentMonth - 1, monthlyTodo.day);
-      
-      const exists = userData[userId].todos.some(todo => {
-        if (!todo.hasDate) return false;
-        const todoDate = new Date(todo.targetDate);
-        return todoDate.getFullYear() === currentYear &&
-               todoDate.getMonth() === currentMonth - 1 &&
-               todoDate.getDate() === monthlyTodo.day &&
-               todo.content === monthlyTodo.content;
-      });
-      
-      if (!exists) {
-        todoItem = {
-          id: Date.now() + Math.random(),
-          content: monthlyTodo.content,
-          createdAt: getTaiwanTime(),
-          completed: false,
-          hasDate: true,
-          targetDate: targetDate.toISOString(),
-          dateString: `${currentMonth}/${monthlyTodo.day}`,
-          fromMonthly: true
-        };
-        
-        userData[userId].todos.push(todoItem);
-        message += `✅ ${monthlyTodo.content} (${currentMonth}/${monthlyTodo.day})\n`;
-        generatedCount++;
-      } else {
-        message += `⚠️ ${monthlyTodo.content} (${currentMonth}/${monthlyTodo.day}) 已存在\n`;
-      }
-    } else {
-      todoItem = {
-        id: Date.now() + Math.random(),
-        content: monthlyTodo.content,
-        createdAt: getTaiwanTime(),
-        completed: false,
-        hasDate: false,
-        targetDate: null,
-        dateString: null,
-        fromMonthly: true
-      };
-      
-      userData[userId].todos.push(todoItem);
-      message += `✅ ${monthlyTodo.content} (每日提醒)\n`;
-      generatedCount++;
-    }
-  }
-  
-  if (generatedCount > 0) {
-    try {
-      await saveUserData(userId);
-      message += `\n🎉 成功生成 ${generatedCount} 項代辦事項！`;
-      message += `\n📋 輸入「查詢」可查看完整代辦清單`;
-    } catch (err) {
-      console.error('生成每月事項時儲存失敗:', err);
-      return '❌ 生成失敗，請稍後再試';
-    }
-  } else {
-    message += '\n📝 沒有新增任何事項（可能都已存在）';
-  }
-  
-  return message;
-}
-// 設定早上提醒時間
+  // 設定早上提醒時間
 async function setMorningTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
   
@@ -1615,7 +1509,7 @@ async function testTimeReminder(userId, time) {
     return `⏰ 測試時間：${time}\n目前時間：${currentTime}\n時間不匹配，未發送提醒\n\n💡 提示：您可以等到 ${time} 時自動收到提醒，或輸入「測試提醒」立即測試`;
   }
 }
-// 系統狀態檢查
+  // 系統狀態檢查
 function getSystemStatus(userId) {
   const user = userData[userId];
   const todos = user.todos;
