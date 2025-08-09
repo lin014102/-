@@ -1,8 +1,8 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const cron = require('node-cron');
-const fs = require('fs').promises;
-const path = require('path');
+const { MongoClient } = require('mongodb');
+// 如果沒有安裝 mongodb，請執行：npm install mongodb
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,15 +15,17 @@ const config = {
 
 const client = new line.Client(config);
 
-// 資料儲存檔案路徑
-const DATA_FILE = path.join(__dirname, 'todos.json');
+// MongoDB 設定
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/linebot';
+let db;
+let mongoClient;
 
 // 初始化資料結構
 let userData = {};
 let isDataLoaded = false;
 
-// 新增：短期提醒和時間提醒儲存 Map
-let shortTermReminders = new Map(); // 儲存短期提醒和時間提醒的 Map
+// 短期提醒和時間提醒儲存 Map
+let shortTermReminders = new Map();
 
 // 請求去重機制
 const processedMessages = new Set();
@@ -109,7 +111,7 @@ function parseDate(text) {
   };
 }
 
-// 新增：解析每月事項的日期格式
+// 解析每月事項的日期格式
 function parseMonthlyDate(text) {
   const monthlyPattern = /(?:每月)?(\d{1,2})號(.+)|(.+?)(?:每月)?(\d{1,2})號/;
   const match = text.match(monthlyPattern);
@@ -141,14 +143,8 @@ function parseMonthlyDate(text) {
   };
 }
 
-// 新增：解析短期提醒指令
+// 解析短期提醒指令
 function parseShortTermReminder(text) {
-  // 支援的格式：
-  // "5分鐘後倒垃圾"
-  // "10分鐘後開會" 
-  // "1小時後吃飯"
-  // "30秒後測試"
-  
   const patterns = [
     /(\d+)分鐘後(.+)/,
     /(\d+)小時後(.+)/,
@@ -172,7 +168,7 @@ function parseShortTermReminder(text) {
         case 0: // 分鐘
           minutes = value;
           unit = '分鐘';
-          if (value < 1 || value > 1440) { // 1440分鐘 = 24小時
+          if (value < 1 || value > 1440) {
             return { isValid: false, error: '分鐘數請設定在 1-1440 之間' };
           }
           break;
@@ -186,7 +182,7 @@ function parseShortTermReminder(text) {
         case 2: // 秒
           minutes = value / 60;
           unit = '秒';
-          if (value < 10 || value > 3600) { // 10秒到1小時
+          if (value < 10 || value > 3600) {
             return { isValid: false, error: '秒數請設定在 10-3600 之間' };
           }
           break;
@@ -205,13 +201,8 @@ function parseShortTermReminder(text) {
   return { isValid: false, error: '格式不正確，請使用：數字+時間單位+後+內容\n例如：5分鐘後倒垃圾' };
 }
 
-// 新增：解析時間提醒指令
+// 解析時間提醒指令
 function parseTimeReminder(text) {
-  // 支援的格式：
-  // "12:00倒垃圾"
-  // "14:30開會"
-  // "23:59做某事"
-  
   const timePattern = /(\d{1,2}):(\d{2})(.+)/;
   const match = text.match(timePattern);
   
@@ -244,27 +235,147 @@ function parseTimeReminder(text) {
   
   return { isValid: false, error: '格式不正確，請使用：HH:MM+內容\n例如：12:00倒垃圾' };
 }
-// 修改後的 loadData 函數，加入短期提醒和時間提醒的恢復邏輯
-async function loadData() {
+// 連接 MongoDB 資料庫
+async function connectDatabase() {
   try {
-    const data = await fs.readFile(DATA_FILE, 'utf8');
-    userData = JSON.parse(data);
-    isDataLoaded = true;
-    console.log('資料載入成功，用戶數:', Object.keys(userData).length);
-    
-    // 恢復短期提醒和時間提醒的定時器
-    await restoreAllReminders();
-    
+    console.log('🔗 正在連接 MongoDB...');
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db('linebot');
+    console.log('✅ MongoDB 連接成功');
+    return true;
   } catch (error) {
-    console.log('初始化空的資料檔案');
-    userData = {};
-    isDataLoaded = true;
-    // 創建空檔案
-    await saveData();
+    console.error('❌ MongoDB 連接失敗:', error);
+    return false;
   }
 }
 
-// 新增：恢復所有提醒定時器（系統重啟後使用）
+// 修改：從 MongoDB 載入資料
+async function loadData() {
+  try {
+    if (!db) {
+      throw new Error('資料庫未連接');
+    }
+    
+    console.log('📥 從 MongoDB 載入用戶資料...');
+    
+    // 從 users 集合載入所有用戶資料
+    const users = await db.collection('users').find({}).toArray();
+    
+    userData = {};
+    for (const user of users) {
+      userData[user.userId] = {
+        todos: user.todos || [],
+        monthlyTodos: user.monthlyTodos || [],
+        shortTermReminders: user.shortTermReminders || [],
+        timeReminders: user.timeReminders || [],
+        morningReminderTime: user.morningReminderTime || '09:00',
+        eveningReminderTime: user.eveningReminderTime || '18:00',
+        timezone: user.timezone || 'Asia/Taipei'
+      };
+    }
+    
+    isDataLoaded = true;
+    console.log(`✅ 資料載入成功，用戶數: ${Object.keys(userData).length}`);
+    
+    // 恢復提醒定時器
+    await restoreAllReminders();
+    
+  } catch (error) {
+    console.log('🔄 初始化空的用戶資料');
+    userData = {};
+    isDataLoaded = true;
+  }
+}
+
+// 修改：儲存資料到 MongoDB
+let isSaving = false;
+async function saveData() {
+  if (isSaving) {
+    console.log('正在儲存中，跳過重複儲存');
+    return;
+  }
+  
+  if (!db) {
+    console.error('❌ 資料庫未連接，無法儲存');
+    return;
+  }
+  
+  isSaving = true;
+  try {
+    console.log('💾 儲存資料到 MongoDB...');
+    
+    // 批次更新所有用戶資料
+    const bulkOps = [];
+    
+    for (const [userId, userInfo] of Object.entries(userData)) {
+      bulkOps.push({
+        updateOne: {
+          filter: { userId: userId },
+          update: { 
+            $set: {
+              userId: userId,
+              todos: userInfo.todos,
+              monthlyTodos: userInfo.monthlyTodos,
+              shortTermReminders: userInfo.shortTermReminders,
+              timeReminders: userInfo.timeReminders,
+              morningReminderTime: userInfo.morningReminderTime,
+              eveningReminderTime: userInfo.eveningReminderTime,
+              timezone: userInfo.timezone,
+              lastUpdated: new Date()
+            }
+          },
+          upsert: true // 如果不存在則新增
+        }
+      });
+    }
+    
+    if (bulkOps.length > 0) {
+      await db.collection('users').bulkWrite(bulkOps);
+    }
+    
+    console.log(`✅ 資料已儲存到 MongoDB，用戶數: ${Object.keys(userData).length}`);
+  } catch (error) {
+    console.error('❌ 儲存資料失敗:', error);
+    throw error;
+  } finally {
+    isSaving = false;
+  }
+}
+
+// 修改：儲存單一用戶資料（效能優化）
+async function saveUserData(userId) {
+  if (!db || !userData[userId]) {
+    return;
+  }
+  
+  try {
+    const userInfo = userData[userId];
+    await db.collection('users').updateOne(
+      { userId: userId },
+      { 
+        $set: {
+          userId: userId,
+          todos: userInfo.todos,
+          monthlyTodos: userInfo.monthlyTodos,
+          shortTermReminders: userInfo.shortTermReminders,
+          timeReminders: userInfo.timeReminders,
+          morningReminderTime: userInfo.morningReminderTime,
+          eveningReminderTime: userInfo.eveningReminderTime,
+          timezone: userInfo.timezone,
+          lastUpdated: new Date()
+        }
+      },
+      { upsert: true }
+    );
+    
+    console.log(`✅ 用戶 ${userId} 資料已儲存`);
+  } catch (error) {
+    console.error(`❌ 儲存用戶 ${userId} 資料失敗:`, error);
+  }
+}
+
+// 恢復所有提醒定時器（系統重啟後使用）
 async function restoreAllReminders() {
   const currentTime = new Date();
   let restoredShortCount = 0;
@@ -346,42 +457,20 @@ async function restoreAllReminders() {
   console.log(`✅ 恢復提醒完成 - 短期: ${restoredShortCount} 項，時間: ${restoredTimeCount} 項，清理過期: ${expiredCount} 項`);
 }
 
-// 儲存資料（使用檔案鎖定機制）
-let isSaving = false;
-async function saveData() {
-  if (isSaving) {
-    console.log('正在儲存中，跳過重複儲存');
-    return;
-  }
-  
-  isSaving = true;
-  try {
-    const tempFile = DATA_FILE + '.tmp';
-    await fs.writeFile(tempFile, JSON.stringify(userData, null, 2));
-    await fs.rename(tempFile, DATA_FILE); // 原子性操作
-    console.log('資料已儲存，目前用戶數:', Object.keys(userData).length);
-  } catch (error) {
-    console.error('儲存資料失敗:', error);
-    throw error;
-  } finally {
-    isSaving = false;
-  }
-}
-
-// 修改：初始化用戶資料（新增 timeReminders）
+// 初始化用戶資料
 function initUser(userId) {
   if (!userData[userId]) {
     userData[userId] = {
       todos: [],
-      monthlyTodos: [], // 每月固定事項
-      shortTermReminders: [], // 短期提醒列表
-      timeReminders: [], // 新增：時間提醒列表
-      morningReminderTime: '09:00', // 早上提醒時間
-      eveningReminderTime: '18:00', // 晚上提醒時間
+      monthlyTodos: [],
+      shortTermReminders: [],
+      timeReminders: [],
+      morningReminderTime: '09:00',
+      eveningReminderTime: '18:00',
       timezone: 'Asia/Taipei'
     };
     console.log(`初始化用戶: ${userId}`);
-    saveData(); // 確保立即儲存新用戶資料
+    saveUserData(userId); // 立即儲存新用戶資料
   }
   
   // 為舊用戶添加新欄位
@@ -393,10 +482,10 @@ function initUser(userId) {
   }
   if (!userData[userId].timeReminders) {
     userData[userId].timeReminders = [];
-    saveData();
+    saveUserData(userId);
   }
 }
-// 新增：創建短期提醒
+// 創建短期提醒
 async function createShortTermReminder(userId, reminderText) {
   const parsed = parseShortTermReminder(reminderText);
   
@@ -417,13 +506,12 @@ async function createShortTermReminder(userId, reminderText) {
     originalValue: parsed.originalValue,
     unit: parsed.unit,
     completed: false,
-    type: 'short' // 標記為短期提醒
+    type: 'short'
   };
   
   // 設定定時器
   const timerId = setTimeout(async () => {
     await sendShortTermReminder(reminderData);
-    // 清理已完成的提醒
     shortTermReminders.delete(reminderId);
     removeShortTermReminderFromUser(userId, reminderId);
   }, parsed.minutes * 60 * 1000);
@@ -434,15 +522,14 @@ async function createShortTermReminder(userId, reminderText) {
     timerId: timerId
   });
   
-  // 儲存到用戶資料中（用於持久化和查詢）
+  // 儲存到用戶資料中
   userData[userId].shortTermReminders.push(reminderData);
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 設定短期提醒: ${parsed.content} (${parsed.originalValue}${parsed.unit}後)`);
   } catch (err) {
     console.error('設定短期提醒時儲存失敗:', err);
-    // 清理定時器
     clearTimeout(timerId);
     shortTermReminders.delete(reminderId);
     return '❌ 設定失敗，請稍後再試';
@@ -460,7 +547,7 @@ async function createShortTermReminder(userId, reminderText) {
   return `⏰ 已設定短期提醒：「${parsed.content}」\n⏳ ${parsed.originalValue}${parsed.unit}後提醒 (${reminderTimeStr})\n📝 輸入「短期清單」可查看所有短期提醒`;
 }
 
-// 新增：創建時間提醒
+// 創建時間提醒
 async function createTimeReminder(userId, reminderText) {
   const parsed = parseTimeReminder(reminderText);
   
@@ -490,13 +577,12 @@ async function createTimeReminder(userId, reminderText) {
     createdAt: getTaiwanTime(),
     reminderTime: targetTime,
     completed: false,
-    type: 'time' // 標記為時間提醒
+    type: 'time'
   };
   
   // 設定定時器
   const timerId = setTimeout(async () => {
     await sendTimeReminder(reminderData);
-    // 清理已完成的提醒
     shortTermReminders.delete(reminderId);
     removeTimeReminderFromUser(userId, reminderId);
   }, timeLeft);
@@ -511,7 +597,7 @@ async function createTimeReminder(userId, reminderText) {
   userData[userId].timeReminders.push(reminderData);
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 設定時間提醒: ${parsed.content} (${parsed.timeString})`);
   } catch (err) {
     console.error('設定時間提醒時儲存失敗:', err);
@@ -535,7 +621,7 @@ async function createTimeReminder(userId, reminderText) {
   return `⏰ 已設定時間提醒：「${parsed.content}」\n🕐 ${dateText} ${parsed.timeString} 提醒 (${targetTimeStr})\n📝 輸入「時間清單」可查看所有時間提醒`;
 }
 
-// 新增：發送短期提醒
+// 發送短期提醒
 async function sendShortTermReminder(reminderData) {
   try {
     const message = `⏰ 短期提醒時間到！
@@ -555,7 +641,7 @@ async function sendShortTermReminder(reminderData) {
   }
 }
 
-// 新增：發送時間提醒
+// 發送時間提醒
 async function sendTimeReminder(reminderData) {
   try {
     const message = `⏰ 時間提醒！
@@ -576,35 +662,35 @@ async function sendTimeReminder(reminderData) {
   }
 }
 
-// 新增：從用戶資料中移除已完成的短期提醒
+// 從用戶資料中移除已完成的短期提醒
 async function removeShortTermReminderFromUser(userId, reminderId) {
   if (userData[userId] && userData[userId].shortTermReminders) {
     userData[userId].shortTermReminders = userData[userId].shortTermReminders.filter(
       reminder => reminder.id !== reminderId
     );
     try {
-      await saveData();
+      await saveUserData(userId); // 改用單一用戶儲存
     } catch (err) {
       console.error('移除短期提醒時儲存失敗:', err);
     }
   }
 }
 
-// 新增：從用戶資料中移除已完成的時間提醒
+// 從用戶資料中移除已完成的時間提醒
 async function removeTimeReminderFromUser(userId, reminderId) {
   if (userData[userId] && userData[userId].timeReminders) {
     userData[userId].timeReminders = userData[userId].timeReminders.filter(
       reminder => reminder.id !== reminderId
     );
     try {
-      await saveData();
+      await saveUserData(userId); // 改用單一用戶儲存
     } catch (err) {
       console.error('移除時間提醒時儲存失敗:', err);
     }
   }
 }
 
-// 新增：獲取短期提醒清單
+// 獲取短期提醒清單
 function getShortTermReminderList(userId) {
   const reminders = userData[userId].shortTermReminders || [];
   
@@ -654,7 +740,7 @@ function getShortTermReminderList(userId) {
   return message;
 }
 
-// 新增：獲取時間提醒清單
+// 獲取時間提醒清單
 function getTimeReminderList(userId) {
   const reminders = userData[userId].timeReminders || [];
   
@@ -704,7 +790,7 @@ function getTimeReminderList(userId) {
   return message;
 }
 
-// 新增：取消短期提醒
+// 取消短期提醒
 async function cancelShortTermReminder(userId, index) {
   const reminders = userData[userId].shortTermReminders || [];
   
@@ -726,7 +812,7 @@ async function cancelShortTermReminder(userId, index) {
   reminders.splice(index, 1);
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 取消短期提醒: ${reminder.content}`);
   } catch (err) {
     console.error('取消短期提醒時儲存失敗:', err);
@@ -736,7 +822,7 @@ async function cancelShortTermReminder(userId, index) {
   return `🗑️ 已取消短期提醒：「${reminder.content}」\n剩餘 ${reminders.length} 項短期提醒`;
 }
 
-// 新增：取消時間提醒
+// 取消時間提醒
 async function cancelTimeReminder(userId, index) {
   const reminders = userData[userId].timeReminders || [];
   
@@ -758,7 +844,7 @@ async function cancelTimeReminder(userId, index) {
   reminders.splice(index, 1);
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 取消時間提醒: ${reminder.content}`);
   } catch (err) {
     console.error('取消時間提醒時儲存失敗:', err);
@@ -768,7 +854,7 @@ async function cancelTimeReminder(userId, index) {
   return `🗑️ 已取消時間提醒：「${reminder.content}」(${reminder.timeString})\n剩餘 ${reminders.length} 項時間提醒`;
 }
 
-// 新增：清理過期的短期提醒
+// 清理過期的短期提醒
 async function cleanupExpiredShortTermReminders(userId) {
   const reminders = userData[userId].shortTermReminders || [];
   const currentTime = new Date();
@@ -776,16 +862,13 @@ async function cleanupExpiredShortTermReminders(userId) {
   let cleanedCount = 0;
   let i = reminders.length - 1;
   
-  // 倒序遍歷，避免索引問題
   while (i >= 0) {
     const reminder = reminders[i];
     const reminderTime = new Date(reminder.reminderTime);
     
-    // 清理超過1小時的過期提醒
     if (reminderTime < currentTime - 3600000) { // 3600000ms = 1小時
       const reminderId = reminder.id;
       
-      // 清理記憶體中的定時器（如果還存在）
       if (shortTermReminders.has(reminderId)) {
         const timerData = shortTermReminders.get(reminderId);
         clearTimeout(timerData.timerId);
@@ -800,7 +883,7 @@ async function cleanupExpiredShortTermReminders(userId) {
   
   if (cleanedCount > 0) {
     try {
-      await saveData();
+      await saveUserData(userId); // 改用單一用戶儲存
       console.log(`用戶 ${userId} 清理過期短期提醒: ${cleanedCount} 項`);
     } catch (err) {
       console.error('清理短期提醒時儲存失敗:', err);
@@ -813,7 +896,7 @@ async function cleanupExpiredShortTermReminders(userId) {
   }
 }
 
-// 新增：清理過期的時間提醒
+// 清理過期的時間提醒
 async function cleanupExpiredTimeReminders(userId) {
   const reminders = userData[userId].timeReminders || [];
   const currentTime = new Date();
@@ -821,16 +904,13 @@ async function cleanupExpiredTimeReminders(userId) {
   let cleanedCount = 0;
   let i = reminders.length - 1;
   
-  // 倒序遍歷，避免索引問題
   while (i >= 0) {
     const reminder = reminders[i];
     const reminderTime = new Date(reminder.reminderTime);
     
-    // 清理超過1小時的過期提醒
     if (reminderTime < currentTime - 3600000) {
       const reminderId = reminder.id;
       
-      // 清理記憶體中的定時器
       if (shortTermReminders.has(reminderId)) {
         const timerData = shortTermReminders.get(reminderId);
         clearTimeout(timerData.timerId);
@@ -845,7 +925,7 @@ async function cleanupExpiredTimeReminders(userId) {
   
   if (cleanedCount > 0) {
     try {
-      await saveData();
+      await saveUserData(userId); // 改用單一用戶儲存
       console.log(`用戶 ${userId} 清理過期時間提醒: ${cleanedCount} 項`);
     } catch (err) {
       console.error('清理時間提醒時儲存失敗:', err);
@@ -874,7 +954,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
-// 修改：處理訊息事件（新增時間提醒指令）
+// 處理訊息事件
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
@@ -964,9 +1044,8 @@ async function handleEvent(event) {
     } else if (userMessage === '清理短期') {
       replyMessage = await cleanupExpiredShortTermReminders(userId);
     } 
-    // 新增：時間提醒指令
+    // 時間提醒指令
     else if (/^\d{1,2}:\d{2}.+/.test(userMessage)) {
-      // 時間提醒指令 (格式：HH:MM+內容)
       replyMessage = await createTimeReminder(userId, userMessage);
     } else if (userMessage === '時間清單' || userMessage === '時間查詢') {
       replyMessage = getTimeReminderList(userId);
@@ -1004,7 +1083,7 @@ async function handleEvent(event) {
     return null;
   }
 }
-// 修改：獲取幫助訊息（新增時間提醒說明）
+// 獲取幫助訊息
 function getHelpMessage() {
   return `📋 代辦事項機器人使用說明：
 
@@ -1056,10 +1135,8 @@ function getHelpMessage() {
 日期提醒：8/15號繳電費
 每月提醒：每月5號繳信用卡費
 
-💡 其他使用範例：
-• 早上時間 08:30
-• 12:00吃午餐
-• 18:30下班
+💾 資料安全：
+使用 MongoDB 雲端資料庫，永不遺失
 
 輸入「幫助」可重複查看此說明`;
 }
@@ -1084,9 +1161,8 @@ async function addTodo(userId, todo) {
   
   userData[userId].todos.push(todoItem);
   
-  // 立即儲存並等待完成
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 新增事項: ${parsed.content}, 總數: ${userData[userId].todos.length}`);
   } catch (err) {
     console.error('新增事項時儲存失敗:', err);
@@ -1107,7 +1183,7 @@ async function addTodo(userId, todo) {
   return message;
 }
 
-// 新增：添加每月固定事項
+// 添加每月固定事項
 async function addMonthlyTodo(userId, todo) {
   if (!todo) {
     return '請輸入要新增的每月固定事項\n格式：每月新增 [事項內容] 或 每月新增 5號繳卡費';
@@ -1127,7 +1203,7 @@ async function addMonthlyTodo(userId, todo) {
   userData[userId].monthlyTodos.push(monthlyTodoItem);
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 新增每月事項: ${parsed.content}`);
   } catch (err) {
     console.error('新增每月事項時儲存失敗:', err);
@@ -1159,7 +1235,7 @@ async function deleteTodo(userId, index) {
   const deletedTodo = todos.splice(index, 1)[0];
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 刪除事項: ${deletedTodo.content}, 剩餘: ${todos.length}`);
   } catch (err) {
     console.error('刪除事項時儲存失敗:', err);
@@ -1171,7 +1247,7 @@ async function deleteTodo(userId, index) {
   return `🗑️ 已刪除代辦事項：「${deletedTodo.content}」\n剩餘 ${todos.length} 項代辦事項`;
 }
 
-// 新增：刪除每月固定事項
+// 刪除每月固定事項
 async function deleteMonthlyTodo(userId, index) {
   const monthlyTodos = userData[userId].monthlyTodos;
   
@@ -1182,7 +1258,7 @@ async function deleteMonthlyTodo(userId, index) {
   const deletedTodo = monthlyTodos.splice(index, 1)[0];
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 刪除每月事項: ${deletedTodo.content}`);
   } catch (err) {
     console.error('刪除每月事項時儲存失敗:', err);
@@ -1238,7 +1314,7 @@ function getTodoList(userId) {
   return message;
 }
 
-// 新增：獲取每月固定事項清單
+// 獲取每月固定事項清單
 function getMonthlyTodoList(userId) {
   const monthlyTodos = userData[userId].monthlyTodos;
   
@@ -1260,7 +1336,7 @@ function getMonthlyTodoList(userId) {
   return message;
 }
 
-// 新增：生成本月的固定事項
+// 生成本月的固定事項
 async function generateMonthlyTodos(userId) {
   const monthlyTodos = userData[userId].monthlyTodos.filter(todo => todo.enabled);
   const currentMonth = getTaiwanDate().getMonth() + 1;
@@ -1326,7 +1402,7 @@ async function generateMonthlyTodos(userId) {
   
   if (generatedCount > 0) {
     try {
-      await saveData();
+      await saveUserData(userId); // 改用單一用戶儲存
       message += `\n🎉 成功生成 ${generatedCount} 項代辦事項！`;
       message += `\n📋 輸入「查詢」可查看完整代辦清單`;
     } catch (err) {
@@ -1338,7 +1414,7 @@ async function generateMonthlyTodos(userId) {
   }
   
   return message;
-}
+
 // 設定早上提醒時間
 async function setMorningTime(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
@@ -1350,7 +1426,7 @@ async function setMorningTime(userId, time) {
   userData[userId].morningReminderTime = time;
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 設定早上提醒時間: ${time}`);
   } catch (err) {
     console.error('設定提醒時間時儲存失敗:', err);
@@ -1371,7 +1447,7 @@ async function setEveningTime(userId, time) {
   userData[userId].eveningReminderTime = time;
   
   try {
-    await saveData();
+    await saveUserData(userId); // 改用單一用戶儲存
     console.log(`用戶 ${userId} 設定晚上提醒時間: ${time}`);
   } catch (err) {
     console.error('設定提醒時間時儲存失敗:', err);
@@ -1514,7 +1590,7 @@ async function sendReminders(timeType) {
   }
 }
 
-// 新增：測試提醒功能
+// 測試提醒功能
 async function testReminder(userId) {
   console.log(`🧪 用戶 ${userId} 測試提醒功能`);
   
@@ -1524,7 +1600,7 @@ async function testReminder(userId) {
   return `🧪 測試提醒已發送！\n如果沒有收到提醒，可能是因為：\n• 沒有可提醒的代辦事項\n• LINE 推播訊息延遲\n\n輸入「狀態」可查看系統詳情`;
 }
 
-// 新增：測試特定時間提醒
+// 測試特定時間提醒
 async function testTimeReminder(userId, time) {
   const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
   
@@ -1542,7 +1618,7 @@ async function testTimeReminder(userId, time) {
     return `⏰ 測試時間：${time}\n目前時間：${currentTime}\n時間不匹配，未發送提醒\n\n💡 提示：您可以等到 ${time} 時自動收到提醒，或輸入「測試提醒」立即測試`;
   }
 }
-// 修改：系統狀態檢查（加入時間提醒統計）
+  // 系統狀態檢查（加入 MongoDB 和時間提醒統計）
 function getSystemStatus(userId) {
   const user = userData[userId];
   const todos = user.todos;
@@ -1588,6 +1664,7 @@ function getSystemStatus(userId) {
 
 🕐 目前時間：${getTaiwanTimeHHMM()} (台灣)
 💾 資料載入：${isDataLoaded ? '✅' : '❌'}
+🗄️ 資料庫連線：${db ? '✅' : '❌'}
 🗂️ 記憶體中提醒：${shortTermReminders.size} 項
 
 📋 可提醒事項詳情：
@@ -1608,13 +1685,12 @@ ${activeTimeReminders.map((reminder, i) => {
   return `${i+1}. ${reminder.content} (${hoursLeft > 0 ? `${hoursLeft}小時${minutesLeft}分鐘` : `${minutesLeft}分鐘`}後)`;
 }).join('\n') || '無'}
 
-🔄 每月固定事項：
-${monthlyTodos.map((todo, i) => `${i+1}. ${todo.content} ${todo.hasFixedDate ? `(每月${todo.day}號)` : '(手動)'}`).join('\n') || '無'}
+💾 資料安全：使用 MongoDB 雲端資料庫
 
 如有問題請聯繫管理員`;
 }
 
-// 設定定時任務 - 每分鐘檢查一次，但加入更詳細的日誌
+// 設定定時任務 - 每分鐘檢查一次
 cron.schedule('* * * * *', async () => {
   try {
     const currentTime = getTaiwanTimeHHMM();
@@ -1626,12 +1702,12 @@ cron.schedule('* * * * *', async () => {
     
     if (showDetailedLog) {
       console.log(`📅 定時檢查 - ${currentDate} (${currentTime})`);
-      console.log(`📊 系統狀態 - 資料載入:${isDataLoaded}, 用戶數:${Object.keys(userData).length}`);
+      console.log(`📊 系統狀態 - 資料載入:${isDataLoaded}, 資料庫:${db ? '已連接' : '未連接'}, 用戶數:${Object.keys(userData).length}`);
     }
     
-    if (!isDataLoaded) {
+    if (!isDataLoaded || !db) {
       if (showDetailedLog) {
-        console.log('⚠️ 資料尚未載入，跳過提醒檢查');
+        console.log('⚠️ 系統尚未就緒，跳過提醒檢查');
       }
       return;
     }
@@ -1664,11 +1740,11 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
-// 可選：每月1號自動生成固定事項
+// 每月1號自動生成固定事項
 cron.schedule('0 0 1 * *', async () => {
   console.log('🔄 每月自動生成固定事項...');
   
-  if (!isDataLoaded) return;
+  if (!isDataLoaded || !db) return;
   
   for (const userId in userData) {
     try {
@@ -1679,7 +1755,7 @@ cron.schedule('0 0 1 * *', async () => {
       if (generated > 0) {
         console.log(`✅ 已為用戶 ${userId} 自動生成 ${generated} 項每月事項`);
         
-        // 可選：發送通知給用戶
+        // 發送通知給用戶
         try {
           await client.pushMessage(userId, {
             type: 'text',
@@ -1695,7 +1771,7 @@ cron.schedule('0 0 1 * *', async () => {
   }
 });
 
-// 輔助函數：為特定用戶生成每月事項（不返回訊息）
+// 輔助函數：為特定用戶生成每月事項
 async function generateMonthlyTodosForUser(userId) {
   const monthlyTodos = userData[userId].monthlyTodos.filter(todo => todo.enabled);
   const currentMonth = getTaiwanDate().getMonth() + 1;
@@ -1735,20 +1811,28 @@ async function generateMonthlyTodosForUser(userId) {
   }
   
   if (generatedCount > 0) {
-    await saveData();
+    await saveUserData(userId);
   }
   
   return generatedCount;
 }
 
-// 啟動伺服器
+// 啟動伺服器（修改為先連接資料庫）
 app.listen(PORT, async () => {
   console.log(`LINE Bot 伺服器運行於 port ${PORT}`);
-  await loadData(); // 這個函數現在會自動恢復所有提醒
-  console.log('資料載入完成，所有提醒已恢復');
+  
+  // 先連接資料庫
+  const dbConnected = await connectDatabase();
+  if (!dbConnected) {
+    console.error('❌ 無法連接資料庫，伺服器將以離線模式運行');
+  }
+  
+  // 載入資料
+  await loadData();
+  console.log('✅ 系統初始化完成');
 });
 
-// 修改：健康檢查端點（加入時間提醒統計）
+// 修改：健康檢查端點（加入 MongoDB 狀態）
 app.get('/health', (req, res) => {
   const totalShortReminders = Object.values(userData).reduce(
     (sum, user) => sum + (user.shortTermReminders?.length || 0), 0
@@ -1761,6 +1845,7 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     taiwanTime: getTaiwanTime(),
+    database: db ? 'connected' : 'disconnected',
     users: Object.keys(userData).length,
     totalTodos: Object.values(userData).reduce((sum, user) => sum + (user.todos?.length || 0), 0),
     totalMonthlyTodos: Object.values(userData).reduce((sum, user) => sum + (user.monthlyTodos?.length || 0), 0),
@@ -1772,7 +1857,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 新增：提醒管理端點
+// 提醒管理端點
 app.get('/reminders', (req, res) => {
   const currentTime = new Date();
   const allReminders = [];
@@ -1814,11 +1899,12 @@ app.get('/reminders', (req, res) => {
     currentTime: currentTime.toISOString(),
     totalReminders: allReminders.length,
     activeInMemory: shortTermReminders.size,
+    databaseStatus: db ? 'connected' : 'disconnected',
     reminders: allReminders.sort((a, b) => a.reminderTime - b.reminderTime)
   });
 });
 
-// 新增清理過期事項的端點（手動觸發）
+// 清理過期事項的端點
 app.get('/cleanup', async (req, res) => {
   let totalCleaned = 0;
   
@@ -1826,7 +1912,7 @@ app.get('/cleanup', async (req, res) => {
     const user = userData[userId];
     const originalLength = user.todos.length;
     
-    // 可選：清理超過30天的過期事項
+    // 清理超過30天的過期事項
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
@@ -1837,27 +1923,29 @@ app.get('/cleanup', async (req, res) => {
       return targetDate >= thirtyDaysAgo; // 保留30天內的事項
     });
     
-    totalCleaned += (originalLength - user.todos.length);
-  }
-  
-  if (totalCleaned > 0) {
-    await saveData();
+    const cleaned = originalLength - user.todos.length;
+    if (cleaned > 0) {
+      await saveUserData(userId);
+      totalCleaned += cleaned;
+    }
   }
   
   res.json({
     success: true,
     cleaned: totalCleaned,
+    databaseStatus: db ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
 });
 
-// 新增：清理所有過期提醒的端點
+// 清理所有過期提醒的端點
 app.get('/cleanup-reminders', async (req, res) => {
   const currentTime = new Date();
   let totalCleaned = 0;
   
   for (const userId in userData) {
     const user = userData[userId];
+    let userCleaned = 0;
     
     // 清理短期提醒
     if (user.shortTermReminders) {
@@ -1874,7 +1962,7 @@ app.get('/cleanup-reminders', async (req, res) => {
         
         return shouldKeep;
       });
-      totalCleaned += (originalLength - user.shortTermReminders.length);
+      userCleaned += (originalLength - user.shortTermReminders.length);
     }
     
     // 清理時間提醒
@@ -1892,18 +1980,20 @@ app.get('/cleanup-reminders', async (req, res) => {
         
         return shouldKeep;
       });
-      totalCleaned += (originalLength - user.timeReminders.length);
+      userCleaned += (originalLength - user.timeReminders.length);
     }
-  }
-  
-  if (totalCleaned > 0) {
-    await saveData();
+    
+    if (userCleaned > 0) {
+      await saveUserData(userId);
+      totalCleaned += userCleaned;
+    }
   }
   
   res.json({
     success: true,
     cleaned: totalCleaned,
     activeInMemory: shortTermReminders.size,
+    databaseStatus: db ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
 });
@@ -1918,6 +2008,7 @@ app.get('/force-remind', async (req, res) => {
       success: true,
       message: '提醒檢查已執行',
       currentTime: getTaiwanTimeHHMM(),
+      databaseStatus: db ? 'connected' : 'disconnected',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -1929,7 +2020,7 @@ app.get('/force-remind', async (req, res) => {
   }
 });
 
-// 修改：調試端點（加入時間提醒資訊）
+// 調試端點（加入 MongoDB 資訊）
 app.get('/debug', (req, res) => {
   const reminderDetails = {};
   for (const [id, data] of shortTermReminders.entries()) {
@@ -1945,7 +2036,8 @@ app.get('/debug', (req, res) => {
   res.json({
     userData: userData,
     activeReminders: reminderDetails,
-    dataFile: DATA_FILE,
+    databaseStatus: db ? 'connected' : 'disconnected',
+    mongodbUri: MONGODB_URI ? 'configured' : 'missing',
     timestamp: new Date().toISOString(),
     isDataLoaded: isDataLoaded,
     processedMessagesCount: processedMessages.size,
@@ -1954,7 +2046,7 @@ app.get('/debug', (req, res) => {
   });
 });
 
-// 手動生成每月事項端點（用於測試）
+// 手動生成每月事項端點
 app.get('/generate-monthly', async (req, res) => {
   try {
     let totalGenerated = 0;
@@ -1972,6 +2064,7 @@ app.get('/generate-monthly', async (req, res) => {
       success: true,
       totalGenerated: totalGenerated,
       userResults: results,
+      databaseStatus: db ? 'connected' : 'disconnected',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -1983,40 +2076,74 @@ app.get('/generate-monthly', async (req, res) => {
   }
 });
 
-// 匯出模組 (用於測試)
+// 資料庫狀態檢查端點
+app.get('/db-status', async (req, res) => {
+  try {
+    if (!db) {
+      return res.json({
+        status: 'disconnected',
+        message: '資料庫未連接'
+      });
+    }
+    
+    // 測試資料庫連線
+    await db.admin().ping();
+    
+    // 獲取資料庫統計
+    const stats = await db.stats();
+    
+    res.json({
+      status: 'connected',
+      message: '資料庫連接正常',
+      stats: {
+        collections: stats.collections,
+        dataSize: Math.round(stats.dataSize / 1024) + ' KB',
+        storageSize: Math.round(stats.storageSize / 1024) + ' KB'
+      }
+    });
+  } catch (error) {
+    res.json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+// 匯出模組
 module.exports = { app, userData };
-// 第9段：Keep-Alive 機制和記憶體管理（加在最後面）
+  // 第9段：Keep-Alive 機制和記憶體管理（MongoDB 版）
 
 // Keep-Alive 機制 - 防止伺服器休眠
 const KEEP_ALIVE_URL = process.env.KEEP_ALIVE_URL || `http://localhost:${PORT}/health`;
 
-// 只在生產環境啟用 Keep-Alive（避免在本地開發時干擾）
+// 只在生產環境啟用 Keep-Alive
 if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'dev') {
   console.log('🔄 啟用 Keep-Alive 機制，每10分鐘自動喚醒');
   
   setInterval(async () => {
     try {
-      // 使用 fetch 或 http 模組
       const response = await fetch(KEEP_ALIVE_URL);
       const uptime = Math.floor(process.uptime() / 60);
-      console.log(`🟢 Keep-Alive: ${new Date().toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})} - Status: ${response.status} - 運行: ${uptime}分鐘`);
+      const dbStatus = db ? '✅' : '❌';
+      console.log(`🟢 Keep-Alive: ${new Date().toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})} - Status: ${response.status} - 運行: ${uptime}分鐘 - DB: ${dbStatus}`);
     } catch (error) {
       console.log(`🔴 Keep-Alive 失敗: ${error.message}`);
     }
   }, 10 * 60 * 1000); // 10分鐘
 }
 
-// 新增：Ping 端點（輕量級檢查）
+// Ping 端點
 app.get('/ping', (req, res) => {
   res.json({ 
     pong: true, 
     timestamp: new Date().toISOString(),
     taiwanTime: getTaiwanTime(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    database: db ? 'connected' : 'disconnected'
   });
 });
 
-// 新增：喚醒端點
+// 喚醒端點
 app.get('/wake', (req, res) => {
   console.log('🌅 收到喚醒請求');
   res.json({ 
@@ -2024,18 +2151,20 @@ app.get('/wake', (req, res) => {
     timestamp: new Date().toISOString(),
     taiwanTime: getTaiwanTime(),
     isDataLoaded: isDataLoaded,
+    databaseConnected: !!db,
     activeTimers: shortTermReminders.size,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    users: Object.keys(userData).length
   });
 });
 
-// 改進：更頻繁的記憶體清理
+// 強化的記憶體清理（每30分鐘）
 setInterval(() => {
-  // 清理處理過的訊息（原有功能）
+  // 清理處理過的訊息
   const oldSize = processedMessages.size;
   processedMessages.clear();
   
-  // 新增：清理過期的所有提醒
+  // 清理過期的所有提醒
   const currentTime = new Date();
   let cleanedCount = 0;
   
@@ -2059,10 +2188,11 @@ setInterval(() => {
     heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024 * 100) / 100
   };
   
+  const dbStatus = db ? '✅連接' : '❌斷線';
   console.log(`🧹 清理完成 - 訊息ID: ${oldSize}個, 過期提醒: ${cleanedCount}個`);
-  console.log(`📊 記憶體使用: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, 活躍提醒: ${shortTermReminders.size}個`);
+  console.log(`📊 記憶體: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, 活躍提醒: ${shortTermReminders.size}個, 資料庫: ${dbStatus}`);
   
-  // 如果記憶體使用過高，建議重啟（記錄警告）
+  // 記憶體警告
   if (memUsageMB.heapUsed > 200) {
     console.log(`⚠️ 記憶體使用偏高: ${memUsageMB.heapUsed}MB`);
   }
@@ -2083,13 +2213,36 @@ setInterval(() => {
     (sum, user) => sum + (user.timeReminders?.length || 0), 0
   );
   
+  const dbStatus = db ? '✅' : '❌';
   console.log(`⏱️ [${currentTime}] 運行時間: ${uptimeHours}小時${uptimeMinutes}分鐘`);
-  console.log(`📊 活躍用戶: ${Object.keys(userData).length}, 短期提醒: ${totalShortReminders}, 時間提醒: ${totalTimeReminders}, 記憶體提醒: ${shortTermReminders.size}, 資料載入: ${isDataLoaded ? '✅' : '❌'}`);
+  console.log(`📊 用戶: ${Object.keys(userData).length}, 短期提醒: ${totalShortReminders}, 時間提醒: ${totalTimeReminders}, 記憶體提醒: ${shortTermReminders.size}, 資料庫: ${dbStatus}, 資料載入: ${isDataLoaded ? '✅' : '❌'}`);
 }, 600000); // 10分鐘報告一次
 
+// 資料庫連線監控（每5分鐘檢查一次）
+setInterval(async () => {
+  if (!db) {
+    console.log('🔄 嘗試重新連接資料庫...');
+    const reconnected = await connectDatabase();
+    if (reconnected) {
+      console.log('✅ 資料庫重新連接成功');
+      // 重新載入資料
+      await loadData();
+    }
+  } else {
+    // 測試連線是否正常
+    try {
+      await db.admin().ping();
+    } catch (error) {
+      console.error('❌ 資料庫連線測試失敗:', error.message);
+      db = null; // 標記為斷線
+    }
+  }
+}, 300000); // 5分鐘檢查一次
+
 // 程序退出時的清理
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('收到 SIGTERM，正在清理資源...');
+  
   // 清理所有提醒的定時器
   for (const [id, data] of shortTermReminders.entries()) {
     if (data.timerId) {
@@ -2097,12 +2250,20 @@ process.on('SIGTERM', () => {
     }
   }
   shortTermReminders.clear();
-  console.log('資源清理完成');
+  
+  // 關閉資料庫連線
+  if (mongoClient) {
+    await mongoClient.close();
+    console.log('✅ 資料庫連線已關閉');
+  }
+  
+  console.log('✅ 資源清理完成');
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('收到 SIGINT (Ctrl+C)，正在清理資源...');
+  
   // 清理所有提醒的定時器
   for (const [id, data] of shortTermReminders.entries()) {
     if (data.timerId) {
@@ -2110,7 +2271,14 @@ process.on('SIGINT', () => {
     }
   }
   shortTermReminders.clear();
-  console.log('資源清理完成');
+  
+  // 關閉資料庫連線
+  if (mongoClient) {
+    await mongoClient.close();
+    console.log('✅ 資料庫連線已關閉');
+  }
+  
+  console.log('✅ 資源清理完成');
   process.exit(0);
 });
 
@@ -2128,4 +2296,6 @@ process.on('unhandledRejection', (reason, promise) => {
 console.log('🚀 LINE Bot Keep-Alive 機制已啟動');
 console.log(`🌐 Keep-Alive URL: ${KEEP_ALIVE_URL}`);
 console.log('🕐 時間提醒功能已就緒');
+console.log('💾 MongoDB 資料庫整合完成');
 console.log('💡 使用說明：輸入「12:00倒垃圾」設定時間提醒');
+console.log('📊 輸入「狀態」查看系統資訊');
