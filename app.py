@@ -1,27 +1,10 @@
 """
-LINE Todo Reminder Bot - 模組化版本
+LINE Todo Reminder Bot - 完整模組化版本
 """
 from flask import Flask, request, jsonify
-import os
-
-# 測試模組導入
-try:
-    from config.settings import settings
-    from utils.date_utils import get_taiwan_time
-    print("模組導入成功！")
-except ImportError as e:
-    print(f"模組導入失敗: {e}")
-    # 備用方案
-    class Settings:
-        APP_NAME = "LINE Todo Reminder Bot"
-        VERSION = "2.0.0"
-        PORT = int(os.getenv('PORT', 8000))
-        HOST = '0.0.0.0'
-    settings = Settings()
-    
-    from datetime import datetime
-    def get_taiwan_time():
-        return datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+from config.settings import settings
+from utils.date_utils import get_taiwan_time
+from controllers.todo_controller import todo_controller
 
 app = Flask(__name__)
 
@@ -34,8 +17,33 @@ def health():
     return {
         'status': 'ok',
         'time': get_taiwan_time(),
-        'app': settings.APP_NAME
+        'app': settings.APP_NAME,
+        'todos_count': len(todo_controller.todos)
     }
+
+@app.route('/todos', methods=['GET'])
+def get_todos():
+    """獲取所有待辦事項"""
+    return jsonify(todo_controller.get_all_todos())
+
+@app.route('/todos', methods=['POST'])
+def add_todo():
+    """新增待辦事項"""
+    data = request.get_json()
+    if not data or 'content' not in data:
+        return jsonify({'error': '請提供待辦事項內容'}), 400
+    
+    todo = todo_controller.add_todo(data['content'])
+    return jsonify(todo.to_dict())
+
+@app.route('/test')
+def test():
+    """測試功能"""
+    todo_controller.add_todo("測試待辦事項")
+    return jsonify({
+        'message': '測試成功！',
+        'todos': todo_controller.get_all_todos()
+    })
 
 if __name__ == '__main__':
     app.run(host=settings.HOST, port=settings.PORT)
