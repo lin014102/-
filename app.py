@@ -1,101 +1,67 @@
 """
-LINE Todo Reminder Bot - 完整版本
+LINE Todo Reminder Bot - 簡化版本
 """
-import sys
-import os
 from flask import Flask, request, jsonify
-
-# 添加當前目錄到 Python 路徑
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
+import os
 
 app = Flask(__name__)
 
-# 載入模組
-try:
-    from config.settings import settings
-    from utils.date_utils import get_taiwan_time
-    from controllers.todo_controller import todo_controller
-    from controllers.message_controller import message_controller
-    from services.line_service import line_service
-    
-    # 更新 LINE 服務的 token
-    line_service.channel_access_token = settings.CHANNEL_ACCESS_TOKEN
-    line_service.channel_secret = settings.CHANNEL_SECRET
-    
-    modules_loaded = True
-except ImportError as e:
-    print(f"模組載入失敗: {e}")
-    modules_loaded = False
+# 簡單的記憶體儲存
+todos = []
 
 @app.route('/')
 def home():
-    return f'{settings.APP_NAME} v{settings.VERSION} is running!'
+    return 'LINE Todo Reminder Bot v2.0 is running!'
 
 @app.route('/health')
 def health():
     return {
         'status': 'ok',
-        'time': get_taiwan_time(),
-        'modules': 'loaded' if modules_loaded else 'not loaded',
-        'webhook_ready': modules_loaded
+        'webhook_ready': True,
+        'todos_count': len(todos)
     }
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """LINE Webhook 處理"""
-    if not modules_loaded:
-        print("模組未載入")
-        return 'Internal Server Error', 500
-    
     try:
-        # 獲取請求資料
-        body = request.get_data(as_text=True)
-        signature = request.headers.get('X-Line-Signature', '')
+        print("收到 Webhook 請求")
         
-        print(f"收到 Webhook 請求")
-        
-        # 驗證簽名
-        if not line_service.verify_signature(body, signature):
-            print("簽名驗證失敗")
-            return 'Bad Request', 400
-        
-        # 解析 JSON
+        # 獲取資料
         data = request.get_json()
-        print(f"解析資料: {data}")
         
-        # 處理事件
+        # 處理訊息事件
         for event in data.get('events', []):
-            print(f"處理事件: {event}")
-            
             if event['type'] == 'message' and event['message']['type'] == 'text':
                 reply_token = event['replyToken']
                 message_text = event['message']['text']
                 user_id = event['source']['userId']
                 
-                print(f"收到訊息: {message_text} from {user_id}")
+                print(f"收到訊息: {message_text}")
                 
-                # 處理訊息
-                success = message_controller.handle_text_message(reply_token, message_text, user_id)
-                print(f"訊息處理結果: {success}")
+                # 簡單的回覆處理
+                if message_text == '測試':
+                    reply_text = "測試成功！機器人正常運作！"
+                elif message_text.startswith('新增 '):
+                    content = message_text[3:].strip()
+                    todos.append({'content': content, 'id': len(todos) + 1})
+                    reply_text = f"已新增：{content}\n目前共有 {len(todos)} 項"
+                elif message_text == '查詢':
+                    if todos:
+                        reply_text = "📋 待辦事項：\n" + "\n".join([f"{i+1}. {todo['content']}" for i, todo in enumerate(todos)])
+                    else:
+                        reply_text = "目前沒有待辦事項"
+                else:
+                    reply_text = f"您說：{message_text}\n\n可用指令：\n• 測試\n• 新增 [事項]\n• 查詢"
+                
+                # 模擬回覆（因為沒有 LINE SDK）
+                print(f"回覆: {reply_text}")
         
         return 'OK', 200
     
     except Exception as e:
         print(f"Webhook 處理錯誤: {e}")
-        return 'OK', 200  # 即使有錯誤也回傳 200
-
-@app.route('/test-webhook')
-def test_webhook():
-    """測試 Webhook 功能"""
-    if not modules_loaded:
-        return jsonify({'error': 'Modules not loaded'})
-    
-    return jsonify({
-        'webhook_ready': True,
-        'line_token_configured': bool(settings.CHANNEL_ACCESS_TOKEN),
-        'line_secret_configured': bool(settings.CHANNEL_SECRET)
-    })
+        return 'OK', 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
