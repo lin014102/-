@@ -1,29 +1,17 @@
-"""
-LINE Todo Reminder Bot - Python 版本
-主程式入口
-"""
+# 使用最簡單的 Flask
+from flask import Flask
 import os
-import logging
-from fastapi import FastAPI
 
-# 設定日誌
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = Flask(__name__)
 
-# 創建 FastAPI 應用程式
-app = FastAPI(title="LINE Todo Reminder Bot")
+@app.route('/')
+def home():
+    return 'LINE Bot is running!'
 
-# 基本設定
-PORT = int(os.getenv('PORT', 8000))
+@app.route('/health')
+def health():
+    return {'status': 'ok'}
 
-@app.get("/")
-async def root():
-    return {"message": "LINE Todo Reminder Bot is running"}
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
