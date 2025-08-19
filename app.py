@@ -1,5 +1,5 @@
 """
-LINE Todo Reminder Bot - 修正版本
+LINE Todo Reminder Bot - 診斷版本
 """
 import sys
 import os
@@ -11,46 +11,46 @@ sys.path.insert(0, current_dir)
 
 app = Flask(__name__)
 
-# 嘗試載入模組並提供詳細錯誤信息
-modules_loaded = False
-error_message = ""
+# 逐步測試模組載入
+load_status = {}
 
+# 測試基礎模組
 try:
     from config.settings import settings
-    print("✅ config.settings 載入成功")
+    load_status['config'] = 'success'
 except ImportError as e:
-    print(f"❌ config.settings 載入失敗: {e}")
-    error_message += f"config.settings: {e}; "
+    load_status['config'] = str(e)
 
 try:
     from utils.date_utils import get_taiwan_time
-    print("✅ utils.date_utils 載入成功")
+    load_status['utils'] = 'success'
 except ImportError as e:
-    print(f"❌ utils.date_utils 載入失敗: {e}")
-    error_message += f"utils.date_utils: {e}; "
-
-# 如果基本模組載入失敗，使用備用方案
-if error_message:
-    print(f"使用備用方案，錯誤: {error_message}")
-    class Settings:
-        APP_NAME = "LINE Todo Reminder Bot"
-        VERSION = "2.0.0"
-    settings = Settings()
-    
+    load_status['utils'] = str(e)
+    # 備用方案
     from datetime import datetime
     def get_taiwan_time():
         return datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 
-# 嘗試載入其他模組
+try:
+    from models.todo import TodoItem
+    load_status['models'] = 'success'
+except ImportError as e:
+    load_status['models'] = str(e)
+
 try:
     from controllers.todo_controller import todo_controller
-    from controllers.message_controller import message_controller
-    from services.line_service import line_service
+    load_status['controllers'] = 'success'
     modules_loaded = True
-    print("✅ 所有模組載入成功")
 except ImportError as e:
-    print(f"❌ 控制器模組載入失敗: {e}")
+    load_status['controllers'] = str(e)
     modules_loaded = False
+
+# 確保有基本設定
+if 'config' != 'success':
+    class Settings:
+        APP_NAME = "LINE Todo Reminder Bot"
+        VERSION = "2.0.0"
+    settings = Settings()
 
 @app.route('/')
 def home():
@@ -61,21 +61,23 @@ def health():
     return {
         'status': 'ok',
         'time': get_taiwan_time(),
-        'modules': 'loaded' if modules_loaded else 'not loaded',
-        'error': error_message if error_message else None,
-        'todos_count': len(todo_controller.todos) if modules_loaded else 0
+        'modules': 'loaded' if modules_loaded else 'partially loaded',
+        'load_status': load_status
     }
 
-@app.route('/debug')
-def debug():
-    """除錯信息"""
-    return {
-        'modules_loaded': modules_loaded,
-        'error_message': error_message,
-        'python_path': sys.path[:3],
-        'current_dir': current_dir,
-        'files_in_dir': os.listdir(current_dir)
-    }
+@app.route('/test-basic')
+def test_basic():
+    """測試基本功能"""
+    if modules_loaded:
+        # 測試新增待辦事項
+        todo = todo_controller.add_todo("測試事項")
+        return jsonify({
+            'success': True,
+            'todo': todo.to_dict(),
+            'total_todos': len(todo_controller.todos)
+        })
+    else:
+        return jsonify({'success': False, 'error': 'Modules not loaded'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
