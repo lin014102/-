@@ -229,30 +229,53 @@ class StockManager:
             print("詳細錯誤:")
             traceback.print_exc()
     
-    def sync_to_sheets(self):
-        """同步資料到 Google Sheets - 添加錯誤處理"""
+    def sync_to_sheets_safe(self):
+        """安全同步資料到 Google Sheets - 不使用 clear()"""
         if not self.sheets_enabled:
             return False
         
         try:
-            # 同步帳戶資訊
+            print("🔄 安全同步資料到 Google Sheets...")
+            
+            # 同步帳戶資訊 - 使用安全更新方式
             print("📊 同步帳戶資訊...")
             try:
                 accounts_sheet = self.sheet.worksheet("帳戶資訊")
-                accounts_sheet.clear()
-                accounts_sheet.append_row(['帳戶名稱', '現金餘額', '建立日期'])
                 
+                # 只更新標題行（如果需要）
+                try:
+                    current_header = accounts_sheet.row_values(1)
+                    expected_header = ['帳戶名稱', '現金餘額', '建立日期']
+                    if current_header != expected_header:
+                        accounts_sheet.update('A1:C1', [expected_header])
+                except:
+                    accounts_sheet.update('A1:C1', [['帳戶名稱', '現金餘額', '建立日期']])
+                
+                # 準備資料
+                data_rows = []
                 for account_name, account_data in self.stock_data['accounts'].items():
-                    accounts_sheet.append_row([
+                    data_rows.append([
                         account_name,
                         account_data['cash'],
                         account_data['created_date']
                     ])
+                
+                # 只更新資料部分，不清空整個工作表
+                if data_rows:
+                    range_name = f"A2:C{len(data_rows) + 1}"
+                    accounts_sheet.update(range_name, data_rows)
+                    
+                    # 清空多餘的行（如果新資料比舊資料少）
+                    current_rows = len(accounts_sheet.get_all_values())
+                    if current_rows > len(data_rows) + 1:
+                        clear_range = f"A{len(data_rows) + 2}:C{current_rows}"
+                        accounts_sheet.batch_clear([clear_range])
+                
                 print("✅ 帳戶資訊同步成功")
             except Exception as e:
                 print(f"❌ 同步帳戶資訊失敗: {e}")
             
-            # 同步持股明細 - 處理空格問題
+            # 同步持股明細 - 使用安全更新方式
             print("📈 同步持股明細...")
             try:
                 # 尋找持股明細工作表
@@ -264,36 +287,64 @@ class StockManager:
                         break
                 
                 if holdings_sheet:
-                    holdings_sheet.clear()
-                    holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
+                    # 更新標題行
+                    try:
+                        expected_header = ['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本']
+                        holdings_sheet.update('A1:E1', [expected_header])
+                    except:
+                        pass
                     
+                    # 準備持股資料
+                    data_rows = []
                     for account_name, account_data in self.stock_data['accounts'].items():
                         for stock_name, stock_data in account_data['stocks'].items():
-                            holdings_sheet.append_row([
+                            data_rows.append([
                                 account_name,
                                 stock_name,
                                 stock_data['quantity'],
                                 stock_data['avg_cost'],
                                 stock_data['total_cost']
                             ])
+                    
+                    # 更新資料
+                    if data_rows:
+                        range_name = f"A2:E{len(data_rows) + 1}"
+                        holdings_sheet.update(range_name, data_rows)
+                        
+                        # 清空多餘的行
+                        current_rows = len(holdings_sheet.get_all_values())
+                        if current_rows > len(data_rows) + 1:
+                            clear_range = f"A{len(data_rows) + 2}:E{current_rows}"
+                            holdings_sheet.batch_clear([clear_range])
+                    else:
+                        # 如果沒有持股資料，只清空資料行，保留標題
+                        current_rows = len(holdings_sheet.get_all_values())
+                        if current_rows > 1:
+                            clear_range = f"A2:E{current_rows}"
+                            holdings_sheet.batch_clear([clear_range])
+                    
                     print("✅ 持股明細同步成功")
                 else:
                     print("❌ 找不到持股明細工作表")
             except Exception as e:
                 print(f"❌ 同步持股明細失敗: {e}")
             
-            # 同步交易記錄
+            # 同步交易記錄 - 使用安全更新方式
             print("📋 同步交易記錄...")
             try:
                 transactions_sheet = self.sheet.worksheet("交易記錄")
-                transactions_sheet.clear()
-                transactions_sheet.append_row([
-                    '交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', 
-                    '單價', '日期', '現金餘額', '建立時間', '損益'
-                ])
                 
+                # 更新標題行
+                try:
+                    expected_header = ['交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', '單價', '日期', '現金餘額', '建立時間', '損益']
+                    transactions_sheet.update('A1:K1', [expected_header])
+                except:
+                    pass
+                
+                # 準備交易資料
+                data_rows = []
                 for transaction in self.stock_data['transactions']:
-                    transactions_sheet.append_row([
+                    data_rows.append([
                         transaction['id'],
                         transaction['type'],
                         transaction['account'],
@@ -306,15 +357,33 @@ class StockManager:
                         transaction['created_at'],
                         transaction.get('profit_loss', '')
                     ])
+                
+                # 更新資料
+                if data_rows:
+                    range_name = f"A2:K{len(data_rows) + 1}"
+                    transactions_sheet.update(range_name, data_rows)
+                    
+                    # 清空多餘的行
+                    current_rows = len(transactions_sheet.get_all_values())
+                    if current_rows > len(data_rows) + 1:
+                        clear_range = f"A{len(data_rows) + 2}:K{current_rows}"
+                        transactions_sheet.batch_clear([clear_range])
+                else:
+                    # 如果沒有交易資料，只清空資料行，保留標題
+                    current_rows = len(transactions_sheet.get_all_values())
+                    if current_rows > 1:
+                        clear_range = f"A2:K{current_rows}"
+                        transactions_sheet.batch_clear([clear_range])
+                
                 print("✅ 交易記錄同步成功")
             except Exception as e:
                 print(f"❌ 同步交易記錄失敗: {e}")
             
-            print("✅ 資料已同步到 Google Sheets")
+            print("✅ 安全同步完成")
             return True
             
         except Exception as e:
-            print(f"❌ 同步到 Google Sheets 失敗: {e}")
+            print(f"❌ 安全同步失敗: {e}")
             print("詳細錯誤:")
             traceback.print_exc()
             return False
@@ -332,7 +401,7 @@ class StockManager:
                 'created_date': self.get_taiwan_time()
             }
             if self.sheets_enabled:
-                self.sync_to_sheets()  # 立即同步
+                self.sync_to_sheets_safe()  # 立即同步
             return True  # 新建立
         return False     # 已存在
     
@@ -451,7 +520,7 @@ class StockManager:
         
         # 同步到 Google Sheets
         if self.sheets_enabled:
-            self.sync_to_sheets()
+            self.sync_to_sheets_safe()
         
         result_msg = f"📊 {account_name} 持股設定成功！\n"
         if is_new:
@@ -490,7 +559,7 @@ class StockManager:
         
         # 同步到 Google Sheets
         if self.sheets_enabled:
-            self.sync_to_sheets()
+            self.sync_to_sheets_safe()
         
         result_msg = f"💰 {account_name} 入帳成功！\n"
         if is_new:
@@ -533,7 +602,7 @@ class StockManager:
         
         # 同步到 Google Sheets
         if self.sheets_enabled:
-            self.sync_to_sheets()
+            self.sync_to_sheets_safe()
         
         result_msg = f"💸 {account_name} 提款成功！\n💵 提款金額：{amount:,}元\n💳 帳戶餘額：{account['cash']:,}元"
         
@@ -597,7 +666,7 @@ class StockManager:
         
         # 同步到 Google Sheets
         if self.sheets_enabled:
-            self.sync_to_sheets()
+            self.sync_to_sheets_safe()
         
         stock_info = account['stocks'][stock_name]
         result_msg = f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name}\n📊 買入：{quantity}股 @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{stock_info['quantity']}股\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元"
@@ -664,7 +733,7 @@ class StockManager:
         
         # 同步到 Google Sheets
         if self.sheets_enabled:
-            self.sync_to_sheets()
+            self.sync_to_sheets_safe()
         
         profit_text = f"💰 獲利：+{profit_loss:,}元" if profit_loss > 0 else f"💸 虧損：{profit_loss:,}元" if profit_loss < 0 else "💫 損益兩平"
         
