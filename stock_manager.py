@@ -37,17 +37,30 @@ class StockManager:
     def init_google_sheets(self):
         """初始化 Google Sheets 連接"""
         try:
-            # 從環境變數獲取憑證
+            # 優先嘗試 Base64 編碼的憑證
+            creds_base64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
             creds_json = os.getenv('GOOGLE_CREDENTIALS')
             
-            if creds_json:
-                # 使用環境變數中的憑證
+            if creds_base64:
+                # 使用 Base64 編碼的憑證
+                import base64
+                decoded_json = base64.b64decode(creds_base64).decode('utf-8')
+                creds_dict = json.loads(decoded_json)
+                credentials = Credentials.from_service_account_info(
+                    creds_dict,
+                    scopes=['https://spreadsheets.google.com/feeds',
+                           'https://www.googleapis.com/auth/drive']
+                )
+                print("✅ 使用 Base64 憑證連接")
+            elif creds_json:
+                # 使用 JSON 憑證
                 creds_dict = json.loads(creds_json)
                 credentials = Credentials.from_service_account_info(
                     creds_dict,
                     scopes=['https://spreadsheets.google.com/feeds',
                            'https://www.googleapis.com/auth/drive']
                 )
+                print("✅ 使用 JSON 憑證連接")
             else:
                 # 如果沒有環境變數，使用預設憑證（開發時使用）
                 credentials = Credentials.from_service_account_info(
