@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_datetime, is_valid_time_format
 from utils.line_api import send_push_message, reply_message
 
+# 匯入待辦事項模組
+from todo_manager import todo_manager
+
 # 匯入股票模組
 from stock_manager import (
     handle_stock_command,
@@ -27,9 +30,7 @@ from stock_manager import (
 
 app = Flask(__name__)
 
-# ===== 待辦事項資料儲存 =====
-todos = []
-monthly_todos = []
+# ===== 提醒系統資料儲存 =====
 short_reminders = []
 time_reminders = []
 user_settings = {
@@ -38,103 +39,7 @@ user_settings = {
     'user_id': None
 }
 
-# ===== 待辦事項功能函數 =====
-def parse_date(text):
-    """解析日期格式"""
-    taiwan_now = get_taiwan_datetime()
-    current_year = taiwan_now.year
-    
-    patterns = [
-        (r'(\d{1,2})號(.+)', 'day_only'),
-        (r'(\d{1,2})\/(\d{1,2})號?(.+)', 'month_day'),
-        (r'(.+?)(\d{1,2})號', 'content_day'),
-        (r'(.+?)(\d{1,2})\/(\d{1,2})號?', 'content_month_day')
-    ]
-    
-    for pattern, pattern_type in patterns:
-        match = re.search(pattern, text)
-        if match:
-            if pattern_type == 'day_only':
-                day = int(match.group(1))
-                content = match.group(2).strip()
-                if 1 <= day <= 31 and content:
-                    month = taiwan_now.month
-                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                   hour=0, minute=0, second=0, microsecond=0)
-                    if target_date < taiwan_now:
-                        if month == 12:
-                            target_date = target_date.replace(year=current_year + 1, month=1)
-                        else:
-                            target_date = target_date.replace(month=month + 1)
-                    
-                    return {
-                        "has_date": True,
-                        "date": target_date,
-                        "content": content,
-                        "date_string": f"{month}/{day}",
-                        "day_only": day
-                    }
-                    
-            elif pattern_type == 'month_day':
-                month = int(match.group(1))
-                day = int(match.group(2))
-                content = match.group(3).strip()
-                
-                if 1 <= month <= 12 and 1 <= day <= 31 and content:
-                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                   hour=0, minute=0, second=0, microsecond=0)
-                    if target_date < taiwan_now:
-                        target_date = target_date.replace(year=current_year + 1)
-                    
-                    return {
-                        "has_date": True,
-                        "date": target_date,
-                        "content": content,
-                        "date_string": f"{month}/{day}"
-                    }
-                    
-            elif pattern_type == 'content_day':
-                content = match.group(1).strip()
-                day = int(match.group(2))
-                
-                if 1 <= day <= 31 and content:
-                    month = taiwan_now.month
-                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                   hour=0, minute=0, second=0, microsecond=0)
-                    if target_date < taiwan_now:
-                        if month == 12:
-                            target_date = target_date.replace(year=current_year + 1, month=1)
-                        else:
-                            target_date = target_date.replace(month=month + 1)
-                    
-                    return {
-                        "has_date": True,
-                        "date": target_date,
-                        "content": content,
-                        "date_string": f"{month}/{day}",
-                        "day_only": day
-                    }
-                    
-            elif pattern_type == 'content_month_day':
-                content = match.group(1).strip()
-                month = int(match.group(2))
-                day = int(match.group(3))
-                
-                if 1 <= month <= 12 and 1 <= day <= 31 and content:
-                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                   hour=0, minute=0, second=0, microsecond=0)
-                    if target_date < taiwan_now:
-                        target_date = target_date.replace(year=current_year + 1)
-                    
-                    return {
-                        "has_date": True,
-                        "date": target_date,
-                        "content": content,
-                        "date_string": f"{month}/{day}"
-                    }
-    
-    return {"has_date": False, "content": text}
-
+# ===== 提醒解析函數 =====
 def parse_short_reminder(text):
     """解析短期提醒"""
     patterns = [
@@ -235,9 +140,10 @@ def send_daily_reminder(user_id, current_time):
     time_icon = '🌅' if current_time == user_settings['morning_time'] else '🌙'
     time_text = '早安' if current_time == user_settings['morning_time'] else '晚安'
     
+    todos = todo_manager.todos
     if todos:
-        pending_todos = [todo for todo in todos if not todo.get('completed', False)]
-        completed_todos = [todo for todo in todos if todo.get('completed', False)]
+        pending_todos = todo_manager.get_pending_todos()
+        completed_todos = todo_manager.get_completed_todos()
         
         if pending_todos:
             message = f'{time_icon} {time_text}！您有 {len(pending_todos)} 項待辦事項：\n\n'
@@ -286,17 +192,13 @@ def send_daily_reminder(user_id, current_time):
 
 def check_monthly_preview(taiwan_now, user_id):
     """檢查明天的每月提醒"""
-    if not monthly_todos or not user_id:
+    if not todo_manager.monthly_todos or not user_id:
         return
     
     tomorrow = taiwan_now + timedelta(days=1)
     tomorrow_day = tomorrow.day
     
-    monthly_items_tomorrow = []
-    for item in monthly_todos:
-        target_day = item.get('day', 1)
-        if target_day == tomorrow_day:
-            monthly_items_tomorrow.append(item)
+    monthly_items_tomorrow = todo_manager.get_monthly_items_for_day(tomorrow_day)
     
     if monthly_items_tomorrow:
         message = f"📅 每月提醒預告！\n\n明天 ({tomorrow.strftime('%m/%d')}) 有 {len(monthly_items_tomorrow)} 項每月固定事項：\n\n"
@@ -311,51 +213,22 @@ def check_monthly_preview(taiwan_now, user_id):
 
 def check_monthly_reminders(taiwan_now, user_id):
     """檢查每月提醒"""
-    if not monthly_todos or not user_id:
+    if not todo_manager.monthly_todos or not user_id:
         return
     
-    current_day = taiwan_now.day
+    added_items = todo_manager.add_monthly_todo_to_daily(taiwan_now)
     
-    monthly_items_today = []
-    for item in monthly_todos:
-        target_day = item.get('day', 1)
-        if target_day == current_day:
-            monthly_items_today.append(item)
-    
-    if monthly_items_today:
-        added_items = []
-        for item in monthly_items_today:
-            already_exists = any(
-                todo['content'] == item['content'] and 
-                todo.get('created_at', '').startswith(taiwan_now.strftime('%Y/%m/%d'))
-                for todo in todos
-            )
-            
-            if not already_exists:
-                todo_item = {
-                    'id': len(todos) + 1,
-                    'content': item['content'],
-                    'created_at': get_taiwan_time(),
-                    'completed': False,
-                    'has_date': True,
-                    'target_date': taiwan_now.strftime('%Y/%m/%d'),
-                    'date_string': f"{taiwan_now.month}/{taiwan_now.day}",
-                    'from_monthly': True
-                }
-                todos.append(todo_item)
-                added_items.append(item['content'])
+    if added_items:
+        message = f"🔄 每月提醒！今天 ({taiwan_now.strftime('%m/%d')}) 的固定事項：\n\n"
+        for i, content in enumerate(added_items, 1):
+            message += f"{i}. 📅 {content}\n"
         
-        if added_items:
-            message = f"🔄 每月提醒！今天 ({taiwan_now.strftime('%m/%d')}) 的固定事項：\n\n"
-            for i, content in enumerate(added_items, 1):
-                message += f"{i}. 📅 {content}\n"
-            
-            message += f"\n✅ 已自動加入今日待辦清單"
-            message += f"\n💡 昨天已經預告過，現在正式提醒！"
-            message += f"\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
-            
-            send_push_message(user_id, message)
-            print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
+        message += f"\n✅ 已自動加入今日待辦清單"
+        message += f"\n💡 昨天已經預告過，現在正式提醒！"
+        message += f"\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+        
+        send_push_message(user_id, message)
+        print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
 
 def check_short_reminders(taiwan_now, TAIWAN_TZ):
     """檢查短期提醒"""
@@ -470,8 +343,8 @@ def health():
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'todos_count': len(todos),
-        'monthly_todos_count': len(monthly_todos),
+        'todos_count': todo_manager.get_todo_count(),
+        'monthly_todos_count': todo_manager.get_monthly_count(),
         'short_reminders': len(short_reminders),
         'time_reminders': len(time_reminders),
         'morning_time': user_settings['morning_time'],
@@ -626,119 +499,28 @@ def webhook():
 
 🆕 v3.0 新功能：模組化設計，股票功能獨立！"""
 
+                # === 待辦事項功能 - 使用 TodoManager ===
                 elif message_text.startswith('新增 '):
                     todo_text = message_text[3:].strip()
-                    if todo_text:
-                        parsed = parse_date(todo_text)
-                        todo_item = {
-                            'id': len(todos) + 1,
-                            'content': parsed['content'],
-                            'created_at': get_taiwan_time(),
-                            'completed': False,
-                            'has_date': parsed.get('has_date', False),
-                            'target_date': parsed.get('date').strftime('%Y/%m/%d') if parsed.get('date') else None,
-                            'date_string': parsed.get('date_string')
-                        }
-                        todos.append(todo_item)
-                        
-                        if parsed.get('has_date'):
-                            reply_text = f"✅ 已新增待辦事項：「{parsed['content']}」\n📅 目標日期：{parsed['date'].strftime('%Y/%m/%d')}\n📋 目前共有 {len(todos)} 項\n🇹🇼 台灣時間建立"
-                        else:
-                            reply_text = f"✅ 已新增待辦事項：「{parsed['content']}」\n📋 目前共有 {len(todos)} 項\n🇹🇼 台灣時間建立"
-                    else:
-                        reply_text = "❌ 請輸入要新增的事項內容"
+                    reply_text = todo_manager.add_todo(todo_text)
 
                 elif message_text in ['查詢', '清單']:
-                    if todos:
-                        reply_text = f"📋 待辦事項清單 ({len(todos)} 項)：\n\n"
-                        for i, todo in enumerate(todos, 1):
-                            status = "✅" if todo.get('completed') else "⭕"
-                            date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
-                            reply_text += f"{i}. {status} {todo['content']}{date_info}\n"
-                        reply_text += "\n💡 輸入「幫助」查看更多功能"
-                    else:
-                        reply_text = "📝 目前沒有待辦事項"
+                    reply_text = todo_manager.get_todo_list()
 
                 elif message_text.startswith('刪除 '):
-                    try:
-                        index = int(message_text[3:].strip()) - 1
-                        if 0 <= index < len(todos):
-                            deleted_todo = todos.pop(index)
-                            reply_text = f"🗑️ 已刪除：「{deleted_todo['content']}」"
-                        else:
-                            reply_text = f"❌ 編號不正確"
-                    except:
-                        reply_text = "❌ 請輸入正確編號"
+                    index_str = message_text[3:]
+                    reply_text = todo_manager.delete_todo(index_str)
 
                 elif message_text.startswith('完成 '):
-                    try:
-                        index = int(message_text[3:].strip()) - 1
-                        if 0 <= index < len(todos):
-                            todos[index]['completed'] = True
-                            reply_text = f"🎉 已完成：「{todos[index]['content']}」"
-                        else:
-                            reply_text = f"❌ 編號不正確"
-                    except:
-                        reply_text = "❌ 請輸入正確編號"
+                    index_str = message_text[3:]
+                    reply_text = todo_manager.complete_todo(index_str)
 
                 elif message_text.startswith('每月新增 '):
                     todo_text = message_text[5:].strip()
-                    if todo_text:
-                        parsed = parse_date(todo_text)
-                        
-                        if parsed.get('has_date'):
-                            if parsed.get('day_only'):
-                                day = parsed['day_only']
-                                date_display = f"{day}號"
-                            elif parsed.get('date_string'):
-                                try:
-                                    day = int(parsed['date_string'].split('/')[1])
-                                    date_display = f"{day}號"
-                                except:
-                                    day = 1
-                                    date_display = "1號"
-                            else:
-                                day = 1
-                                date_display = "1號"
-                        else:
-                            day = 1
-                            date_display = "1號"
-                        
-                        monthly_item = {
-                            'id': len(monthly_todos) + 1,
-                            'content': parsed['content'],
-                            'created_at': get_taiwan_time(),
-                            'has_date': parsed.get('has_date', False),
-                            'date_string': parsed.get('date_string'),
-                            'day': day,
-                            'date_display': date_display
-                        }
-                        monthly_todos.append(monthly_item)
-                        
-                        reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {date_display} 提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項\n💡 會在前一天預告 + 當天提醒"
-                    else:
-                        reply_text = "❌ 請輸入要新增的每月事項內容\n💡 例如：每月新增 24號繳水電卡費"
+                    reply_text = todo_manager.add_monthly_todo(todo_text)
 
                 elif message_text == '每月清單':
-                    if monthly_todos:
-                        for item in monthly_todos:
-                            if not item.get('date_display'):
-                                if item.get('has_date') and item.get('date_string'):
-                                    try:
-                                        day = int(item['date_string'].split('/')[1])
-                                        item['date_display'] = f"{day}號"
-                                    except:
-                                        item['date_display'] = f"{item.get('day', 1)}號"
-                                else:
-                                    item['date_display'] = f"{item.get('day', 1)}號"
-                        
-                        reply_text = f"🔄 每月固定事項清單 ({len(monthly_todos)} 項)：\n\n"
-                        for i, item in enumerate(monthly_todos, 1):
-                            date_display = item.get('date_display', f"{item.get('day', 1)}號")
-                            reply_text += f"{i}. 📅 每月 {date_display} - {item['content']}\n"
-                        reply_text += f"\n💡 這些事項會在前一天晚上預告，當天早上自動加入待辦清單"
-                    else:
-                        reply_text = "📝 目前沒有每月固定事項\n💡 輸入「每月新增 5號繳卡費」來新增"
+                    reply_text = todo_manager.get_monthly_list()
 
                 elif message_text == '測試':
                     reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 待辦提醒功能已啟用\n💰 股票記帳模組已載入\n🔧 模組化設計運作中\n💡 輸入「幫助」或「股票幫助」查看功能"
