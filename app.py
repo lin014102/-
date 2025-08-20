@@ -63,42 +63,112 @@ def is_valid_time_format(time_str):
         return False
 
 def parse_date(text):
-    """解析日期格式"""
+    """解析日期格式 - 改進版本，更好地處理每月事項"""
     taiwan_now = get_taiwan_datetime()
     current_year = taiwan_now.year
     
-    # 日期模式：月/日 或 月/日號
+    # 改進的日期模式，更靈活地匹配
     patterns = [
-        r'(\d{1,2})\/(\d{1,2})號?(.+)',
-        r'(.+?)(\d{1,2})\/(\d{1,2})號?'
+        # 格式：24號繳水電卡費
+        (r'(\d{1,2})號(.+)', 'day_only'),
+        # 格式：8/24繳水電卡費 或 8/24號繳水電卡費
+        (r'(\d{1,2})\/(\d{1,2})號?(.+)', 'month_day'),
+        # 格式：繳水電卡費24號
+        (r'(.+?)(\d{1,2})號', 'content_day'),
+        # 格式：繳水電卡費8/24
+        (r'(.+?)(\d{1,2})\/(\d{1,2})號?', 'content_month_day')
     ]
     
-    for pattern in patterns:
+    for pattern, pattern_type in patterns:
         match = re.search(pattern, text)
         if match:
-            if pattern.startswith(r'(\d'):  # 第一個模式
+            print(f"DEBUG: 匹配到模式 {pattern_type}: {match.groups()}")
+            
+            if pattern_type == 'day_only':
+                # 24號繳水電卡費
+                day = int(match.group(1))
+                content = match.group(2).strip()
+                if 1 <= day <= 31 and content:
+                    # 使用當前月份
+                    month = taiwan_now.month
+                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                   hour=0, minute=0, second=0, microsecond=0)
+                    if target_date < taiwan_now:
+                        if month == 12:
+                            target_date = target_date.replace(year=current_year + 1, month=1)
+                        else:
+                            target_date = target_date.replace(month=month + 1)
+                    
+                    return {
+                        "has_date": True,
+                        "date": target_date,
+                        "content": content,
+                        "date_string": f"{month}/{day}",
+                        "day_only": day  # 新增：只有日期的情況
+                    }
+                    
+            elif pattern_type == 'month_day':
+                # 8/24繳水電卡費
                 month = int(match.group(1))
                 day = int(match.group(2))
                 content = match.group(3).strip()
-            else:  # 第二個模式
+                
+                if 1 <= month <= 12 and 1 <= day <= 31 and content:
+                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                   hour=0, minute=0, second=0, microsecond=0)
+                    if target_date < taiwan_now:
+                        target_date = target_date.replace(year=current_year + 1)
+                    
+                    return {
+                        "has_date": True,
+                        "date": target_date,
+                        "content": content,
+                        "date_string": f"{month}/{day}"
+                    }
+                    
+            elif pattern_type == 'content_day':
+                # 繳水電卡費24號
+                content = match.group(1).strip()
+                day = int(match.group(2))
+                
+                if 1 <= day <= 31 and content:
+                    month = taiwan_now.month
+                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                   hour=0, minute=0, second=0, microsecond=0)
+                    if target_date < taiwan_now:
+                        if month == 12:
+                            target_date = target_date.replace(year=current_year + 1, month=1)
+                        else:
+                            target_date = target_date.replace(month=month + 1)
+                    
+                    return {
+                        "has_date": True,
+                        "date": target_date,
+                        "content": content,
+                        "date_string": f"{month}/{day}",
+                        "day_only": day
+                    }
+                    
+            elif pattern_type == 'content_month_day':
+                # 繳水電卡費8/24
                 content = match.group(1).strip()
                 month = int(match.group(2))
                 day = int(match.group(3))
-            
-            if 1 <= month <= 12 and 1 <= day <= 31:
-                target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                               hour=0, minute=0, second=0, microsecond=0)
                 
-                if target_date < taiwan_now:
-                    target_date = target_date.replace(year=current_year + 1)
-                
-                return {
-                    "has_date": True,
-                    "date": target_date,
-                    "content": content,
-                    "date_string": f"{month}/{day}"
-                }
+                if 1 <= month <= 12 and 1 <= day <= 31 and content:
+                    target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                   hour=0, minute=0, second=0, microsecond=0)
+                    if target_date < taiwan_now:
+                        target_date = target_date.replace(year=current_year + 1)
+                    
+                    return {
+                        "has_date": True,
+                        "date": target_date,
+                        "content": content,
+                        "date_string": f"{month}/{day}"
+                    }
     
+    print(f"DEBUG: 沒有匹配到任何日期模式，原文: {text}")
     return {"has_date": False, "content": text}
 
 def parse_short_reminder(text):
@@ -616,15 +686,23 @@ def webhook():
                     todo_text = message_text[5:].strip()
                     if todo_text:
                         parsed = parse_date(todo_text)
+                        print(f"DEBUG: 解析結果: {parsed}")
                         
-                        # 完全修正：安全的日期處理
-                        if parsed.get('has_date') and parsed.get('date_string'):
-                            # 有指定日期，例如：每月新增 5號繳卡費
-                            try:
-                                day = int(parsed['date_string'].split('/')[1])
+                        # 完全修正：更智能的日期處理
+                        if parsed.get('has_date'):
+                            if parsed.get('day_only'):
+                                # 只有日期的情況，例如：24號繳水電卡費
+                                day = parsed['day_only']
                                 date_display = f"{day}號"
-                            except:
-                                # 如果解析失敗，預設為1號
+                            elif parsed.get('date_string'):
+                                # 有月/日的情況，例如：8/24繳水電卡費
+                                try:
+                                    day = int(parsed['date_string'].split('/')[1])
+                                    date_display = f"{day}號"
+                                except:
+                                    day = 1
+                                    date_display = "1號"
+                            else:
                                 day = 1
                                 date_display = "1號"
                         else:
@@ -642,10 +720,11 @@ def webhook():
                             'date_display': date_display
                         }
                         monthly_todos.append(monthly_item)
+                        print(f"DEBUG: 新增的每月事項: {monthly_item}")
                         
                         reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {date_display} 提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項\n💡 會在前一天預告 + 當天提醒"
                     else:
-                        reply_text = "❌ 請輸入要新增的每月事項內容\n💡 例如：每月新增 5號繳卡費"
+                        reply_text = "❌ 請輸入要新增的每月事項內容\n💡 例如：每月新增 24號繳水電卡費"
 
                 elif message_text == '每月清單':
                     if monthly_todos:
