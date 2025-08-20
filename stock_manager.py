@@ -1,24 +1,206 @@
 """
-stock_manager.py - 獨立股票記帳模組（暫時無 Google Sheets）
-多帳戶股票記帳系統 v2.0
+stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
+多帳戶股票記帳系統 v2.0 Final
 """
 import re
+import os
+import json
 from datetime import datetime
 import pytz
+import gspread
+from google.oauth2.service_account import Credentials
 
 # 設定台灣時區
 TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 
 class StockManager:
-    """股票記帳管理器"""
+    """股票記帳管理器 - 整合 Google Sheets"""
     
     def __init__(self):
-        """初始化股票資料"""
+        """初始化股票資料和 Google Sheets 連接"""
         self.stock_data = {
             'accounts': {},
             'transactions': []
         }
-        print("📊 股票記帳模組初始化完成（記憶體模式）")
+        
+        # Google Sheets 設定
+        self.spreadsheet_url = "https://docs.google.com/spreadsheets/d/1EACr2Zu7_regqp3Po7AlNE4ZcjazKbgyvz-yYNYtcCs/edit?usp=sharing"
+        self.gc = None
+        self.sheet = None
+        self.sheets_enabled = False
+        
+        # 初始化 Google Sheets 連接
+        self.init_google_sheets()
+        
+        # 從 Google Sheets 載入資料
+        if self.sheets_enabled:
+            self.load_from_sheets()
+        else:
+            print("📊 股票記帳模組初始化完成（記憶體模式）")
+    
+    def init_google_sheets(self):
+        """初始化 Google Sheets 連接"""
+        try:
+            # 從環境變數獲取憑證
+            creds_json = os.getenv('GOOGLE_CREDENTIALS')
+            
+            if not creds_json:
+                print("⚠️ 未找到 GOOGLE_CREDENTIALS 環境變數，使用記憶體模式")
+                return False
+            
+            # 解析憑證
+            creds_dict = json.loads(creds_json)
+            credentials = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=[
+                    'https://spreadsheets.google.com/feeds',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+            )
+            
+            # 建立連接
+            self.gc = gspread.authorize(credentials)
+            self.sheet = self.gc.open_by_url(self.spreadsheet_url)
+            
+            print("✅ Google Sheets 連接成功")
+            self.sheets_enabled = True
+            return True
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 格式錯誤: {e}")
+            print("📝 將使用記憶體模式運行")
+            return False
+        except Exception as e:
+            print(f"❌ Google Sheets 連接失敗: {e}")
+            print("📝 將使用記憶體模式運行")
+            return False
+    
+    def load_from_sheets(self):
+        """從 Google Sheets 載入資料"""
+        if not self.sheets_enabled:
+            return
+        
+        try:
+            # 載入帳戶資訊
+            accounts_sheet = self.sheet.worksheet("帳戶資訊")
+            accounts_data = accounts_sheet.get_all_records()
+            
+            for row in accounts_data:
+                if row.get('帳戶名稱'):
+                    self.stock_data['accounts'][row['帳戶名稱']] = {
+                        'cash': int(row.get('現金餘額', 0)),
+                        'stocks': {},
+                        'created_date': row.get('建立日期', self.get_taiwan_time())
+                    }
+            
+            # 載入持股明細
+            holdings_sheet = self.sheet.worksheet("持股明細")
+            holdings_data = holdings_sheet.get_all_records()
+            
+            for row in holdings_data:
+                account_name = row.get('帳戶名稱')
+                stock_name = row.get('股票名稱')
+                
+                if account_name and stock_name and account_name in self.stock_data['accounts']:
+                    self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
+                        'quantity': int(row.get('持股數量', 0)),
+                        'avg_cost': float(row.get('平均成本', 0)),
+                        'total_cost': int(row.get('總成本', 0))
+                    }
+            
+            # 載入交易記錄
+            transactions_sheet = self.sheet.worksheet("交易記錄")
+            transactions_data = transactions_sheet.get_all_records()
+            
+            for row in transactions_data:
+                if row.get('交易ID'):
+                    transaction = {
+                        'id': int(row['交易ID']),
+                        'type': row.get('類型', ''),
+                        'account': row.get('帳戶', ''),
+                        'stock_code': row.get('股票名稱') if row.get('股票名稱') else None,
+                        'quantity': int(row.get('數量', 0)),
+                        'amount': int(row.get('金額', 0)),
+                        'price_per_share': float(row.get('單價', 0)) if row.get('單價') else 0,
+                        'date': row.get('日期', ''),
+                        'cash_after': int(row.get('現金餘額', 0)),
+                        'created_at': row.get('建立時間', ''),
+                        'profit_loss': float(row.get('損益', 0)) if row.get('損益') else None
+                    }
+                    self.stock_data['transactions'].append(transaction)
+            
+            print(f"✅ 從 Google Sheets 載入資料成功")
+            print(f"📊 帳戶數量: {len(self.stock_data['accounts'])}")
+            print(f"📈 交易記錄: {len(self.stock_data['transactions'])} 筆")
+            
+        except Exception as e:
+            print(f"❌ 載入 Google Sheets 資料失敗: {e}")
+    
+    def sync_to_sheets(self):
+        """同步資料到 Google Sheets"""
+        if not self.sheets_enabled:
+            return False
+        
+        try:
+            # 同步帳戶資訊
+            accounts_sheet = self.sheet.worksheet("帳戶資訊")
+            accounts_sheet.clear()
+            
+            # 設定標題
+            accounts_sheet.append_row(['帳戶名稱', '現金餘額', '建立日期'])
+            
+            # 寫入帳戶資料
+            for account_name, account_data in self.stock_data['accounts'].items():
+                accounts_sheet.append_row([
+                    account_name,
+                    account_data['cash'],
+                    account_data['created_date']
+                ])
+            
+            # 同步持股明細
+            holdings_sheet = self.sheet.worksheet("持股明細")
+            holdings_sheet.clear()
+            holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
+            
+            for account_name, account_data in self.stock_data['accounts'].items():
+                for stock_name, stock_data in account_data['stocks'].items():
+                    holdings_sheet.append_row([
+                        account_name,
+                        stock_name,
+                        stock_data['quantity'],
+                        stock_data['avg_cost'],
+                        stock_data['total_cost']
+                    ])
+            
+            # 同步交易記錄
+            transactions_sheet = self.sheet.worksheet("交易記錄")
+            transactions_sheet.clear()
+            transactions_sheet.append_row([
+                '交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', 
+                '單價', '日期', '現金餘額', '建立時間', '損益'
+            ])
+            
+            for transaction in self.stock_data['transactions']:
+                transactions_sheet.append_row([
+                    transaction['id'],
+                    transaction['type'],
+                    transaction['account'],
+                    transaction.get('stock_code', ''),
+                    transaction['quantity'],
+                    transaction['amount'],
+                    transaction.get('price_per_share', 0),
+                    transaction['date'],
+                    transaction['cash_after'],
+                    transaction['created_at'],
+                    transaction.get('profit_loss', '')
+                ])
+            
+            print("✅ 資料已同步到 Google Sheets")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 同步到 Google Sheets 失敗: {e}")
+            return False
     
     def get_taiwan_time(self):
         """獲取台灣時間"""
@@ -32,6 +214,8 @@ class StockManager:
                 'stocks': {},
                 'created_date': self.get_taiwan_time()
             }
+            if self.sheets_enabled:
+                self.sync_to_sheets()  # 立即同步
             return True  # 新建立
         return False     # 已存在
     
@@ -148,14 +332,22 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 同步到 Google Sheets
+        if self.sheets_enabled:
+            self.sync_to_sheets()
+        
         result_msg = f"📊 {account_name} 持股設定成功！\n"
         if is_new:
             result_msg += f"🆕 已建立新帳戶\n"
         result_msg += f"🏷️ {stock_name}\n"
         result_msg += f"📈 持股：{quantity}股\n"
         result_msg += f"💰 總成本：{total_cost:,}元\n"
-        result_msg += f"💵 平均成本：{avg_cost}元/股\n"
-        result_msg += f"💾 已儲存到記憶體"
+        result_msg += f"💵 平均成本：{avg_cost}元/股"
+        
+        if self.sheets_enabled:
+            result_msg += f"\n☁️ 已同步到 Google Sheets"
+        else:
+            result_msg += f"\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -179,12 +371,20 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 同步到 Google Sheets
+        if self.sheets_enabled:
+            self.sync_to_sheets()
+        
         result_msg = f"💰 {account_name} 入帳成功！\n"
         if is_new:
             result_msg += f"🆕 已建立新帳戶\n"
         result_msg += f"💵 入帳金額：{amount:,}元\n"
-        result_msg += f"💳 帳戶餘額：{self.stock_data['accounts'][account_name]['cash']:,}元\n"
-        result_msg += f"💾 已儲存到記憶體"
+        result_msg += f"💳 帳戶餘額：{self.stock_data['accounts'][account_name]['cash']:,}元"
+        
+        if self.sheets_enabled:
+            result_msg += f"\n☁️ 已同步到 Google Sheets"
+        else:
+            result_msg += f"\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -214,7 +414,18 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        return f"💸 {account_name} 提款成功！\n💵 提款金額：{amount:,}元\n💳 帳戶餘額：{account['cash']:,}元\n💾 已儲存到記憶體"
+        # 同步到 Google Sheets
+        if self.sheets_enabled:
+            self.sync_to_sheets()
+        
+        result_msg = f"💸 {account_name} 提款成功！\n💵 提款金額：{amount:,}元\n💳 帳戶餘額：{account['cash']:,}元"
+        
+        if self.sheets_enabled:
+            result_msg += f"\n☁️ 已同步到 Google Sheets"
+        else:
+            result_msg += f"\n💾 已儲存到記憶體"
+        
+        return result_msg
     
     def handle_buy(self, account_name, stock_name, quantity, amount, date):
         """處理買入股票"""
@@ -267,8 +478,19 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 同步到 Google Sheets
+        if self.sheets_enabled:
+            self.sync_to_sheets()
+        
         stock_info = account['stocks'][stock_name]
-        return f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name}\n📊 買入：{quantity}股 @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{stock_info['quantity']}股\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元\n💾 已儲存到記憶體"
+        result_msg = f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name}\n📊 買入：{quantity}股 @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{stock_info['quantity']}股\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元"
+        
+        if self.sheets_enabled:
+            result_msg += f"\n☁️ 已同步到 Google Sheets"
+        else:
+            result_msg += f"\n💾 已儲存到記憶體"
+        
+        return result_msg
     
     def handle_sell(self, account_name, stock_name, quantity, amount, date):
         """處理賣出股票"""
@@ -323,9 +545,18 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 同步到 Google Sheets
+        if self.sheets_enabled:
+            self.sync_to_sheets()
+        
         profit_text = f"💰 獲利：+{profit_loss:,}元" if profit_loss > 0 else f"💸 虧損：{profit_loss:,}元" if profit_loss < 0 else "💫 損益兩平"
         
-        result = f"📉 {account_name} 賣出成功！\n\n🏷️ {stock_name}\n📊 賣出：{quantity}股 @ {price_per_share}元\n💰 實收：{amount:,}元\n📅 日期：{date}\n\n💹 本次交易：\n💵 成本：{sell_cost:,}元\n{profit_text}\n💳 現金餘額：{account['cash']:,}元\n💾 已儲存到記憶體"
+        result = f"📉 {account_name} 賣出成功！\n\n🏷️ {stock_name}\n📊 賣出：{quantity}股 @ {price_per_share}元\n💰 實收：{amount:,}元\n📅 日期：{date}\n\n💹 本次交易：\n💵 成本：{sell_cost:,}元\n{profit_text}\n💳 現金餘額：{account['cash']:,}元"
+        
+        if self.sheets_enabled:
+            result += f"\n☁️ 已同步到 Google Sheets"
+        else:
+            result += f"\n💾 已儲存到記憶體"
         
         if remaining_quantity > 0:
             result += f"\n\n📋 剩餘持股：{remaining_quantity}股"
@@ -338,7 +569,12 @@ class StockManager:
         """建立新帳戶"""
         is_new = self.get_or_create_account(account_name)
         if is_new:
-            return f"🆕 已建立帳戶「{account_name}」\n💡 可以開始入帳和交易了！\n💾 已儲存到記憶體"
+            result_msg = f"🆕 已建立帳戶「{account_name}」\n💡 可以開始入帳和交易了！"
+            if self.sheets_enabled:
+                result_msg += f"\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += f"\n💾 已儲存到記憶體"
+            return result_msg
         else:
             return f"ℹ️ 帳戶「{account_name}」已存在"
     
@@ -411,7 +647,10 @@ class StockManager:
             for stock_name, total_quantity in all_stocks.items():
                 result += f"🏷️ {stock_name}：{total_quantity}股\n"
         
-        result += f"\n💾 資料儲存：記憶體模式"
+        if self.sheets_enabled:
+            result += f"\n☁️ 資料來源：Google Sheets"
+        else:
+            result += f"\n💾 資料儲存：記憶體模式"
         
         return result
     
@@ -445,7 +684,10 @@ class StockManager:
                 result += f"   💰 {t['amount']:,}元\n"
             result += f"   📅 {t['date']} 💳餘額 {t['cash_after']:,}元\n\n"
         
-        result += f"💾 資料來源：記憶體"
+        if self.sheets_enabled:
+            result += f"☁️ 資料來源：Google Sheets"
+        else:
+            result += f"💾 資料來源：記憶體"
         
         return result
     
@@ -490,7 +732,10 @@ class StockManager:
             elif t['type'] == '持有':
                 result += f"📊 {t['date']} 設定持有 {t['quantity']}股 @ {t['price_per_share']}元\n"
         
-        result += f"\n💾 資料來源：記憶體"
+        if self.sheets_enabled:
+            result += f"\n☁️ 資料來源：Google Sheets"
+        else:
+            result += f"\n💾 資料來源：記憶體"
         
         return result
     
@@ -499,7 +744,10 @@ class StockManager:
         if self.stock_data['accounts']:
             account_list = list(self.stock_data['accounts'].keys())
             result = f"👥 目前帳戶列表：\n\n" + "\n".join([f"👤 {name}" for name in account_list])
-            result += f"\n\n💾 資料來源：記憶體"
+            if self.sheets_enabled:
+                result += f"\n\n☁️ 資料來源：Google Sheets"
+            else:
+                result += f"\n\n💾 資料來源：記憶體"
             return result
         else:
             return "📝 目前沒有任何帳戶"
@@ -546,7 +794,7 @@ class StockManager:
     
     def get_help_text(self):
         """獲取幫助訊息"""
-        return """💰 多帳戶股票記帳功能 v2.0：
+        return """💰 多帳戶股票記帳功能 v2.0 Final：
 
 📋 帳戶管理：
 - 爸爸入帳 50000 - 入金
@@ -574,11 +822,12 @@ class StockManager:
 • 日期：0820 = 8月20日，1225 = 12月25日
 • 持有指令：帳戶 持有 股票名稱 股數 總成本
 
-💾 v2.0 功能：
+☁️ v2.0 Final 功能：
+• Google Sheets 雲端同步
 • 支援自訂股票名稱  
 • 初始持股設定
-• 記憶體模式運行
-• Google Sheets 同步功能開發中"""
+• 資料永久保存
+• 記憶體模式備援"""
 
 
 # 建立全域實例
