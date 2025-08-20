@@ -1,3 +1,0 @@
-"""
-LINE Todo Reminder Bot
-"""
