@@ -235,8 +235,6 @@ class StockManager:
             return False
         
         try:
-            print("🔄 開始同步資料到 Google Sheets...")
-            
             # 同步帳戶資訊
             print("📊 同步帳戶資訊...")
             try:
@@ -254,23 +252,33 @@ class StockManager:
             except Exception as e:
                 print(f"❌ 同步帳戶資訊失敗: {e}")
             
-            # 同步持股明細
+            # 同步持股明細 - 處理空格問題
             print("📈 同步持股明細...")
             try:
-                holdings_sheet = self.sheet.worksheet("持股明細")
-                holdings_sheet.clear()
-                holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
+                # 尋找持股明細工作表
+                holdings_sheet = None
+                worksheets = self.sheet.worksheets()
+                for ws in worksheets:
+                    if '持股明細' in ws.title.strip():
+                        holdings_sheet = ws
+                        break
                 
-                for account_name, account_data in self.stock_data['accounts'].items():
-                    for stock_name, stock_data in account_data['stocks'].items():
-                        holdings_sheet.append_row([
-                            account_name,
-                            stock_name,
-                            stock_data['quantity'],
-                            stock_data['avg_cost'],
-                            stock_data['total_cost']
-                        ])
-                print("✅ 持股明細同步成功")
+                if holdings_sheet:
+                    holdings_sheet.clear()
+                    holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
+                    
+                    for account_name, account_data in self.stock_data['accounts'].items():
+                        for stock_name, stock_data in account_data['stocks'].items():
+                            holdings_sheet.append_row([
+                                account_name,
+                                stock_name,
+                                stock_data['quantity'],
+                                stock_data['avg_cost'],
+                                stock_data['total_cost']
+                            ])
+                    print("✅ 持股明細同步成功")
+                else:
+                    print("❌ 找不到持股明細工作表")
             except Exception as e:
                 print(f"❌ 同步持股明細失敗: {e}")
             
@@ -861,8 +869,20 @@ class StockManager:
         else:
             return "📝 目前沒有任何帳戶"
     
+    def reload_data_from_sheets(self):
+        """重新從 Google Sheets 載入最新資料"""
+        if self.sheets_enabled:
+            print("🔄 重新載入 Google Sheets 最新資料...")
+            # 清空記憶體中的資料
+            self.stock_data = {'accounts': {}, 'transactions': []}
+            # 重新載入
+            self.load_from_sheets_debug()
+
     def handle_command(self, message_text):
         """處理股票指令的主要函數"""
+        # 先重新載入最新資料，確保與 Google Sheets 同步
+        self.reload_data_from_sheets()
+        
         parsed = self.parse_command(message_text)
         
         if not parsed:
@@ -952,6 +972,9 @@ def handle_stock_command(message_text):
 
 def get_stock_summary(account_name=None):
     """獲取股票摘要 - 對外接口"""
+    # 先重新載入最新資料
+    stock_manager.reload_data_from_sheets()
+    
     if account_name:
         return stock_manager.get_account_summary(account_name)
     else:
@@ -960,16 +983,25 @@ def get_stock_summary(account_name=None):
 
 def get_stock_transactions(account_name=None, limit=10):
     """獲取交易記錄 - 對外接口"""
+    # 先重新載入最新資料
+    stock_manager.reload_data_from_sheets()
+    
     return stock_manager.get_transaction_history(account_name, limit)
 
 
 def get_stock_cost_analysis(account_name, stock_code):
     """獲取成本分析 - 對外接口"""
+    # 先重新載入最新資料
+    stock_manager.reload_data_from_sheets()
+    
     return stock_manager.get_cost_analysis(account_name, stock_code)
 
 
 def get_stock_account_list():
     """獲取帳戶列表 - 對外接口"""
+    # 先重新載入最新資料
+    stock_manager.reload_data_from_sheets()
+    
     return stock_manager.get_account_list()
 
 
