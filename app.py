@@ -380,9 +380,9 @@ def webhook():
                 elif message_text.endswith('查詢') and message_text != '查詢':
                     account_name = message_text[:-2].strip()
                     if account_name in ['股票', '帳戶']:
-                    reply_text = get_stock_summary()
+                        reply_text = get_stock_summary()
                     else:
-                    reply_text = get_stock_summary(account_name)
+                        reply_text = get_stock_summary(account_name)
                 
                 elif message_text == '交易記錄':
                     reply_text = get_stock_transactions()
