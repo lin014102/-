@@ -396,7 +396,7 @@ keep_alive_thread.start()
 
 @app.route('/')
 def home():
-    return f'LINE Todo Reminder Bot v2.1 - 時區已修正！當前台灣時間: {get_taiwan_time()}'
+    return f'LINE Todo Reminder Bot v2.2 - 提醒機制已改進！當前台灣時間: {get_taiwan_time()}'
 
 @app.route('/health')
 def health():
@@ -438,7 +438,7 @@ def health():
         'evening_time': user_settings['evening_time'],
         'next_reminder': next_reminder_str,
         'has_user': user_settings['user_id'] is not None,
-        'version': '2.1_timezone_fixed'
+        'version': '2.2_improved_reminders'
     }
 
 @app.route('/webhook', methods=['POST'])
@@ -530,7 +530,7 @@ def webhook():
 
                 # 幫助訊息
                 elif message_text in ['幫助', 'help', '說明']:
-                    reply_text = """📋 完整功能待辦事項機器人 v2.1：
+                    reply_text = """📋 完整功能待辦事項機器人 v2.2：
 
 🔹 基本功能：
 - 新增 [事項] - 新增待辦事項
@@ -550,7 +550,10 @@ def webhook():
 - 每月新增 5號繳卡費 - 每月固定事項
 - 每月清單 - 查看每月事項
 
-🇹🇼 v2.1 更新：已修正時區問題，所有時間均為台灣時間！"""
+🆕 v2.2 改進：
+• 每日早晚都會提醒所有待辦事項，直到刪除
+• 每月事項：前一天預告 + 當天自動加入待辦
+• 完整台灣時區支援"""
 
                 # 待辦事項功能
                 elif message_text.startswith('新增 '):
@@ -608,41 +611,90 @@ def webhook():
                     except:
                         reply_text = "❌ 請輸入正確編號"
 
-                # 每月功能
+                # 每月功能 - 完全修正版本
                 elif message_text.startswith('每月新增 '):
                     todo_text = message_text[5:].strip()
                     if todo_text:
                         parsed = parse_date(todo_text)
+                        
+                        # 完全修正：安全的日期處理
+                        if parsed.get('has_date') and parsed.get('date_string'):
+                            # 有指定日期，例如：每月新增 5號繳卡費
+                            try:
+                                day = int(parsed['date_string'].split('/')[1])
+                                date_display = f"{day}號"
+                            except:
+                                # 如果解析失敗，預設為1號
+                                day = 1
+                                date_display = "1號"
+                        else:
+                            # 沒有指定日期，例如：每月新增 買菜
+                            day = 1
+                            date_display = "1號"
+                        
                         monthly_item = {
                             'id': len(monthly_todos) + 1,
                             'content': parsed['content'],
                             'created_at': get_taiwan_time(),
                             'has_date': parsed.get('has_date', False),
                             'date_string': parsed.get('date_string'),
-                            'day': int(parsed.get('date_string', '1').split('/')[1]) if parsed.get('has_date') else 1
+                            'day': day,
+                            'date_display': date_display
                         }
                         monthly_todos.append(monthly_item)
                         
-                        if parsed.get('has_date'):
-                            reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {parsed['date_string']} 提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項"
-                        else:
-                            reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 1 號提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項"
+                        reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {date_display} 提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項\n💡 會在前一天預告 + 當天提醒"
                     else:
-                        reply_text = "❌ 請輸入要新增的每月事項內容"
+                        reply_text = "❌ 請輸入要新增的每月事項內容\n💡 例如：每月新增 5號繳卡費"
 
                 elif message_text == '每月清單':
                     if monthly_todos:
+                        # 清理舊資料：為沒有 date_display 的項目補充
+                        for item in monthly_todos:
+                            if not item.get('date_display'):
+                                if item.get('has_date') and item.get('date_string'):
+                                    try:
+                                        day = int(item['date_string'].split('/')[1])
+                                        item['date_display'] = f"{day}號"
+                                    except:
+                                        item['date_display'] = f"{item.get('day', 1)}號"
+                                else:
+                                    item['date_display'] = f"{item.get('day', 1)}號"
+                        
                         reply_text = f"🔄 每月固定事項清單 ({len(monthly_todos)} 項)：\n\n"
                         for i, item in enumerate(monthly_todos, 1):
-                            date_info = f"每月 {item.get('date_string', '1號')}" if item.get('has_date') else "每月 1號"
-                            reply_text += f"{i}. 📅 {date_info} - {item['content']}\n"
-                        reply_text += f"\n💡 這些事項會在每月指定日期自動加入待辦清單"
+                            date_display = item.get('date_display', f"{item.get('day', 1)}號")
+                            reply_text += f"{i}. 📅 每月 {date_display} - {item['content']}\n"
+                        reply_text += f"\n💡 這些事項會在前一天晚上預告，當天早上自動加入待辦清單"
                     else:
-                        reply_text = "📝 目前沒有每月固定事項"
+                        reply_text = "📝 目前沒有每月固定事項\n💡 輸入「每月新增 5號繳卡費」來新增"
+
+                # 新增：清理每月資料的指令
+                elif message_text == '清理每月':
+                    if monthly_todos:
+                        # 修正所有每月事項的顯示格式
+                        fixed_count = 0
+                        for item in monthly_todos:
+                            if not item.get('date_display') or 'every month' in str(item.get('date_display', '')):
+                                if item.get('has_date') and item.get('date_string'):
+                                    try:
+                                        day = int(item['date_string'].split('/')[1])
+                                        item['date_display'] = f"{day}號"
+                                        fixed_count += 1
+                                    except:
+                                        item['date_display'] = f"{item.get('day', 1)}號"
+                                        fixed_count += 1
+                                else:
+                                    item['date_display'] = f"{item.get('day', 1)}號"
+                                    fixed_count += 1
+                        
+                        reply_text = f"🔧 已修正 {fixed_count} 項每月事項的顯示格式\n💡 現在輸入「每月清單」查看修正結果"
+                    else:
+                        reply_text = "📝 目前沒有每月固定事項需要清理"
 
                 # 測試功能
                 elif message_text == '測試':
-                    reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 完整提醒功能已啟用\n💡 輸入「幫助」查看所有功能"
+                    reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 改進的提醒功能已啟用\n🔄 每日多次提醒 + 每月預告機制\n💡 輸入「幫助」查看所有功能"
 
                 # 預設回應
                 else:
