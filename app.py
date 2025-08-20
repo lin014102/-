@@ -10,7 +10,9 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
-import pytz
+
+# 匯入工具模組
+from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_datetime, is_valid_time_format
 
 # 匯入股票模組
 from stock_manager import (
@@ -25,9 +27,6 @@ from stock_manager import (
 )
 
 app = Flask(__name__)
-
-# 設定台灣時區
-TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 
 # ===== 待辦事項資料儲存 =====
 todos = []
@@ -44,36 +43,6 @@ user_settings = {
 CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN', '')
 LINE_API_URL = 'https://api.line.me/v2/bot/message/reply'
 PUSH_API_URL = 'https://api.line.me/v2/bot/message/push'
-
-# ===== 時間相關函數 =====
-def get_taiwan_time():
-    """獲取台灣時間"""
-    return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
-
-def get_taiwan_time_hhmm():
-    """獲取台灣時間 HH:MM"""
-    return datetime.now(TAIWAN_TZ).strftime('%H:%M')
-
-def get_taiwan_datetime():
-    """獲取台灣時間的 datetime 物件"""
-    return datetime.now(TAIWAN_TZ)
-
-def is_valid_time_format(time_str):
-    """驗證時間格式是否正確"""
-    if ':' not in time_str or len(time_str) > 5:
-        return False
-    
-    try:
-        parts = time_str.split(':')
-        if len(parts) != 2:
-            return False
-        
-        hours = int(parts[0])
-        minutes = int(parts[1])
-        
-        return 0 <= hours <= 23 and 0 <= minutes <= 59
-    except:
-        return False
 
 # ===== 待辦事項功能函數 =====
 def parse_date(text):
@@ -294,6 +263,8 @@ def reply_message(reply_token, message_text):
 # ===== 提醒系統函數 =====
 def check_reminders():
     """檢查並發送提醒"""
+    from utils.time_utils import TAIWAN_TZ  # 在這裡匯入時區
+    
     while True:
         try:
             current_time = get_taiwan_time_hhmm()
@@ -311,8 +282,8 @@ def check_reminders():
             if current_time == "09:00":
                 check_monthly_reminders(taiwan_now, user_id)
             
-            check_short_reminders(taiwan_now)
-            check_time_reminders(taiwan_now)
+            check_short_reminders(taiwan_now, TAIWAN_TZ)
+            check_time_reminders(taiwan_now, TAIWAN_TZ)
             
             time.sleep(60)
         except Exception as e:
@@ -446,7 +417,7 @@ def check_monthly_reminders(taiwan_now, user_id):
             send_push_message(user_id, message)
             print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
 
-def check_short_reminders(taiwan_now):
+def check_short_reminders(taiwan_now, TAIWAN_TZ):
     """檢查短期提醒"""
     for reminder in short_reminders[:]:
         reminder_time_str = reminder['reminder_time']
@@ -469,7 +440,7 @@ def check_short_reminders(taiwan_now):
                 print(f"✅ 已發送短期提醒: {reminder['content']} - 台灣時間: {get_taiwan_time()}")
             short_reminders.remove(reminder)
 
-def check_time_reminders(taiwan_now):
+def check_time_reminders(taiwan_now, TAIWAN_TZ):
     """檢查時間提醒"""
     for reminder in time_reminders[:]:
         reminder_time_str = reminder['reminder_time']
