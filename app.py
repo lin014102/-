@@ -220,7 +220,7 @@ def reply_message(reply_token, message_text):
         return False
 
 def check_reminders():
-    """檢查並發送提醒"""
+    """檢查並發送提醒 - 改進版本"""
     while True:
         try:
             current_time = get_taiwan_time_hhmm()
@@ -229,12 +229,15 @@ def check_reminders():
             
             print(f"🔍 提醒檢查 - 台灣時間: {get_taiwan_time()}")
             
-            # 檢查定時提醒（每日早晚）
+            # 檢查定時提醒（每日早晚） - 改進：每次都提醒所有待辦事項
             if user_id and (current_time == user_settings['morning_time'] or current_time == user_settings['evening_time']):
                 send_daily_reminder(user_id, current_time)
             
-            # 檢查每月提醒（每天早上 9:00 檢查一次）
-            if current_time == "09:00":
+            # 檢查每月提醒 - 改進：前一天預告 + 當天提醒
+            if current_time == user_settings['evening_time']:  # 晚上檢查明天的每月事項
+                check_monthly_preview(taiwan_now, user_id)
+            
+            if current_time == "09:00":  # 早上檢查今天的每月事項
                 check_monthly_reminders(taiwan_now, user_id)
             
             # 檢查短期提醒
