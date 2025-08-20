@@ -1,6 +1,6 @@
 """
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
-多帳戶股票記帳系統 v2.0 Final
+多帳戶股票記帳系統 v2.0 Final - 調試版本
 """
 import re
 import os
@@ -9,6 +9,7 @@ from datetime import datetime
 import pytz
 import gspread
 from google.oauth2.service_account import Credentials
+import traceback
 
 # 設定台灣時區
 TAIWAN_TZ = pytz.timezone('Asia/Taipei')
@@ -34,7 +35,7 @@ class StockManager:
         
         # 從 Google Sheets 載入資料
         if self.sheets_enabled:
-            self.load_from_sheets()
+            self.load_from_sheets_debug()
         else:
             print("📊 股票記帳模組初始化完成（記憶體模式）")
     
@@ -75,131 +76,239 @@ class StockManager:
             print("📝 將使用記憶體模式運行")
             return False
     
-    def load_from_sheets(self):
-        """從 Google Sheets 載入資料"""
+    def load_from_sheets_debug(self):
+        """從 Google Sheets 載入資料 - 詳細調試版本"""
         if not self.sheets_enabled:
             return
         
         try:
-            # 載入帳戶資訊
-            accounts_sheet = self.sheet.worksheet("帳戶資訊")
-            accounts_data = accounts_sheet.get_all_records()
+            print("🔍 開始調試 Google Sheets 載入過程...")
             
-            for row in accounts_data:
-                if row.get('帳戶名稱'):
-                    self.stock_data['accounts'][row['帳戶名稱']] = {
-                        'cash': int(row.get('現金餘額', 0)),
-                        'stocks': {},
-                        'created_date': row.get('建立日期', self.get_taiwan_time())
-                    }
+            # 1. 先列出所有工作表
+            print("📋 取得工作表列表...")
+            worksheets = self.sheet.worksheets()
+            print(f"✅ 找到 {len(worksheets)} 個工作表:")
+            for i, ws in enumerate(worksheets):
+                print(f"  {i+1}. '{ws.title}' (ID: {ws.id}, 行數: {ws.row_count}, 列數: {ws.col_count})")
             
-            # 載入持股明細
-            holdings_sheet = self.sheet.worksheet("持股明細")
-            holdings_data = holdings_sheet.get_all_records()
+            # 2. 測試每個工作表的基本存取
+            print("\n🔍 測試工作表存取權限...")
+            for ws in worksheets:
+                try:
+                    first_row = ws.row_values(1)
+                    print(f"✅ '{ws.title}' 可存取，標題行: {first_row}")
+                except Exception as e:
+                    print(f"❌ '{ws.title}' 存取失敗: {e}")
             
-            for row in holdings_data:
-                account_name = row.get('帳戶名稱')
-                stock_name = row.get('股票名稱')
+            print("\n" + "="*60)
+            
+            # 3. 開始實際載入資料
+            print("📊 開始載入帳戶資訊...")
+            try:
+                accounts_sheet = self.sheet.worksheet("帳戶資訊")
+                print(f"✅ 成功取得 '帳戶資訊' 工作表")
                 
-                if account_name and stock_name and account_name in self.stock_data['accounts']:
-                    self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
-                        'quantity': int(row.get('持股數量', 0)),
-                        'avg_cost': float(row.get('平均成本', 0)),
-                        'total_cost': int(row.get('總成本', 0))
-                    }
+                # 先用基本方法讀取
+                all_values = accounts_sheet.get_all_values()
+                print(f"✅ get_all_values() 成功，共 {len(all_values)} 行")
+                if all_values:
+                    print(f"   標題行: {all_values[0]}")
+                    if len(all_values) > 1:
+                        print(f"   資料行1: {all_values[1]}")
+                
+                # 再用 records 方法讀取
+                accounts_data = accounts_sheet.get_all_records()
+                print(f"✅ get_all_records() 成功，共 {len(accounts_data)} 筆記錄")
+                
+                for row in accounts_data:
+                    if row.get('帳戶名稱'):
+                        self.stock_data['accounts'][row['帳戶名稱']] = {
+                            'cash': int(row.get('現金餘額', 0)),
+                            'stocks': {},
+                            'created_date': row.get('建立日期', self.get_taiwan_time())
+                        }
+                        print(f"✅ 載入帳戶: {row['帳戶名稱']}")
+                
+            except Exception as e:
+                print(f"❌ 載入帳戶資訊失敗: {e}")
+                print("詳細錯誤:")
+                traceback.print_exc()
             
-            # 載入交易記錄
-            transactions_sheet = self.sheet.worksheet("交易記錄")
-            transactions_data = transactions_sheet.get_all_records()
+            print("\n📈 開始載入持股明細...")
+            try:
+                # 先檢查工作表是否存在
+                print("🔍 檢查 '持股明細' 工作表...")
+                holdings_sheet = self.sheet.worksheet("持股明細")
+                print(f"✅ 成功取得 '持股明細' 工作表")
+                
+                # 檢查工作表基本資訊
+                print(f"📊 工作表資訊: 行數={holdings_sheet.row_count}, 列數={holdings_sheet.col_count}")
+                
+                # 先讀取原始值
+                print("🔍 讀取原始值...")
+                all_values = holdings_sheet.get_all_values()
+                print(f"✅ get_all_values() 成功，共 {len(all_values)} 行")
+                
+                # 顯示前幾行資料
+                for i, row in enumerate(all_values[:3]):  # 只顯示前3行
+                    print(f"   第{i+1}行: {row}")
+                
+                # 嘗試 get_all_records
+                print("🔍 嘗試 get_all_records()...")
+                holdings_data = holdings_sheet.get_all_records()
+                print(f"✅ get_all_records() 成功，共 {len(holdings_data)} 筆記錄")
+                
+                # 處理資料
+                for i, row in enumerate(holdings_data):
+                    print(f"處理第 {i+1} 筆持股資料: {row}")
+                    account_name = row.get('帳戶名稱')
+                    stock_name = row.get('股票名稱')
+                    
+                    if account_name and stock_name and account_name in self.stock_data['accounts']:
+                        self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
+                            'quantity': int(row.get('持股數量', 0)),
+                            'avg_cost': float(row.get('平均成本', 0)),
+                            'total_cost': int(row.get('總成本', 0))
+                        }
+                        print(f"✅ 載入持股: {account_name} - {stock_name}")
+                    elif not account_name:
+                        print(f"⚠️ 跳過空的帳戶名稱行")
+                    elif not stock_name:
+                        print(f"⚠️ 跳過空的股票名稱行")
+                    elif account_name not in self.stock_data['accounts']:
+                        print(f"⚠️ 帳戶 '{account_name}' 不存在，跳過")
+                
+            except Exception as e:
+                print(f"❌ 載入持股明細失敗: {e}")
+                print(f"錯誤類型: {type(e).__name__}")
+                print("詳細錯誤:")
+                traceback.print_exc()
+                
+            print("\n📋 開始載入交易記錄...")
+            try:
+                transactions_sheet = self.sheet.worksheet("交易記錄")
+                print(f"✅ 成功取得 '交易記錄' 工作表")
+                
+                # 類似的詳細檢查
+                all_values = transactions_sheet.get_all_values()
+                print(f"✅ get_all_values() 成功，共 {len(all_values)} 行")
+                
+                transactions_data = transactions_sheet.get_all_records()
+                print(f"✅ get_all_records() 成功，共 {len(transactions_data)} 筆記錄")
+                
+                for row in transactions_data:
+                    if row.get('交易ID'):
+                        transaction = {
+                            'id': int(row['交易ID']),
+                            'type': row.get('類型', ''),
+                            'account': row.get('帳戶', ''),
+                            'stock_code': row.get('股票名稱') if row.get('股票名稱') else None,
+                            'quantity': int(row.get('數量', 0)),
+                            'amount': int(row.get('金額', 0)),
+                            'price_per_share': float(row.get('單價', 0)) if row.get('單價') else 0,
+                            'date': row.get('日期', ''),
+                            'cash_after': int(row.get('現金餘額', 0)),
+                            'created_at': row.get('建立時間', ''),
+                            'profit_loss': float(row.get('損益', 0)) if row.get('損益') else None
+                        }
+                        self.stock_data['transactions'].append(transaction)
+                
+                print(f"✅ 載入 {len(self.stock_data['transactions'])} 筆交易記錄")
+                
+            except Exception as e:
+                print(f"❌ 載入交易記錄失敗: {e}")
+                print("詳細錯誤:")
+                traceback.print_exc()
             
-            for row in transactions_data:
-                if row.get('交易ID'):
-                    transaction = {
-                        'id': int(row['交易ID']),
-                        'type': row.get('類型', ''),
-                        'account': row.get('帳戶', ''),
-                        'stock_code': row.get('股票名稱') if row.get('股票名稱') else None,
-                        'quantity': int(row.get('數量', 0)),
-                        'amount': int(row.get('金額', 0)),
-                        'price_per_share': float(row.get('單價', 0)) if row.get('單價') else 0,
-                        'date': row.get('日期', ''),
-                        'cash_after': int(row.get('現金餘額', 0)),
-                        'created_at': row.get('建立時間', ''),
-                        'profit_loss': float(row.get('損益', 0)) if row.get('損益') else None
-                    }
-                    self.stock_data['transactions'].append(transaction)
-            
-            print(f"✅ 從 Google Sheets 載入資料成功")
+            print(f"\n🎉 資料載入完成")
             print(f"📊 帳戶數量: {len(self.stock_data['accounts'])}")
             print(f"📈 交易記錄: {len(self.stock_data['transactions'])} 筆")
             
         except Exception as e:
             print(f"❌ 載入 Google Sheets 資料失敗: {e}")
+            print("詳細錯誤:")
+            traceback.print_exc()
     
     def sync_to_sheets(self):
-        """同步資料到 Google Sheets"""
+        """同步資料到 Google Sheets - 添加錯誤處理"""
         if not self.sheets_enabled:
             return False
         
         try:
+            print("🔄 開始同步資料到 Google Sheets...")
+            
             # 同步帳戶資訊
-            accounts_sheet = self.sheet.worksheet("帳戶資訊")
-            accounts_sheet.clear()
-            
-            # 設定標題
-            accounts_sheet.append_row(['帳戶名稱', '現金餘額', '建立日期'])
-            
-            # 寫入帳戶資料
-            for account_name, account_data in self.stock_data['accounts'].items():
-                accounts_sheet.append_row([
-                    account_name,
-                    account_data['cash'],
-                    account_data['created_date']
-                ])
+            print("📊 同步帳戶資訊...")
+            try:
+                accounts_sheet = self.sheet.worksheet("帳戶資訊")
+                accounts_sheet.clear()
+                accounts_sheet.append_row(['帳戶名稱', '現金餘額', '建立日期'])
+                
+                for account_name, account_data in self.stock_data['accounts'].items():
+                    accounts_sheet.append_row([
+                        account_name,
+                        account_data['cash'],
+                        account_data['created_date']
+                    ])
+                print("✅ 帳戶資訊同步成功")
+            except Exception as e:
+                print(f"❌ 同步帳戶資訊失敗: {e}")
             
             # 同步持股明細
-            holdings_sheet = self.sheet.worksheet("持股明細")
-            holdings_sheet.clear()
-            holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
-            
-            for account_name, account_data in self.stock_data['accounts'].items():
-                for stock_name, stock_data in account_data['stocks'].items():
-                    holdings_sheet.append_row([
-                        account_name,
-                        stock_name,
-                        stock_data['quantity'],
-                        stock_data['avg_cost'],
-                        stock_data['total_cost']
-                    ])
+            print("📈 同步持股明細...")
+            try:
+                holdings_sheet = self.sheet.worksheet("持股明細")
+                holdings_sheet.clear()
+                holdings_sheet.append_row(['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本'])
+                
+                for account_name, account_data in self.stock_data['accounts'].items():
+                    for stock_name, stock_data in account_data['stocks'].items():
+                        holdings_sheet.append_row([
+                            account_name,
+                            stock_name,
+                            stock_data['quantity'],
+                            stock_data['avg_cost'],
+                            stock_data['total_cost']
+                        ])
+                print("✅ 持股明細同步成功")
+            except Exception as e:
+                print(f"❌ 同步持股明細失敗: {e}")
             
             # 同步交易記錄
-            transactions_sheet = self.sheet.worksheet("交易記錄")
-            transactions_sheet.clear()
-            transactions_sheet.append_row([
-                '交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', 
-                '單價', '日期', '現金餘額', '建立時間', '損益'
-            ])
-            
-            for transaction in self.stock_data['transactions']:
+            print("📋 同步交易記錄...")
+            try:
+                transactions_sheet = self.sheet.worksheet("交易記錄")
+                transactions_sheet.clear()
                 transactions_sheet.append_row([
-                    transaction['id'],
-                    transaction['type'],
-                    transaction['account'],
-                    transaction.get('stock_code', ''),
-                    transaction['quantity'],
-                    transaction['amount'],
-                    transaction.get('price_per_share', 0),
-                    transaction['date'],
-                    transaction['cash_after'],
-                    transaction['created_at'],
-                    transaction.get('profit_loss', '')
+                    '交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', 
+                    '單價', '日期', '現金餘額', '建立時間', '損益'
                 ])
+                
+                for transaction in self.stock_data['transactions']:
+                    transactions_sheet.append_row([
+                        transaction['id'],
+                        transaction['type'],
+                        transaction['account'],
+                        transaction.get('stock_code', ''),
+                        transaction['quantity'],
+                        transaction['amount'],
+                        transaction.get('price_per_share', 0),
+                        transaction['date'],
+                        transaction['cash_after'],
+                        transaction['created_at'],
+                        transaction.get('profit_loss', '')
+                    ])
+                print("✅ 交易記錄同步成功")
+            except Exception as e:
+                print(f"❌ 同步交易記錄失敗: {e}")
             
             print("✅ 資料已同步到 Google Sheets")
             return True
             
         except Exception as e:
             print(f"❌ 同步到 Google Sheets 失敗: {e}")
+            print("詳細錯誤:")
+            traceback.print_exc()
             return False
     
     def get_taiwan_time(self):
@@ -794,7 +903,7 @@ class StockManager:
     
     def get_help_text(self):
         """獲取幫助訊息"""
-        return """💰 多帳戶股票記帳功能 v2.0 Final：
+        return """💰 多帳戶股票記帳功能 v2.0 Final - 調試版：
 
 📋 帳戶管理：
 - 爸爸入帳 50000 - 入金
@@ -827,7 +936,8 @@ class StockManager:
 • 支援自訂股票名稱  
 • 初始持股設定
 • 資料永久保存
-• 記憶體模式備援"""
+• 記憶體模式備援
+• 🔍 詳細調試模式"""
 
 
 # 建立全域實例
