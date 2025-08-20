@@ -29,6 +29,7 @@ class StockManager:
         self.gc = None
         self.sheet = None
         self.sheets_enabled = False
+        self.last_sync_time = None  # 記錄最後同步時間
         
         # 初始化 Google Sheets 連接
         self.init_google_sheets()
@@ -229,12 +230,29 @@ class StockManager:
             print("詳細錯誤:")
             traceback.print_exc()
     
+    def check_and_reload_if_needed(self):
+        """檢查是否需要重新載入資料（智能判斷）"""
+        if not self.sheets_enabled:
+            return
+        
+        import time
+        current_time = time.time()
+        
+        # 如果超過30秒沒有同步，或者是第一次，就重新載入
+        if (self.last_sync_time is None or 
+            current_time - self.last_sync_time > 30):
+            print("🔄 檢測到可能的外部修改，重新載入資料...")
+            self.reload_data_from_sheets()
+
     def sync_to_sheets_safe(self):
         """安全同步資料到 Google Sheets - 不使用 clear()"""
         if not self.sheets_enabled:
             return False
         
         try:
+            import time
+            self.last_sync_time = time.time()  # 記錄同步時間
+            
             print("🔄 安全同步資料到 Google Sheets...")
             
             # 同步帳戶資訊 - 使用安全更新方式
@@ -1037,8 +1055,8 @@ def handle_stock_command(message_text):
 
 def get_stock_summary(account_name=None):
     """獲取股票摘要 - 對外接口"""
-    # 只在查詢時重新載入最新資料
-    stock_manager.reload_data_from_sheets()
+    # 智能檢查是否需要重新載入
+    stock_manager.check_and_reload_if_needed()
     
     if account_name:
         return stock_manager.get_account_summary(account_name)
@@ -1048,24 +1066,24 @@ def get_stock_summary(account_name=None):
 
 def get_stock_transactions(account_name=None, limit=10):
     """獲取交易記錄 - 對外接口"""
-    # 只在查詢時重新載入最新資料
-    stock_manager.reload_data_from_sheets()
+    # 智能檢查是否需要重新載入
+    stock_manager.check_and_reload_if_needed()
     
     return stock_manager.get_transaction_history(account_name, limit)
 
 
 def get_stock_cost_analysis(account_name, stock_code):
     """獲取成本分析 - 對外接口"""
-    # 只在查詢時重新載入最新資料
-    stock_manager.reload_data_from_sheets()
+    # 智能檢查是否需要重新載入
+    stock_manager.check_and_reload_if_needed()
     
     return stock_manager.get_cost_analysis(account_name, stock_code)
 
 
 def get_stock_account_list():
     """獲取帳戶列表 - 對外接口"""
-    # 只在查詢時重新載入最新資料
-    stock_manager.reload_data_from_sheets()
+    # 智能檢查是否需要重新載入
+    stock_manager.check_and_reload_if_needed()
     
     return stock_manager.get_account_list()
 
