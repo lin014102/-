@@ -393,15 +393,14 @@ class StockManager:
         return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
     
     def get_or_create_account(self, account_name):
-        """獲取或建立帳戶"""
+        """獲取或建立帳戶 - 不立即同步"""
         if account_name not in self.stock_data['accounts']:
             self.stock_data['accounts'][account_name] = {
                 'cash': 0,
                 'stocks': {},
                 'created_date': self.get_taiwan_time()
             }
-            if self.sheets_enabled:
-                self.sync_to_sheets_safe()  # 立即同步
+            # 移除立即同步，改為在操作完成後同步
             return True  # 新建立
         return False     # 已存在
     
@@ -939,7 +938,7 @@ class StockManager:
             return "📝 目前沒有任何帳戶"
     
     def reload_data_from_sheets(self):
-        """重新從 Google Sheets 載入最新資料"""
+        """重新從 Google Sheets 載入最新資料（僅在必要時使用）"""
         if self.sheets_enabled:
             print("🔄 重新載入 Google Sheets 最新資料...")
             # 清空記憶體中的資料
@@ -948,10 +947,7 @@ class StockManager:
             self.load_from_sheets_debug()
 
     def handle_command(self, message_text):
-        """處理股票指令的主要函數"""
-        # 先重新載入最新資料，確保與 Google Sheets 同步
-        self.reload_data_from_sheets()
-        
+        """處理股票指令的主要函數 - 移除自動重新載入"""
         parsed = self.parse_command(message_text)
         
         if not parsed:
@@ -1041,7 +1037,7 @@ def handle_stock_command(message_text):
 
 def get_stock_summary(account_name=None):
     """獲取股票摘要 - 對外接口"""
-    # 先重新載入最新資料
+    # 只在查詢時重新載入最新資料
     stock_manager.reload_data_from_sheets()
     
     if account_name:
@@ -1052,7 +1048,7 @@ def get_stock_summary(account_name=None):
 
 def get_stock_transactions(account_name=None, limit=10):
     """獲取交易記錄 - 對外接口"""
-    # 先重新載入最新資料
+    # 只在查詢時重新載入最新資料
     stock_manager.reload_data_from_sheets()
     
     return stock_manager.get_transaction_history(account_name, limit)
@@ -1060,7 +1056,7 @@ def get_stock_transactions(account_name=None, limit=10):
 
 def get_stock_cost_analysis(account_name, stock_code):
     """獲取成本分析 - 對外接口"""
-    # 先重新載入最新資料
+    # 只在查詢時重新載入最新資料
     stock_manager.reload_data_from_sheets()
     
     return stock_manager.get_cost_analysis(account_name, stock_code)
@@ -1068,7 +1064,7 @@ def get_stock_cost_analysis(account_name, stock_code):
 
 def get_stock_account_list():
     """獲取帳戶列表 - 對外接口"""
-    # 先重新載入最新資料
+    # 只在查詢時重新載入最新資料
     stock_manager.reload_data_from_sheets()
     
     return stock_manager.get_account_list()
