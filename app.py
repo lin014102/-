@@ -1,6 +1,6 @@
 """
-LINE Todo Reminder Bot - 時區修正版本
-完全修正語法錯誤的乾淨版本
+LINE Todo Reminder Bot - v3.0 模組化版本
+整合獨立的股票記帳模組
 """
 from flask import Flask, request, jsonify
 import os
@@ -12,12 +12,24 @@ import time
 from datetime import datetime, timedelta
 import pytz
 
+# 匯入股票模組
+from stock_manager import (
+    handle_stock_command,
+    get_stock_summary,
+    get_stock_transactions,
+    get_stock_cost_analysis,
+    get_stock_account_list,
+    get_stock_help,
+    is_stock_command,
+    is_stock_query
+)
+
 app = Flask(__name__)
 
 # 設定台灣時區
 TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 
-# 資料儲存
+# ===== 待辦事項資料儲存 =====
 todos = []
 monthly_todos = []
 short_reminders = []
@@ -33,6 +45,7 @@ CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN', '')
 LINE_API_URL = 'https://api.line.me/v2/bot/message/reply'
 PUSH_API_URL = 'https://api.line.me/v2/bot/message/push'
 
+# ===== 時間相關函數 =====
 def get_taiwan_time():
     """獲取台灣時間"""
     return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
@@ -62,6 +75,7 @@ def is_valid_time_format(time_str):
     except:
         return False
 
+# ===== 待辦事項功能函數 =====
 def parse_date(text):
     """解析日期格式 - 改進版本，更好地處理每月事項"""
     taiwan_now = get_taiwan_datetime()
@@ -104,7 +118,7 @@ def parse_date(text):
                         "date": target_date,
                         "content": content,
                         "date_string": f"{month}/{day}",
-                        "day_only": day  # 新增：只有日期的情況
+                        "day_only": day
                     }
                     
             elif pattern_type == 'month_day':
@@ -236,6 +250,7 @@ def parse_time_reminder(text):
     
     return {"is_valid": False, "error": "格式不正確，請使用：HH:MM+內容\n例如：12:00倒垃圾"}
 
+# ===== LINE API 函數 =====
 def send_push_message(user_id, message_text):
     """發送推播訊息"""
     if not CHANNEL_ACCESS_TOKEN or not user_id:
@@ -289,8 +304,9 @@ def reply_message(reply_token, message_text):
         print(f"回覆失敗: {e} - 台灣時間: {get_taiwan_time()}")
         return False
 
+# ===== 提醒系統函數 =====
 def check_reminders():
-    """檢查並發送提醒 - 改進版本"""
+    """檢查並發送提醒"""
     while True:
         try:
             current_time = get_taiwan_time_hhmm()
@@ -299,15 +315,15 @@ def check_reminders():
             
             print(f"🔍 提醒檢查 - 台灣時間: {get_taiwan_time()}")
             
-            # 檢查定時提醒（每日早晚） - 改進：每次都提醒所有待辦事項
+            # 檢查定時提醒（每日早晚）
             if user_id and (current_time == user_settings['morning_time'] or current_time == user_settings['evening_time']):
                 send_daily_reminder(user_id, current_time)
             
-            # 檢查每月提醒 - 改進：前一天預告 + 當天提醒
-            if current_time == user_settings['evening_time']:  # 晚上檢查明天的每月事項
+            # 檢查每月提醒
+            if current_time == user_settings['evening_time']:
                 check_monthly_preview(taiwan_now, user_id)
             
-            if current_time == "09:00":  # 早上檢查今天的每月事項
+            if current_time == "09:00":
                 check_monthly_reminders(taiwan_now, user_id)
             
             # 檢查短期提醒
@@ -327,18 +343,126 @@ def send_daily_reminder(user_id, current_time):
     time_text = '早安' if current_time == user_settings['morning_time'] else '晚安'
     
     if todos:
-        message = f'{time_icon} {time_text}！您有 {len(todos)} 項待辦事項：\n\n'
+        pending_todos = [todo for todo in todos if not todo.get('completed', False)]
+        completed_todos = [todo for todo in todos if todo.get('completed', False)]
         
-        for i, todo in enumerate(todos[:5], 1):  # 最多顯示5項
-            status = "✅" if todo.get('completed') else "⭕"
-            message += f'{i}. {status} {todo["content"]}\n'
+        if pending_todos:
+            message = f'{time_icon} {time_text}！您有 {len(pending_todos)} 項待辦事項：\n\n'
+            
+            for i, todo in enumerate(pending_todos[:5], 1):
+                date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
+                message += f'{i}. ⭕ {todo["content"]}{date_info}\n'
+            
+            if len(pending_todos) > 5:
+                message += f'\n...還有 {len(pending_todos) - 5} 項未完成\n'
+            
+            if completed_todos:
+                message += f'\n✅ 已完成 {len(completed_todos)} 項：\n'
+                for todo in completed_todos[:2]:
+                    message += f'✅ {todo["content"]}\n'
+                if len(completed_todos) > 2:
+                    message += f'...還有 {len(completed_todos) - 2} 項已完成\n'
+            
+            if current_time == user_settings['morning_time']:
+                message += f'\n💪 新的一天開始了！加油完成這些任務！'
+            else:
+                message += f'\n🌙 檢查一下今天的進度吧！記得為明天做準備！'
+                
+            message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送每日提醒 ({len(pending_todos)} 項待辦) - 台灣時間: {get_taiwan_time()}")
+        else:
+            if current_time == user_settings['morning_time']:
+                message = f'{time_icon} {time_text}！🎉 太棒了！目前沒有待辦事項\n💡 可以新增今天要做的事情'
+            else:
+                message = f'{time_icon} {time_text}！🎉 太棒了！今天的任務都完成了\n😴 好好休息，為明天準備新的目標！'
+            
+            message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+            send_push_message(user_id, message)
+            print(f"✅ 已發送每日提醒 (無待辦事項) - 台灣時間: {get_taiwan_time()}")
+    else:
+        if current_time == user_settings['morning_time']:
+            message = f'{time_icon} {time_text}！✨ 新的一天開始了！\n💡 輸入「新增 事項名稱」來建立今天的目標'
+        else:
+            message = f'{time_icon} {time_text}！😌 今天過得如何？\n💡 別忘了為明天規劃一些目標'
         
-        if len(todos) > 5:
-            message += f'\n...還有 {len(todos) - 5} 項\n'
-        
-        message += f'\n💪 加油完成今天的任務！\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+        message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
         send_push_message(user_id, message)
-        print(f"✅ 已發送每日提醒 - 台灣時間: {get_taiwan_time()}")
+        print(f"✅ 已發送每日提醒 (首次使用) - 台灣時間: {get_taiwan_time()}")
+
+def check_monthly_preview(taiwan_now, user_id):
+    """檢查明天的每月提醒"""
+    if not monthly_todos or not user_id:
+        return
+    
+    tomorrow = taiwan_now + timedelta(days=1)
+    tomorrow_day = tomorrow.day
+    
+    monthly_items_tomorrow = []
+    for item in monthly_todos:
+        target_day = item.get('day', 1)
+        if target_day == tomorrow_day:
+            monthly_items_tomorrow.append(item)
+    
+    if monthly_items_tomorrow:
+        message = f"📅 每月提醒預告！\n\n明天 ({tomorrow.strftime('%m/%d')}) 有 {len(monthly_items_tomorrow)} 項每月固定事項：\n\n"
+        
+        for i, item in enumerate(monthly_items_tomorrow, 1):
+            message += f"{i}. 🔄 {item['content']}\n"
+        
+        message += f"\n💡 明天早上會自動加入待辦清單並提醒您\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+        
+        send_push_message(user_id, message)
+        print(f"✅ 已發送每月預告提醒，明天有 {len(monthly_items_tomorrow)} 項事項 - 台灣時間: {get_taiwan_time()}")
+
+def check_monthly_reminders(taiwan_now, user_id):
+    """檢查每月提醒"""
+    if not monthly_todos or not user_id:
+        return
+    
+    current_day = taiwan_now.day
+    
+    monthly_items_today = []
+    for item in monthly_todos:
+        target_day = item.get('day', 1)
+        if target_day == current_day:
+            monthly_items_today.append(item)
+    
+    if monthly_items_today:
+        added_items = []
+        for item in monthly_items_today:
+            already_exists = any(
+                todo['content'] == item['content'] and 
+                todo.get('created_at', '').startswith(taiwan_now.strftime('%Y/%m/%d'))
+                for todo in todos
+            )
+            
+            if not already_exists:
+                todo_item = {
+                    'id': len(todos) + 1,
+                    'content': item['content'],
+                    'created_at': get_taiwan_time(),
+                    'completed': False,
+                    'has_date': True,
+                    'target_date': taiwan_now.strftime('%Y/%m/%d'),
+                    'date_string': f"{taiwan_now.month}/{taiwan_now.day}",
+                    'from_monthly': True
+                }
+                todos.append(todo_item)
+                added_items.append(item['content'])
+        
+        if added_items:
+            message = f"🔄 每月提醒！今天 ({taiwan_now.strftime('%m/%d')}) 的固定事項：\n\n"
+            for i, content in enumerate(added_items, 1):
+                message += f"{i}. 📅 {content}\n"
+            
+            message += f"\n✅ 已自動加入今日待辦清單"
+            message += f"\n💡 昨天已經預告過，現在正式提醒！"
+            message += f"\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
 
 def check_short_reminders(taiwan_now):
     """檢查短期提醒"""
@@ -386,55 +510,6 @@ def check_time_reminders(taiwan_now):
                 print(f"✅ 已發送時間提醒: {reminder['content']} - 台灣時間: {get_taiwan_time()}")
             time_reminders.remove(reminder)
 
-def check_monthly_reminders(taiwan_now, user_id):
-    """檢查每月提醒"""
-    if not monthly_todos or not user_id:
-        return
-    
-    current_day = taiwan_now.day
-    
-    # 檢查是否有符合今天日期的每月事項
-    monthly_items_today = []
-    for item in monthly_todos:
-        target_day = item.get('day', 1)
-        if target_day == current_day:
-            monthly_items_today.append(item)
-    
-    if monthly_items_today:
-        # 自動將每月事項加入今日待辦
-        added_items = []
-        for item in monthly_items_today:
-            # 檢查是否已經加入過（避免重複）
-            already_exists = any(
-                todo['content'] == item['content'] and 
-                todo.get('created_at', '').startswith(taiwan_now.strftime('%Y/%m/%d'))
-                for todo in todos
-            )
-            
-            if not already_exists:
-                todo_item = {
-                    'id': len(todos) + 1,
-                    'content': item['content'],
-                    'created_at': get_taiwan_time(),
-                    'completed': False,
-                    'has_date': True,
-                    'target_date': taiwan_now.strftime('%Y/%m/%d'),
-                    'date_string': f"{taiwan_now.month}/{taiwan_now.day}",
-                    'from_monthly': True
-                }
-                todos.append(todo_item)
-                added_items.append(item['content'])
-        
-        if added_items:
-            # 發送每月提醒
-            message = f"🔄 每月提醒！今天有 {len(added_items)} 項固定事項：\n\n"
-            for i, content in enumerate(added_items, 1):
-                message += f"{i}. 📅 {content}\n"
-            message += f"\n✅ 已自動加入今日待辦清單\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
-            
-            send_push_message(user_id, message)
-            print(f"✅ 已發送每月提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
-
 # 啟動提醒檢查執行緒
 reminder_thread = threading.Thread(target=check_reminders, daemon=True)
 reminder_thread.start()
@@ -464,9 +539,10 @@ def keep_alive():
 keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
 keep_alive_thread.start()
 
+# ===== Flask 路由 =====
 @app.route('/')
 def home():
-    return f'LINE Todo Reminder Bot v2.2 - 提醒機制已改進！當前台灣時間: {get_taiwan_time()}'
+    return f'LINE Todo Reminder Bot v3.0 - 模組化設計！當前台灣時間: {get_taiwan_time()}'
 
 @app.route('/health')
 def health():
@@ -501,6 +577,12 @@ def health():
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
         'todos_count': len(todos),
+    return {
+        'status': 'healthy',
+        'taiwan_time': get_taiwan_time(),
+        'taiwan_time_hhmm': get_taiwan_time_hhmm(),
+        'server_timezone': str(taiwan_now.tzinfo),
+        'todos_count': len(todos),
         'monthly_todos_count': len(monthly_todos),
         'short_reminders': len(short_reminders),
         'time_reminders': len(time_reminders),
@@ -508,12 +590,12 @@ def health():
         'evening_time': user_settings['evening_time'],
         'next_reminder': next_reminder_str,
         'has_user': user_settings['user_id'] is not None,
-        'version': '2.2_improved_reminders'
+        'version': '3.0_modular_design'
     }
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """LINE Webhook 處理"""
+    """LINE Webhook 處理 - 模組化版本"""
     try:
         data = request.get_json()
         
@@ -528,8 +610,45 @@ def webhook():
                 
                 print(f"用戶訊息: {message_text} - 台灣時間: {get_taiwan_time()}")
                 
+                # === 股票功能路由（使用獨立模組） ===
+                if is_stock_command(message_text):
+                    reply_text = handle_stock_command(message_text)
+                
+                # 股票查詢功能
+                elif message_text == '總覽':
+                    reply_text = get_stock_summary()
+                
+                elif message_text.endswith('查詢'):
+                    account_name = message_text[:-2].strip()
+                    if account_name in ['股票', '帳戶']:
+                        reply_text = get_stock_summary()
+                    else:
+                        reply_text = get_stock_summary(account_name)
+                
+                elif message_text == '交易記錄':
+                    reply_text = get_stock_transactions()
+                
+                elif message_text.startswith('交易記錄 '):
+                    account_name = message_text[5:].strip()
+                    reply_text = get_stock_transactions(account_name)
+                
+                elif message_text.startswith('成本查詢 ') and ' ' in message_text[5:]:
+                    parts = message_text[5:].strip().split(' ', 1)
+                    if len(parts) == 2:
+                        account_name, stock_code = parts
+                        reply_text = get_stock_cost_analysis(account_name, stock_code)
+                    else:
+                        reply_text = "❌ 格式不正確\n💡 例如：成本查詢 爸爸 2330"
+                
+                elif message_text == '帳戶列表':
+                    reply_text = get_stock_account_list()
+                
+                elif message_text == '股票幫助':
+                    reply_text = get_stock_help()
+
+                # === 待辦事項功能路由 ===
                 # 查詢時間
-                if message_text == '查詢時間':
+                elif message_text == '查詢時間':
                     reply_text = f"🇹🇼 台灣當前時間：{get_taiwan_time()}\n⏰ 目前提醒時間設定：\n🌅 早上：{user_settings['morning_time']}\n🌙 晚上：{user_settings['evening_time']}\n\n✅ 時區已修正為台灣時間！"
 
                 # 設定提醒時間
@@ -600,30 +719,31 @@ def webhook():
 
                 # 幫助訊息
                 elif message_text in ['幫助', 'help', '說明']:
-                    reply_text = """📋 完整功能待辦事項機器人 v2.2：
+                    reply_text = """📋 LINE Todo Bot v3.0 完整功能：
 
-🔹 基本功能：
+🔹 待辦事項：
 - 新增 [事項] - 新增待辦事項
-- 新增 8/9號繳卡費 - 新增有日期的事項
-- 查詢 - 查看所有待辦事項
-- 刪除 [編號] - 刪除指定事項
-- 完成 [編號] - 標記為已完成
+- 查詢 - 查看待辦清單
+- 刪除 [編號] - 刪除事項
+- 完成 [編號] - 標記完成
 
 ⏰ 提醒功能：
 - 5分鐘後倒垃圾 - 短期提醒
 - 12:00開會 - 時間提醒
 - 早上時間 09:00 - 設定早上提醒
 - 晚上時間 18:00 - 設定晚上提醒
-- 查詢時間 - 查看當前台灣時間
 
 🔄 每月功能：
 - 每月新增 5號繳卡費 - 每月固定事項
 - 每月清單 - 查看每月事項
 
-🆕 v2.2 改進：
-• 每日早晚都會提醒所有待辦事項，直到刪除
-• 每月事項：前一天預告 + 當天自動加入待辦
-• 完整台灣時區支援"""
+💰 股票記帳：
+- 爸爸入帳 50000 - 入金
+- 爸爸買 2330 100 50000 0820 - 買股票（簡化版）
+- 總覽 - 查看所有帳戶
+- 股票幫助 - 股票功能詳細說明
+
+🆕 v3.0 新功能：模組化設計，股票功能獨立！"""
 
                 # 待辦事項功能
                 elif message_text.startswith('新增 '):
@@ -681,21 +801,18 @@ def webhook():
                     except:
                         reply_text = "❌ 請輸入正確編號"
 
-                # 每月功能 - 完全修正版本
+                # 每月功能
                 elif message_text.startswith('每月新增 '):
                     todo_text = message_text[5:].strip()
                     if todo_text:
                         parsed = parse_date(todo_text)
                         print(f"DEBUG: 解析結果: {parsed}")
                         
-                        # 完全修正：更智能的日期處理
                         if parsed.get('has_date'):
                             if parsed.get('day_only'):
-                                # 只有日期的情況，例如：24號繳水電卡費
                                 day = parsed['day_only']
                                 date_display = f"{day}號"
                             elif parsed.get('date_string'):
-                                # 有月/日的情況，例如：8/24繳水電卡費
                                 try:
                                     day = int(parsed['date_string'].split('/')[1])
                                     date_display = f"{day}號"
@@ -706,7 +823,6 @@ def webhook():
                                 day = 1
                                 date_display = "1號"
                         else:
-                            # 沒有指定日期，例如：每月新增 買菜
                             day = 1
                             date_display = "1號"
                         
@@ -728,7 +844,6 @@ def webhook():
 
                 elif message_text == '每月清單':
                     if monthly_todos:
-                        # 清理舊資料：為沒有 date_display 的項目補充
                         for item in monthly_todos:
                             if not item.get('date_display'):
                                 if item.get('has_date') and item.get('date_string'):
@@ -748,10 +863,8 @@ def webhook():
                     else:
                         reply_text = "📝 目前沒有每月固定事項\n💡 輸入「每月新增 5號繳卡費」來新增"
 
-                # 新增：清理每月資料的指令
                 elif message_text == '清理每月':
                     if monthly_todos:
-                        # 修正所有每月事項的顯示格式
                         fixed_count = 0
                         for item in monthly_todos:
                             if not item.get('date_display') or 'every month' in str(item.get('date_display', '')):
@@ -773,11 +886,11 @@ def webhook():
 
                 # 測試功能
                 elif message_text == '測試':
-                    reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 改進的提醒功能已啟用\n🔄 每日多次提醒 + 每月預告機制\n💡 輸入「幫助」查看所有功能"
+                    reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 待辦提醒功能已啟用\n💰 股票記帳模組已載入\n🔧 模組化設計運作中\n💡 輸入「幫助」或「股票幫助」查看功能"
 
                 # 預設回應
                 else:
-                    reply_text = f"您說：{message_text}\n🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}\n\n💡 輸入「幫助」查看可用功能"
+                    reply_text = f"您說：{message_text}\n🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}\n\n💡 輸入「幫助」查看待辦功能\n💰 輸入「股票幫助」查看股票功能"
                 
                 # 發送回覆
                 reply_message(reply_token, reply_text)
@@ -789,6 +902,9 @@ def webhook():
         return 'OK', 200
 
 if __name__ == '__main__':
-    print(f"🚀 LINE Bot 啟動 - 台灣時間: {get_taiwan_time()}")
+    print(f"🚀 LINE Bot v3.0 模組化版本啟動 - 台灣時間: {get_taiwan_time()}")
+    print(f"📋 待辦事項功能：已啟用")
+    print(f"💰 股票記帳模組：已載入")
+    print(f"🔧 模組化設計：運作中")
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
