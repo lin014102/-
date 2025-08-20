@@ -77,33 +77,24 @@ def is_valid_time_format(time_str):
 
 # ===== 待辦事項功能函數 =====
 def parse_date(text):
-    """解析日期格式 - 改進版本，更好地處理每月事項"""
+    """解析日期格式"""
     taiwan_now = get_taiwan_datetime()
     current_year = taiwan_now.year
     
-    # 改進的日期模式，更靈活地匹配
     patterns = [
-        # 格式：24號繳水電卡費
         (r'(\d{1,2})號(.+)', 'day_only'),
-        # 格式：8/24繳水電卡費 或 8/24號繳水電卡費
         (r'(\d{1,2})\/(\d{1,2})號?(.+)', 'month_day'),
-        # 格式：繳水電卡費24號
         (r'(.+?)(\d{1,2})號', 'content_day'),
-        # 格式：繳水電卡費8/24
         (r'(.+?)(\d{1,2})\/(\d{1,2})號?', 'content_month_day')
     ]
     
     for pattern, pattern_type in patterns:
         match = re.search(pattern, text)
         if match:
-            print(f"DEBUG: 匹配到模式 {pattern_type}: {match.groups()}")
-            
             if pattern_type == 'day_only':
-                # 24號繳水電卡費
                 day = int(match.group(1))
                 content = match.group(2).strip()
                 if 1 <= day <= 31 and content:
-                    # 使用當前月份
                     month = taiwan_now.month
                     target_date = taiwan_now.replace(year=current_year, month=month, day=day,
                                                    hour=0, minute=0, second=0, microsecond=0)
@@ -122,7 +113,6 @@ def parse_date(text):
                     }
                     
             elif pattern_type == 'month_day':
-                # 8/24繳水電卡費
                 month = int(match.group(1))
                 day = int(match.group(2))
                 content = match.group(3).strip()
@@ -141,7 +131,6 @@ def parse_date(text):
                     }
                     
             elif pattern_type == 'content_day':
-                # 繳水電卡費24號
                 content = match.group(1).strip()
                 day = int(match.group(2))
                 
@@ -164,7 +153,6 @@ def parse_date(text):
                     }
                     
             elif pattern_type == 'content_month_day':
-                # 繳水電卡費8/24
                 content = match.group(1).strip()
                 month = int(match.group(2))
                 day = int(match.group(3))
@@ -182,7 +170,6 @@ def parse_date(text):
                         "date_string": f"{month}/{day}"
                     }
     
-    print(f"DEBUG: 沒有匹配到任何日期模式，原文: {text}")
     return {"has_date": False, "content": text}
 
 def parse_short_reminder(text):
@@ -315,24 +302,19 @@ def check_reminders():
             
             print(f"🔍 提醒檢查 - 台灣時間: {get_taiwan_time()}")
             
-            # 檢查定時提醒（每日早晚）
             if user_id and (current_time == user_settings['morning_time'] or current_time == user_settings['evening_time']):
                 send_daily_reminder(user_id, current_time)
             
-            # 檢查每月提醒
             if current_time == user_settings['evening_time']:
                 check_monthly_preview(taiwan_now, user_id)
             
             if current_time == "09:00":
                 check_monthly_reminders(taiwan_now, user_id)
             
-            # 檢查短期提醒
             check_short_reminders(taiwan_now)
-            
-            # 檢查時間提醒
             check_time_reminders(taiwan_now)
             
-            time.sleep(60)  # 每分鐘檢查一次
+            time.sleep(60)
         except Exception as e:
             print(f"提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
             time.sleep(60)
@@ -521,7 +503,7 @@ def keep_alive():
     
     while True:
         try:
-            time.sleep(240)  # 4 分鐘
+            time.sleep(240)
             response = requests.get(f'{base_url}/health', timeout=15)
             
             if response.status_code == 200:
@@ -571,13 +553,7 @@ def health():
     except:
         next_reminder_str = "計算錯誤"
     
-    return {
-        'status': 'healthy',
-        'taiwan_time': get_taiwan_time(),
-        'taiwan_time_hhmm': get_taiwan_time_hhmm(),
-        'server_timezone': str(taiwan_now.tzinfo),
-        'todos_count': len(todos),
-    return {
+    return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
@@ -591,7 +567,7 @@ def health():
         'next_reminder': next_reminder_str,
         'has_user': user_settings['user_id'] is not None,
         'version': '3.0_modular_design'
-    }
+    })
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -605,16 +581,14 @@ def webhook():
                 message_text = event['message']['text'].strip()
                 user_id = event['source']['userId']
                 
-                # 儲存用戶ID
                 user_settings['user_id'] = user_id
                 
                 print(f"用戶訊息: {message_text} - 台灣時間: {get_taiwan_time()}")
                 
-                # === 股票功能路由（使用獨立模組） ===
+                # === 股票功能路由 ===
                 if is_stock_command(message_text):
                     reply_text = handle_stock_command(message_text)
                 
-                # 股票查詢功能
                 elif message_text == '總覽':
                     reply_text = get_stock_summary()
                 
@@ -647,11 +621,9 @@ def webhook():
                     reply_text = get_stock_help()
 
                 # === 待辦事項功能路由 ===
-                # 查詢時間
                 elif message_text == '查詢時間':
                     reply_text = f"🇹🇼 台灣當前時間：{get_taiwan_time()}\n⏰ 目前提醒時間設定：\n🌅 早上：{user_settings['morning_time']}\n🌙 晚上：{user_settings['evening_time']}\n\n✅ 時區已修正為台灣時間！"
 
-                # 設定提醒時間
                 elif message_text.startswith('早上時間 '):
                     time_str = message_text[5:].strip()
                     if is_valid_time_format(time_str):
@@ -668,7 +640,6 @@ def webhook():
                     else:
                         reply_text = "❌ 時間格式不正確，請使用 HH:MM 格式，例如：19:00"
 
-                # 短期提醒
                 elif any(keyword in message_text for keyword in ['分鐘後', '小時後', '秒後']):
                     parsed = parse_short_reminder(message_text)
                     if parsed['is_valid']:
@@ -688,7 +659,6 @@ def webhook():
                     else:
                         reply_text = f"❌ {parsed['error']}"
 
-                # 時間提醒
                 elif re.match(r'^\d{1,2}:\d{2}.+', message_text):
                     parsed = parse_time_reminder(message_text)
                     if parsed['is_valid']:
@@ -717,7 +687,6 @@ def webhook():
                     else:
                         reply_text = f"❌ {parsed['error']}"
 
-                # 幫助訊息
                 elif message_text in ['幫助', 'help', '說明']:
                     reply_text = """📋 LINE Todo Bot v3.0 完整功能：
 
@@ -745,7 +714,6 @@ def webhook():
 
 🆕 v3.0 新功能：模組化設計，股票功能獨立！"""
 
-                # 待辦事項功能
                 elif message_text.startswith('新增 '):
                     todo_text = message_text[3:].strip()
                     if todo_text:
@@ -801,12 +769,10 @@ def webhook():
                     except:
                         reply_text = "❌ 請輸入正確編號"
 
-                # 每月功能
                 elif message_text.startswith('每月新增 '):
                     todo_text = message_text[5:].strip()
                     if todo_text:
                         parsed = parse_date(todo_text)
-                        print(f"DEBUG: 解析結果: {parsed}")
                         
                         if parsed.get('has_date'):
                             if parsed.get('day_only'):
@@ -836,7 +802,6 @@ def webhook():
                             'date_display': date_display
                         }
                         monthly_todos.append(monthly_item)
-                        print(f"DEBUG: 新增的每月事項: {monthly_item}")
                         
                         reply_text = f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {date_display} 提醒\n📋 目前共有 {len(monthly_todos)} 項每月事項\n💡 會在前一天預告 + 當天提醒"
                     else:
@@ -863,36 +828,12 @@ def webhook():
                     else:
                         reply_text = "📝 目前沒有每月固定事項\n💡 輸入「每月新增 5號繳卡費」來新增"
 
-                elif message_text == '清理每月':
-                    if monthly_todos:
-                        fixed_count = 0
-                        for item in monthly_todos:
-                            if not item.get('date_display') or 'every month' in str(item.get('date_display', '')):
-                                if item.get('has_date') and item.get('date_string'):
-                                    try:
-                                        day = int(item['date_string'].split('/')[1])
-                                        item['date_display'] = f"{day}號"
-                                        fixed_count += 1
-                                    except:
-                                        item['date_display'] = f"{item.get('day', 1)}號"
-                                        fixed_count += 1
-                                else:
-                                    item['date_display'] = f"{item.get('day', 1)}號"
-                                    fixed_count += 1
-                        
-                        reply_text = f"🔧 已修正 {fixed_count} 項每月事項的顯示格式\n💡 現在輸入「每月清單」查看修正結果"
-                    else:
-                        reply_text = "📝 目前沒有每月固定事項需要清理"
-
-                # 測試功能
                 elif message_text == '測試':
                     reply_text = f"✅ 機器人正常運作！\n🇹🇼 當前台灣時間：{get_taiwan_time()}\n⏰ 待辦提醒功能已啟用\n💰 股票記帳模組已載入\n🔧 模組化設計運作中\n💡 輸入「幫助」或「股票幫助」查看功能"
 
-                # 預設回應
                 else:
                     reply_text = f"您說：{message_text}\n🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}\n\n💡 輸入「幫助」查看待辦功能\n💰 輸入「股票幫助」查看股票功能"
                 
-                # 發送回覆
                 reply_message(reply_token, reply_text)
         
         return 'OK', 200
