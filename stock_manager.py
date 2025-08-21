@@ -1,6 +1,6 @@
 """
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
-多帳戶股票記帳系統 v2.2 - 代號整合版
+多帳戶股票記帳系統 v2.3 - 智能代號版
 """
 import re
 import os
@@ -25,6 +25,39 @@ class StockManager:
             'transactions': [],
             'stock_codes': {}
         }
+        
+        # 新增：股票代號智能對應表
+        self.smart_stock_mapping = {
+            # ETF前導零問題
+            '915': '00915.TW',    # 凱基優選高股息30
+            '929': '00929.TW',    # 復華台灣科技優息
+            '919': '00919.TW',    # 群益台灣精選高息
+            '878': '00878.TW',    # 國泰永續高股息
+            '692': '00692.TW',    # 富邦公司治理
+            '713': '00713.TW',    # 元大台灣高息低波
+            '50': '0050.TW',      # 元大台灣50
+            '56': '0056.TW',      # 元大高股息
+            
+            # 上櫃股票(.TWO)
+            '3078': '3078.TWO',   # 僑威
+            '3374': '3374.TWO',   # 精材
+            '5483': '5483.TWO',   # 中美晶
+            '4541': '4541.TWO',   # 晟田
+            
+            # 常見上市股票
+            '2330': '2330.TW',    # 台積電
+            '2317': '2317.TW',    # 鴻海
+            '2454': '2454.TW',    # 聯發科
+            '2412': '2412.TW',    # 中華電
+            '2881': '2881.TW',    # 富邦金
+            '2882': '2882.TW',    # 國泰金
+            '2886': '2886.TW',    # 兆豐金
+            '2887': '2887.TW',    # 台新金
+            '2891': '2891.TW',    # 中信金
+        }
+        
+        # 成功查詢記錄（動態學習）
+        self.learned_mappings = {}
         
         # Google Sheets 設定
         self.spreadsheet_url = "https://docs.google.com/spreadsheets/d/1EACr2Zu7_regqp3Po7AlNE4ZcjazKbgyvz-yYNYtcCs/edit?usp=sharing"
@@ -348,6 +381,165 @@ class StockManager:
         """獲取台灣時間"""
         return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
     
+    def normalize_stock_code(self, stock_code):
+        """智能標準化股票代號"""
+        if not stock_code:
+            return None
+        
+        clean_code = str(stock_code).strip()
+        
+        # 如果已經有後綴，直接返回
+        if '.TW' in clean_code.upper() or '.TWO' in clean_code.upper():
+            return clean_code.upper()
+        
+        # 檢查學習記錄
+        if clean_code in self.learned_mappings:
+            return self.learned_mappings[clean_code]
+        
+        # 檢查預設對應表
+        if clean_code in self.smart_stock_mapping:
+            return self.smart_stock_mapping[clean_code]
+        
+        # 智能判斷規則
+        if clean_code.isdigit():
+            code_int = int(clean_code)
+            code_len = len(clean_code)
+            
+            # ETF規則：1-3位數，補零
+            if code_len <= 3:
+                return f"00{clean_code.zfill(2)}.TW"
+            
+            # 上櫃股票規則：3000-3999, 5000以上
+            elif (3000 <= code_int <= 3999) or (code_int >= 5000):
+                return f"{clean_code}.TWO"
+            
+            # 一般上市股票
+            else:
+                return f"{clean_code}.TW"
+        
+        # 預設上市
+        return f"{clean_code}.TW"
+    
+    def _query_yahoo_finance_safe(self, formatted_code):
+        """安全的Yahoo Finance查詢（改進版）"""
+        try:
+            import requests
+            import time
+            
+            # 隨機延遲
+            time.sleep(0.3)
+            
+            # 多個API端點嘗試
+            urls = [
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{formatted_code}",
+                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{formatted_code}?modules=price"
+            ]
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
+            }
+            
+            for url in urls:
+                try:
+                    response = requests.get(url, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # 第一種API格式
+                    if 'chart' in data:
+                        if (data.get('chart') and 
+                            data['chart'].get('result') and 
+                            len(data['chart']['result']) > 0 and
+                            data['chart']['result'][0].get('meta')):
+                            
+                            meta = data['chart']['result'][0]['meta']
+                            price = meta.get('regularMarketPrice')
+                            
+                            if price and price > 0:
+                                return round(float(price), 2)
+                    
+                    # 第二種API格式
+                    elif 'quoteSummary' in data:
+                        if (data.get('quoteSummary') and 
+                            data['quoteSummary'].get('result') and
+                            len(data['quoteSummary']['result']) > 0):
+                            
+                            price_info = data['quoteSummary']['result'][0].get('price', {})
+                            price = price_info.get('regularMarketPrice', {}).get('raw')
+                            
+                            if price and price > 0:
+                                return round(float(price), 2)
+                    
+                except Exception as e:
+                    print(f"   API {url} 失敗: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"   查詢異常: {e}")
+            
+        return None
+    
+    def get_stock_price(self, stock_code):
+        """改進的股票價格查詢 - 智能版"""
+        if not stock_code:
+            return None
+        
+        original_code = str(stock_code).strip()
+        
+        try:
+            # 第一次嘗試：使用智能標準化
+            primary_code = self.normalize_stock_code(original_code)
+            print(f"🔍 查詢 {original_code} -> {primary_code}")
+            
+            price = self._query_yahoo_finance_safe(primary_code)
+            if price and price > 0:
+                # 記錄成功的對應
+                self.learned_mappings[original_code] = primary_code
+                print(f"✅ 查詢成功: {primary_code} = {price}元")
+                return price
+            
+            # 第二次嘗試：如果是上櫃失敗，試上市
+            if primary_code.endswith('.TWO'):
+                backup_code = primary_code.replace('.TWO', '.TW')
+                print(f"🔍 備用嘗試: {backup_code}")
+                
+                price = self._query_yahoo_finance_safe(backup_code)
+                if price and price > 0:
+                    self.learned_mappings[original_code] = backup_code
+                    print(f"✅ 備用查詢成功: {backup_code} = {price}元")
+                    return price
+            
+            # 第三次嘗試：如果是上市失敗，試上櫃
+            elif primary_code.endswith('.TW') and not primary_code.startswith('00'):
+                backup_code = primary_code.replace('.TW', '.TWO')
+                print(f"🔍 備用嘗試: {backup_code}")
+                
+                price = self._query_yahoo_finance_safe(backup_code)
+                if price and price > 0:
+                    self.learned_mappings[original_code] = backup_code
+                    print(f"✅ 備用查詢成功: {backup_code} = {price}元")
+                    return price
+            
+            print(f"❌ 所有查詢都失敗: {original_code}")
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ 股價查詢錯誤: {e}")
+            return None
+    
+    def show_learned_mappings(self):
+        """顯示程式學到的股票代號對應"""
+        if not self.learned_mappings:
+            return "📝 目前沒有學習記錄"
+        
+        result = "🎓 程式學習記錄：\n\n"
+        for original, learned in self.learned_mappings.items():
+            result += f"📈 {original} → {learned}\n"
+        
+        return result
+    
     def get_or_create_account(self, account_name):
         """獲取或建立帳戶"""
         if account_name not in self.stock_data['accounts']:
@@ -358,91 +550,6 @@ class StockManager:
             }
             return True
         return False
-    
-    def get_stock_price(self, stock_code):
-        """查詢股票即時價格 - 改進版"""
-        try:
-            import requests
-            import json
-            import time
-            
-            # 確保股票代號格式正確
-            if not stock_code.endswith('.TW'):
-                formatted_code = f"{stock_code}.TW"
-            else:
-                formatted_code = stock_code
-            
-            # 方法1: Yahoo Finance API
-            try:
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{formatted_code}"
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                }
-                
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                
-                if (data.get('chart') and 
-                    data['chart'].get('result') and 
-                    len(data['chart']['result']) > 0 and
-                    data['chart']['result'][0].get('meta')):
-                    
-                    meta = data['chart']['result'][0]['meta']
-                    price = meta.get('regularMarketPrice')
-                    
-                    if price and price > 0:
-                        print(f"✅ 取得 {stock_code} 股價: {price}")
-                        return round(float(price), 2)
-                
-            except requests.exceptions.RequestException as e:
-                print(f"⚠️ Yahoo Finance API 請求失敗: {e}")
-            except (KeyError, TypeError, ValueError) as e:
-                print(f"⚠️ Yahoo Finance 資料解析失敗: {e}")
-            
-            # 方法2: 備用 Yahoo Finance URL
-            try:
-                time.sleep(0.5)  # 避免請求過於頻繁
-                url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{formatted_code}?modules=price"
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                }
-                
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                
-                if (data.get('quoteSummary') and 
-                    data['quoteSummary'].get('result') and
-                    len(data['quoteSummary']['result']) > 0):
-                    
-                    price_info = data['quoteSummary']['result'][0].get('price', {})
-                    price = price_info.get('regularMarketPrice', {}).get('raw')
-                    
-                    if price and price > 0:
-                        print(f"✅ 備用方法取得 {stock_code} 股價: {price}")
-                        return round(float(price), 2)
-                        
-            except requests.exceptions.RequestException as e:
-                print(f"⚠️ 備用 API 請求失敗: {e}")
-            except (KeyError, TypeError, ValueError) as e:
-                print(f"⚠️ 備用 API 資料解析失敗: {e}")
-            
-            # 檢查股票代號是否有效
-            if stock_code.isdigit() and len(stock_code) == 4:
-                print(f"⚠️ {stock_code} 股價查詢失敗 - 可能原因:")
-                print(f"   • 股票代號不存在或已下市")
-                print(f"   • 股票暫停交易")
-                print(f"   • 目前為非交易時間")
-                print(f"   • API 服務暫時不可用")
-            else:
-                print(f"⚠️ {stock_code} 股票代號格式可能不正確")
-            
-            return None
-                
-        except Exception as e:
-            print(f"⚠️ 股價查詢發生未預期錯誤: {e}")
-            return None
     
     def set_stock_code(self, stock_name, stock_code):
         """設定股票代號對應"""
@@ -553,7 +660,7 @@ class StockManager:
         result += "• 新交易請使用格式：爸爸買 台積電 2330 100 50000 0820\n"
         result += "• 股價資料來源：Yahoo Finance\n"
         result += "• 交易時間：週一至週五 09:00-13:30\n"
-        result += "• 如持續無法取得股價，請檢查股票代號是否正確"
+        result += "• 程式會自動學習股票代號格式"
         
         return result
     
@@ -563,6 +670,9 @@ class StockManager:
         
         if message_text == '批量設定代號':
             return {'type': 'batch_code_guide'}
+        
+        elif message_text == '學習記錄':
+            return {'type': 'show_learned'}
         
         elif match := re.match(r'檢查代號(?:\s+(.+))?', message_text):
             account_name = match.group(1).strip() if match.group(1) else None
@@ -589,7 +699,7 @@ class StockManager:
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
         
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4}), message_text):
             account, stock_name, stock_code, quantity, amount, date = match.groups()
             try:
                 year = datetime.now().year
@@ -601,7 +711,7 @@ class StockManager:
             return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
         
-        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4}), message_text):
             account, stock_name, stock_code, quantity, amount, date = match.groups()
             try:
                 year = datetime.now().year
@@ -1122,6 +1232,9 @@ class StockManager:
 
 💡 使用「檢查代號」查看哪些股票還沒設定代號"""
             
+            elif parsed['type'] == 'show_learned':
+                return self.show_learned_mappings()
+            
             elif parsed['type'] == 'check_codes':
                 return self.get_missing_stock_codes(parsed.get('account'))
             
@@ -1132,7 +1245,7 @@ class StockManager:
     
     def get_help_text(self):
         """獲取幫助訊息"""
-        return """💰 多帳戶股票記帳功能 v2.2 - 代號整合版：
+        return """💰 多帳戶股票記帳功能 v2.3 - 智能代號版：
 
 📋 帳戶管理：
 - 爸爸入帳 50000 - 入金
@@ -1160,6 +1273,11 @@ class StockManager:
 - 即時損益 爸爸 - 查看個人即時損益
 - 股價查詢 台積電 - 查詢即時股價
 
+🎓 智能功能（新增）：
+- 學習記錄 - 查看程式學到的股票代號對應
+- 檢查代號 - 檢查缺少代號的股票
+- 設定代號 股票名稱 代號 - 手動設定代號
+
 📝 新格式說明：
 • 🆕 交易時必須包含股票代號：
   - 持有：爸爸持有 股票名稱 代號 數量 總成本
@@ -1168,15 +1286,21 @@ class StockManager:
 • 日期：0820 = 8月20日，1225 = 12月25日
 • 股票代號：台股請使用4位數代號（如：2330）
 
-☁️ v2.2 新功能：
-• 🆕 股票代號自動儲存在 Google Sheets
-• 🆕 即時損益無需額外設定代號
-• 🆕 重新部署後代號不會丟失
+☁️ v2.3 新功能：
+• 🆕 智能代號判斷 - 自動處理 ETF 前導零問題
+• 🆕 自動學習機制 - 查詢成功後記住正確格式
+• 🆕 多重備援查詢 - 上市/上櫃自動切換
+• 🆕 改進的股價 API - 更穩定的連線
 • ✅ Google Sheets 雲端同步
 • ✅ 支援自訂股票名稱
 • ✅ 資料永久保存
 • ✅ 即時股價查詢
-• ✅ 未實現損益計算"""
+• ✅ 未實現損益計算
+
+💡 智能代號範例：
+• 輸入 915 → 自動變成 00915.TW (凱基ETF)
+• 輸入 3078 → 自動判斷 3078.TWO (上櫃股票)
+• 輸入 2330 → 自動變成 2330.TW (上市股票)"""
 
 
 # 建立全域實例
@@ -1242,7 +1366,7 @@ def is_stock_query(message_text):
     query_patterns = [
         '總覽', '帳戶列表', '股票幫助', '交易記錄', '成本查詢',
         '即時損益', '股價查詢', '股價', '檢查代號', '批量設定代號',
-        '估價查詢', '即時股價查詢'
+        '估價查詢', '即時股價查詢', '學習記錄'
     ]
     
     return any(pattern in message_text for pattern in query_patterns) or \
@@ -1253,6 +1377,11 @@ def is_stock_query(message_text):
 
 if __name__ == "__main__":
     sm = StockManager()
+    print("=== 測試智能代號功能 ===")
+    print("測試 915:", sm.normalize_stock_code("915"))
+    print("測試 3078:", sm.normalize_stock_code("3078"))
+    print("測試 2330:", sm.normalize_stock_code("2330"))
+    print()
     print("=== 測試持有（新格式）===")
     print(sm.handle_command("爸爸持有 台積電 2330 200 120000"))
     print()
@@ -1268,5 +1397,9 @@ if __name__ == "__main__":
     print("=== 測試總覽 ===")
     print(sm.get_all_accounts_summary())
     print()
-    print("=== 測試即時損益 ===")
-    print(sm.get_realtime_pnl())
+    print("=== 測試股價查詢 ===")
+    print("915股價:", sm.get_stock_price("915"))
+    print("3078股價:", sm.get_stock_price("3078"))
+    print()
+    print("=== 測試學習記錄 ===")
+    print(sm.show_learned_mappings())
