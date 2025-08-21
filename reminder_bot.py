@@ -149,12 +149,19 @@ class ReminderBot:
     def set_morning_time(self, time_str):
         """設定早上提醒時間"""
         self.user_settings['morning_time'] = time_str
-        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間"
+        # 重置防重複標記，允許新時間立即提醒
+        self.last_reminders['daily_morning_date'] = None
+        self.last_reminders['dated_todo_morning_date'] = None
+        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效"
     
     def set_evening_time(self, time_str):
         """設定晚上提醒時間"""
         self.user_settings['evening_time'] = time_str
-        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間"
+        # 重置防重複標記，允許新時間立即提醒
+        self.last_reminders['daily_evening_date'] = None
+        self.last_reminders['dated_todo_evening_date'] = None
+        self.last_reminders['dated_todo_preview_date'] = None
+        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效"
     
     def set_user_id(self, user_id):
         """設定用戶ID"""
