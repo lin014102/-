@@ -360,7 +360,7 @@ class StockManager:
         return False
     
     def get_stock_price(self, stock_code):
-    """查詢股票即時價格 - 改進版"""
+        """查詢股票即時價格 - 改進版"""
     
     # 修正問題股票代號
     if stock_code == '915':
