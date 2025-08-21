@@ -17,7 +17,7 @@ from reminder_bot import ReminderBot
 from stock_manager import (
     handle_stock_command, get_stock_summary, get_stock_transactions,
     get_stock_cost_analysis, get_stock_account_list, get_stock_help,
-    is_stock_command, is_stock_query
+    is_stock_command, is_stock_query, get_stock_realtime_pnl  # 👈 新增這個
 )
 
 # 初始化 Flask 應用
@@ -55,6 +55,31 @@ class MessageRouter:
             else:
                 return get_stock_summary(account_name)
         
+        # 🆕 新增的股票查詢功能
+        elif message_text == '即時股價查詢':
+            return "💹 即時股價查詢說明：\n\n使用方式：\n• 股價查詢 台積電\n• 估價查詢 鴻海\n• 股價 中華電\n\n💡 記得先用「設定代號 股票名稱 代號」設定股票代號"
+
+        elif message_text.startswith('估價查詢 '):
+            stock_name = message_text.replace('估價查詢 ', '').strip()
+            return handle_stock_command(f"股價查詢 {stock_name}")
+
+        elif message_text.startswith('即時損益 '):
+            account_name = message_text.replace('即時損益 ', '').strip()
+            return get_stock_realtime_pnl(account_name)
+
+        elif message_text == '即時損益':
+            return get_stock_realtime_pnl()
+        
+        elif message_text.startswith('檢查代號'):
+            return handle_stock_command(message_text)
+        
+        elif message_text.startswith('設定代號 '):
+            return handle_stock_command(message_text)
+        
+        elif message_text.startswith('股價查詢 ') or message_text.startswith('股價 '):
+            return handle_stock_command(message_text)
+        
+        # 原有的股票功能繼續
         elif message_text == '交易記錄':
             return get_stock_transactions()
         
@@ -155,8 +180,11 @@ class MessageRouter:
 
 💰 股票記帳：
 - 爸爸入帳 50000 - 入金
-- 爸爸買 2330 100 50000 0820 - 買股票（簡化版）
+- 爸爸買 2330 100 50000 0820 - 買股票
 - 總覽 - 查看所有帳戶
+- 即時損益 - 查看即時損益
+- 估價查詢 台積電 - 查詢股價
+- 設定代號 台積電 2330 - 設定股票代號
 - 股票幫助 - 股票功能詳細說明
 
 🚀 v3.0 新功能：完全模組化架構，易於擴充！"""
@@ -170,6 +198,7 @@ class MessageRouter:
 ⏰ 提醒機器人：✅ 運行中
 📋 待辦事項管理：✅ 已載入
 💰 股票記帳模組：✅ 已載入
+💹 即時損益功能：✅ 已啟用
 
 🔧 架構：完全模組化
 🚀 版本：v3.0
@@ -182,7 +211,8 @@ class MessageRouter:
 🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}
 
 💡 輸入「幫助」查看待辦功能
-💰 輸入「股票幫助」查看股票功能"""
+💰 輸入「股票幫助」查看股票功能
+💹 輸入「即時損益」查看股票損益"""
 
 # 建立訊息路由器實例
 message_router = MessageRouter(todo_manager, reminder_bot, None)
@@ -239,6 +269,7 @@ def home():
     <h1>LINE Todo Reminder Bot v3.0</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>🚀 模組化架構，完全重構！</p>
+    <p>💹 新增即時損益功能！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     """
 
@@ -281,7 +312,7 @@ def health():
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.0_modular_architecture',
+        'version': 'v3.0_modular_architecture_with_realtime_pnl',
         
         # 模組狀態
         'modules': {
@@ -296,6 +327,10 @@ def health():
                 'evening_time': reminder_bot.user_settings['evening_time'],
                 'next_reminder': next_reminder_str,
                 'has_user': reminder_bot.user_settings['user_id'] is not None
+            },
+            'stock_manager': {
+                'realtime_pnl_enabled': True,
+                'features': ['basic_accounting', 'google_sheets_sync', 'realtime_stock_prices', 'pnl_analysis']
             },
             'background_services': bg_services.services
         }
@@ -340,6 +375,7 @@ def initialize_app():
     print("📋 待辦事項管理：✅ 已載入")
     print("⏰ 提醒機器人：✅ 已啟動") 
     print("💰 股票記帳模組：✅ 已載入")
+    print("💹 即時損益功能：✅ 已啟用")
     print("🔧 模組化架構：✅ 完全重構")
     print("=" * 50)
     print("🎉 系統初始化完成！")
