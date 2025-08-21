@@ -19,6 +19,521 @@ class StockManager:
     
     def __init__(self):
         """初始化股票資料和 Google Sheets 連接"""
+        # 初始化資料結構
+        self.stock_data = {
+            'accounts': {},
+            'transactions': [],
+            'stock_codes': {}
+        }
+        
+        # Google Sheets 設定
+        self.spreadsheet_url = "https://docs.google.com/spreadsheets/d/1EACr2Zu7_regqp3Po7AlNE4ZcjazKbgyvz-yYNYtcCs/edit?usp=sharing"
+        self.gc = None
+        self.sheet = None
+        self.sheets_enabled = False
+        self.last_sync_time = None
+        
+        # 初始化 Google Sheets 連接
+        self.init_google_sheets()
+        
+        # 從 Google Sheets 載入資料
+        if self.sheets_enabled:
+            self.load_from_sheets_debug()
+        else:
+            print("📊 股票記帳模組初始化完成（記憶體模式）")
+    
+    def init_google_sheets(self):
+        """初始化 Google Sheets 連接"""
+        try:
+            creds_json = os.getenv('GOOGLE_CREDENTIALS')
+            
+            if not creds_json:
+                print("⚠️ 未找到 GOOGLE_CREDENTIALS 環境變數，使用記憶體模式")
+                return False
+            
+            creds_dict = json.loads(creds_json)
+            credentials = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=[
+                    'https://spreadsheets.google.com/feeds',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+            )
+            
+            self.gc = gspread.authorize(credentials)
+            self.sheet = self.gc.open_by_url(self.spreadsheet_url)
+            
+            print("✅ Google Sheets 連接成功")
+            self.sheets_enabled = True
+            return True
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 格式錯誤: {e}")
+            print("📝 將使用記憶體模式運行")
+            return False
+        except Exception as e:
+            print(f"❌ Google Sheets 連接失敗: {e}")
+            print("📝 將使用記憶體模式運行")
+            return False
+    
+    def load_from_sheets_debug(self):
+        """從 Google Sheets 載入資料"""
+        if not self.sheets_enabled:
+            return
+        
+        try:
+            print("🔄 載入 Google Sheets 資料...")
+            
+            worksheets = self.sheet.worksheets()
+            print(f"📋 找到 {len(worksheets)} 個工作表")
+            
+            # 載入帳戶資訊
+            try:
+                accounts_sheet = self.sheet.worksheet("帳戶資訊")
+                accounts_data = accounts_sheet.get_all_records()
+                
+                for row in accounts_data:
+                    if row.get('帳戶名稱'):
+                        self.stock_data['accounts'][row['帳戶名稱']] = {
+                            'cash': int(row.get('現金餘額', 0)),
+                            'stocks': {},
+                            'created_date': row.get('建立日期', self.get_taiwan_time())
+                        }
+                print(f"✅ 載入 {len(self.stock_data['accounts'])} 個帳戶")
+                
+            except Exception as e:
+                print(f"❌ 載入帳戶資訊失敗: {e}")
+            
+            # 載入持股明細
+            try:
+                holdings_sheet = None
+                for ws in worksheets:
+                    if '持股明細' in ws.title.strip():
+                        holdings_sheet = ws
+                        break
+                
+                if holdings_sheet:
+                    holdings_data = holdings_sheet.get_all_records()
+                    holdings_count = 0
+                    
+                    for row in holdings_data:
+                        account_name = row.get('帳戶名稱')
+                        stock_name = row.get('股票名稱')
+                        
+                        if account_name and stock_name and account_name in self.stock_data['accounts']:
+                            self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
+                                'quantity': int(row.get('持股數量', 0)),
+                                'avg_cost': float(row.get('平均成本', 0)),
+                                'total_cost': int(row.get('總成本', 0))
+                            }
+                            holdings_count += 1
+                    
+                    print(f"✅ 載入 {holdings_count} 筆持股記錄")
+                else:
+                    print("⚠️ 找不到持股明細工作表")
+                
+            except Exception as e:
+                print(f"❌ 載入持股明細失敗: {e}")
+                
+            # 載入交易記錄
+            try:
+                transactions_sheet = self.sheet.worksheet("交易記錄")
+                transactions_data = transactions_sheet.get_all_records()
+                
+                for row in transactions_data:
+                    if row.get('交易ID'):
+                        transaction = {
+                            'id': int(row['交易ID']),
+                            'type': row.get('類型', ''),
+                            'account': row.get('帳戶', ''),
+                            'stock_code': row.get('股票名稱') if row.get('股票名稱') else None,
+                            'quantity': int(row.get('數量', 0)),
+                            'amount': int(row.get('金額', 0)),
+                            'price_per_share': float(row.get('單價', 0)) if row.get('單價') else 0,
+                            'date': row.get('日期', ''),
+                            'cash_after': int(row.get('現金餘額', 0)),
+                            'created_at': row.get('建立時間', ''),
+                            'profit_loss': float(row.get('損益', 0)) if row.get('損益') else None
+                        }
+                        self.stock_data['transactions'].append(transaction)
+                
+                print(f"✅ 載入 {len(self.stock_data['transactions'])} 筆交易記錄")
+                
+            except Exception as e:
+                print(f"❌ 載入交易記錄失敗: {e}")
+            
+            print(f"✅ 資料載入完成")
+            
+        except Exception as e:
+            print(f"❌ 載入 Google Sheets 資料失敗: {e}")
+            traceback.print_exc()
+    
+    def check_and_reload_if_needed(self):
+        """檢查是否需要重新載入資料"""
+        if not self.sheets_enabled:
+            return
+        
+        import time
+        current_time = time.time()
+        
+        if (self.last_sync_time is None or 
+            current_time - self.last_sync_time > 30):
+            print("🔄 檢測到可能的外部修改，重新載入資料...")
+            self.reload_data_from_sheets()
+
+    def reload_data_from_sheets(self):
+        """重新從 Google Sheets 載入最新資料"""
+        if self.sheets_enabled:
+            print("🔄 重新載入 Google Sheets 最新資料...")
+            self.stock_data = {'accounts': {}, 'transactions': [], 'stock_codes': {}}
+            self.load_from_sheets_debug()
+
+    def sync_to_sheets_safe(self):
+        """安全同步資料到 Google Sheets"""
+        if not self.sheets_enabled:
+            return False
+        
+        try:
+            import time
+            self.last_sync_time = time.time()
+            
+            print("🔄 安全同步資料到 Google Sheets...")
+            
+            # 同步帳戶資訊
+            print("📊 同步帳戶資訊...")
+            try:
+                accounts_sheet = self.sheet.worksheet("帳戶資訊")
+                
+                try:
+                    current_header = accounts_sheet.row_values(1)
+                    expected_header = ['帳戶名稱', '現金餘額', '建立日期']
+                    if current_header != expected_header:
+                        accounts_sheet.update('A1:C1', [expected_header])
+                except:
+                    accounts_sheet.update('A1:C1', [['帳戶名稱', '現金餘額', '建立日期']])
+                
+                data_rows = []
+                for account_name, account_data in self.stock_data['accounts'].items():
+                    data_rows.append([
+                        account_name,
+                        account_data['cash'],
+                        account_data['created_date']
+                    ])
+                
+                if data_rows:
+                    range_name = f"A2:C{len(data_rows) + 1}"
+                    accounts_sheet.update(range_name, data_rows)
+                    
+                    current_rows = len(accounts_sheet.get_all_values())
+                    if current_rows > len(data_rows) + 1:
+                        clear_range = f"A{len(data_rows) + 2}:C{current_rows}"
+                        accounts_sheet.batch_clear([clear_range])
+                
+                print("✅ 帳戶資訊同步成功")
+            except Exception as e:
+                print(f"❌ 同步帳戶資訊失敗: {e}")
+            
+            # 同步持股明細
+            print("📈 同步持股明細...")
+            try:
+                holdings_sheet = None
+                worksheets = self.sheet.worksheets()
+                for ws in worksheets:
+                    if '持股明細' in ws.title.strip():
+                        holdings_sheet = ws
+                        break
+                
+                if holdings_sheet:
+                    try:
+                        expected_header = ['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本']
+                        holdings_sheet.update('A1:E1', [expected_header])
+                    except:
+                        pass
+                    
+                    data_rows = []
+                    for account_name, account_data in self.stock_data['accounts'].items():
+                        for stock_name, stock_data in account_data['stocks'].items():
+                            data_rows.append([
+                                account_name,
+                                stock_name,
+                                stock_data['quantity'],
+                                stock_data['avg_cost'],
+                                stock_data['total_cost']
+                            ])
+                    
+                    if data_rows:
+                        range_name = f"A2:E{len(data_rows) + 1}"
+                        holdings_sheet.update(range_name, data_rows)
+                        
+                        current_rows = len(holdings_sheet.get_all_values())
+                        if current_rows > len(data_rows) + 1:
+                            clear_range = f"A{len(data_rows) + 2}:E{current_rows}"
+                            holdings_sheet.batch_clear([clear_range])
+                    else:
+                        current_rows = len(holdings_sheet.get_all_values())
+                        if current_rows > 1:
+                            clear_range = f"A2:E{current_rows}"
+                            holdings_sheet.batch_clear([clear_range])
+                    
+                    print("✅ 持股明細同步成功")
+                else:
+                    print("❌ 找不到持股明細工作表")
+            except Exception as e:
+                print(f"❌ 同步持股明細失敗: {e}")
+            
+            # 同步交易記錄
+            print("📋 同步交易記錄...")
+            try:
+                transactions_sheet = self.sheet.worksheet("交易記錄")
+                
+                try:
+                    expected_header = ['交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', '單價', '日期', '現金餘額', '建立時間', '損益']
+                    transactions_sheet.update('A1:K1', [expected_header])
+                except:
+                    pass
+                
+                data_rows = []
+                for transaction in self.stock_data['transactions']:
+                    data_rows.append([
+                        transaction['id'],
+                        transaction['type'],
+                        transaction['account'],
+                        transaction.get('stock_code', ''),
+                        transaction['quantity'],
+                        transaction['amount'],
+                        transaction.get('price_per_share', 0),
+                        transaction['date'],
+                        transaction['cash_after'],
+                        transaction['created_at'],
+                        transaction.get('profit_loss', '')
+                    ])
+                
+                if data_rows:
+                    range_name = f"A2:K{len(data_rows) + 1}"
+                    transactions_sheet.update(range_name, data_rows)
+                    
+                    current_rows = len(transactions_sheet.get_all_values())
+                    if current_rows > len(data_rows) + 1:
+                        clear_range = f"A{len(data_rows) + 2}:K{current_rows}"
+                        transactions_sheet.batch_clear([clear_range])
+                else:
+                    current_rows = len(transactions_sheet.get_all_values())
+                    if current_rows > 1:
+                        clear_range = f"A2:K{current_rows}"
+                        transactions_sheet.batch_clear([clear_range])
+                
+                print("✅ 交易記錄同步成功")
+            except Exception as e:
+                print(f"❌ 同步交易記錄失敗: {e}")
+            
+            print("✅ 安全同步完成")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 安全同步失敗: {e}")
+            traceback.print_exc()
+            return False
+    
+    def get_taiwan_time(self):
+        """獲取台灣時間"""
+        return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
+    
+    def get_or_create_account(self, account_name):
+        """獲取或建立帳戶"""
+        if account_name not in self.stock_data['accounts']:
+            self.stock_data['accounts'][account_name] = {
+                'cash': 0,
+                'stocks': {},
+                'created_date': self.get_taiwan_time()
+            }
+            return True
+        return False
+    
+    def get_stock_price(self, stock_code):
+        """查詢股票即時價格"""
+        try:
+            import requests
+            import json
+            
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_code}.TW"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+            
+            if data['chart']['result'] and data['chart']['result'][0]['meta']:
+                price = data['chart']['result'][0]['meta']['regularMarketPrice']
+                return round(price, 2)
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"⚠️ 股價查詢失敗: {e}")
+            return None
+    
+    def set_stock_code(self, stock_name, stock_code):
+        """設定股票代號對應"""
+        self.stock_data['stock_codes'][stock_name] = stock_code
+        return f"✅ 已設定 {stock_name} 代號為 {stock_code}"
+    
+    def get_missing_stock_codes(self, account_name=None):
+        """檢查缺少代號的股票"""
+        accounts_to_check = {account_name: self.stock_data['accounts'][account_name]} if account_name else self.stock_data['accounts']
+        
+        missing_stocks = set()
+        
+        for acc_name, account in accounts_to_check.items():
+            for stock_name in account['stocks'].keys():
+                if stock_name not in self.stock_data['stock_codes']:
+                    missing_stocks.add(stock_name)
+        
+        if missing_stocks:
+            result = "⚠️ 以下股票尚未設定代號：\n\n"
+            for stock in sorted(missing_stocks):
+                result += f"📈 {stock}\n"
+            result += "\n💡 使用方式：\n"
+            result += "• 設定代號 股票名稱 代號\n"
+            result += "• 或使用「批量設定代號」功能"
+            return result
+        else:
+            return "✅ 所有持股都已設定股票代號"
+    
+    def get_realtime_pnl(self, account_name=None):
+        """獲取即時損益"""
+        if account_name and account_name not in self.stock_data['accounts']:
+            return f"❌ 帳戶「{account_name}」不存在"
+        
+        accounts_to_check = {account_name: self.stock_data['accounts'][account_name]} if account_name else self.stock_data['accounts']
+        
+        result = f"💹 {'即時損益' if not account_name else f'{account_name} 即時損益'}：\n\n"
+        
+        total_cost = 0
+        total_value = 0
+        has_price_data = False
+        
+        for acc_name, account in accounts_to_check.items():
+            if not account['stocks']:
+                continue
+                
+            result += f"👤 {acc_name}：\n"
+            account_cost = 0
+            account_value = 0
+            
+            for stock_name, holding in account['stocks'].items():
+                cost = holding['total_cost']
+                account_cost += cost
+                
+                stock_code = self.stock_data['stock_codes'].get(stock_name)
+                if stock_code:
+                    current_price = self.get_stock_price(stock_code)
+                    if current_price:
+                        current_value = holding['quantity'] * current_price
+                        pnl = current_value - cost
+                        pnl_percent = (pnl / cost) * 100
+                        
+                        account_value += current_value
+                        has_price_data = True
+                        
+                        pnl_text = f"🟢 +{pnl:,.0f}元 (+{pnl_percent:.1f}%)" if pnl > 0 else f"🔴 {pnl:,.0f}元 ({pnl_percent:.1f}%)" if pnl < 0 else "💫 損益兩平"
+                        
+                        result += f"   📈 {stock_name} ({stock_code})\n"
+                        result += f"      💰 成本：{cost:,}元 ({holding['avg_cost']}元/股)\n"
+                        result += f"      💎 現值：{current_value:,}元 ({current_price}元/股)\n"
+                        result += f"      {pnl_text}\n\n"
+                    else:
+                        result += f"   📈 {stock_name} ({stock_code}) - ⚠️ 無法取得股價\n"
+                        result += f"      💰 成本：{cost:,}元\n\n"
+                else:
+                    result += f"   📈 {stock_name} - ⚠️ 請先設定股票代號\n"
+                    result += f"      💰 成本：{cost:,}元\n"
+                    result += f"      💡 使用：設定代號 {stock_name} XXXX\n\n"
+            
+            total_cost += account_cost
+            total_value += account_value
+        
+        if has_price_data and total_value > 0:
+            total_pnl = total_value - total_cost
+            total_pnl_percent = (total_pnl / total_cost) * 100
+            total_pnl_text = f"🟢 +{total_pnl:,.0f}元 (+{total_pnl_percent:.1f}%)" if total_pnl > 0 else f"🔴 {total_pnl:,.0f}元 ({total_pnl_percent:.1f}%)"
+            
+            result += f"📊 總投資成本：{total_cost:,}元\n"
+            result += f"💎 總投資現值：{total_value:,}元\n"
+            result += f"💹 總未實現損益：{total_pnl_text}\n\n"
+        
+        result += "💡 提示：\n"
+        result += "• 使用「設定代號 股票名稱 代號」來設定股票代號\n"
+        result += "• 股價資料來源：Yahoo Finance\n"
+        result += "• 股價可能有15分鐘延遲"
+        
+        return result
+    
+    def parse_command(self, message_text):
+        """解析股票相關指令"""
+        message_text = message_text.strip()
+        
+        if message_text == '批量設定代號':
+            return {'type': 'batch_code_guide'}
+        
+        elif match := re.match(r'檢查代號(?:\s+(.+))?', message_text):
+            account_name = match.group(1).strip() if match.group(1) else None
+            return {'type': 'check_codes', 'account': account_name}
+        
+        elif match := re.match(r'設定代號\s+(.+?)\s+(\w+)', message_text):
+            stock_name, stock_code = match.groups()
+            return {'type': 'set_code', 'stock_name': stock_name.strip(), 'stock_code': stock_code.strip()}
+        
+        elif match := re.match(r'(?:股價查詢|股價|估價查詢)\s+(.+)', message_text):
+            stock_name = match.group(1).strip()
+            return {'type': 'price_query', 'stock_name': stock_name}
+        
+        elif match := re.match(r'(.+?)入帳\s*(\d+)', message_text):
+            account, amount = match.groups()
+            return {'type': 'deposit', 'account': account.strip(), 'amount': int(amount)}
+        
+        elif match := re.match(r'(.+?)提款\s*(\d+)', message_text):
+            account, amount = match.groups()
+            return {'type': 'withdraw', 'account': account.strip(), 'amount': int(amount)}
+        
+        elif match := re.match(r'(.+?)持有\s+(.+?)\s+(\d+)\s+(\d+)', message_text):
+            account, stock_name, quantity, total_cost = match.groups()
+            return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
+        
+        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+            account, stock_name, quantity, amount, date = match.groups()
+            try:
+                year = datetime.now().year
+                month = int(date[:2])
+                day = int(date[2:])
+                formatted_date = f"{year}/{month:02d}/{day:02d}"
+            except:
+                return None
+            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        
+        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+            account, stock_name, quantity, amount, date = match.groups()
+            try:
+                year = datetime.now().year
+                month = int(date[:2])
+                day = int(date[2:])
+                formatted_date = f"{year}/{month:02d}/{day:02d}"
+            except:
+                return None
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        
+        elif match := re.match(r'新增帳戶\s*(.+)', message_text):
+            account = match.group(1).strip()
+            return {'type': 'create_account', 'account': account}
+        
+        return None
+    
+    def handle_holding(self, account_name, stock_name, quantity, total_cost):
+        """處理持有股票設定"""
+        is_new = self.get_or_create_account(account_name)
+        
+        avg_cost = round(total_cost / quantity, 2)
+        
         self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
             'quantity': quantity,
             'total_cost': total_cost,
@@ -638,518 +1153,4 @@ if __name__ == "__main__":
     print(sm.get_account_summary("爸爸"))
     print()
     print("=== 測試總覽 ===")
-    print(sm.get_all_accounts_summary())data = {
-            'accounts': {},
-            'transactions': [],
-            'stock_codes': {}
-        }
-        
-        # Google Sheets 設定
-        self.spreadsheet_url = "https://docs.google.com/spreadsheets/d/1EACr2Zu7_regqp3Po7AlNE4ZcjazKbgyvz-yYNYtcCs/edit?usp=sharing"
-        self.gc = None
-        self.sheet = None
-        self.sheets_enabled = False
-        self.last_sync_time = None
-        
-        # 初始化 Google Sheets 連接
-        self.init_google_sheets()
-        
-        # 從 Google Sheets 載入資料
-        if self.sheets_enabled:
-            self.load_from_sheets_debug()
-        else:
-            print("📊 股票記帳模組初始化完成（記憶體模式）")
-    
-    def init_google_sheets(self):
-        """初始化 Google Sheets 連接"""
-        try:
-            creds_json = os.getenv('GOOGLE_CREDENTIALS')
-            
-            if not creds_json:
-                print("⚠️ 未找到 GOOGLE_CREDENTIALS 環境變數，使用記憶體模式")
-                return False
-            
-            creds_dict = json.loads(creds_json)
-            credentials = Credentials.from_service_account_info(
-                creds_dict,
-                scopes=[
-                    'https://spreadsheets.google.com/feeds',
-                    'https://www.googleapis.com/auth/drive'
-                ]
-            )
-            
-            self.gc = gspread.authorize(credentials)
-            self.sheet = self.gc.open_by_url(self.spreadsheet_url)
-            
-            print("✅ Google Sheets 連接成功")
-            self.sheets_enabled = True
-            return True
-            
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON 格式錯誤: {e}")
-            print("📝 將使用記憶體模式運行")
-            return False
-        except Exception as e:
-            print(f"❌ Google Sheets 連接失敗: {e}")
-            print("📝 將使用記憶體模式運行")
-            return False
-    
-    def load_from_sheets_debug(self):
-        """從 Google Sheets 載入資料"""
-        if not self.sheets_enabled:
-            return
-        
-        try:
-            print("🔄 載入 Google Sheets 資料...")
-            
-            worksheets = self.sheet.worksheets()
-            print(f"📋 找到 {len(worksheets)} 個工作表")
-            
-            # 載入帳戶資訊
-            try:
-                accounts_sheet = self.sheet.worksheet("帳戶資訊")
-                accounts_data = accounts_sheet.get_all_records()
-                
-                for row in accounts_data:
-                    if row.get('帳戶名稱'):
-                        self.stock_data['accounts'][row['帳戶名稱']] = {
-                            'cash': int(row.get('現金餘額', 0)),
-                            'stocks': {},
-                            'created_date': row.get('建立日期', self.get_taiwan_time())
-                        }
-                print(f"✅ 載入 {len(self.stock_data['accounts'])} 個帳戶")
-                
-            except Exception as e:
-                print(f"❌ 載入帳戶資訊失敗: {e}")
-            
-            # 載入持股明細
-            try:
-                holdings_sheet = None
-                for ws in worksheets:
-                    if '持股明細' in ws.title.strip():
-                        holdings_sheet = ws
-                        break
-                
-                if holdings_sheet:
-                    holdings_data = holdings_sheet.get_all_records()
-                    holdings_count = 0
-                    
-                    for row in holdings_data:
-                        account_name = row.get('帳戶名稱')
-                        stock_name = row.get('股票名稱')
-                        
-                        if account_name and stock_name and account_name in self.stock_data['accounts']:
-                            self.stock_data['accounts'][account_name]['stocks'][stock_name] = {
-                                'quantity': int(row.get('持股數量', 0)),
-                                'avg_cost': float(row.get('平均成本', 0)),
-                                'total_cost': int(row.get('總成本', 0))
-                            }
-                            holdings_count += 1
-                    
-                    print(f"✅ 載入 {holdings_count} 筆持股記錄")
-                else:
-                    print("⚠️ 找不到持股明細工作表")
-                
-            except Exception as e:
-                print(f"❌ 載入持股明細失敗: {e}")
-                
-            # 載入交易記錄
-            try:
-                transactions_sheet = self.sheet.worksheet("交易記錄")
-                transactions_data = transactions_sheet.get_all_records()
-                
-                for row in transactions_data:
-                    if row.get('交易ID'):
-                        transaction = {
-                            'id': int(row['交易ID']),
-                            'type': row.get('類型', ''),
-                            'account': row.get('帳戶', ''),
-                            'stock_code': row.get('股票名稱') if row.get('股票名稱') else None,
-                            'quantity': int(row.get('數量', 0)),
-                            'amount': int(row.get('金額', 0)),
-                            'price_per_share': float(row.get('單價', 0)) if row.get('單價') else 0,
-                            'date': row.get('日期', ''),
-                            'cash_after': int(row.get('現金餘額', 0)),
-                            'created_at': row.get('建立時間', ''),
-                            'profit_loss': float(row.get('損益', 0)) if row.get('損益') else None
-                        }
-                        self.stock_data['transactions'].append(transaction)
-                
-                print(f"✅ 載入 {len(self.stock_data['transactions'])} 筆交易記錄")
-                
-            except Exception as e:
-                print(f"❌ 載入交易記錄失敗: {e}")
-            
-            print(f"✅ 資料載入完成")
-            
-        except Exception as e:
-            print(f"❌ 載入 Google Sheets 資料失敗: {e}")
-            traceback.print_exc()
-    
-    def check_and_reload_if_needed(self):
-        """檢查是否需要重新載入資料"""
-        if not self.sheets_enabled:
-            return
-        
-        import time
-        current_time = time.time()
-        
-        if (self.last_sync_time is None or 
-            current_time - self.last_sync_time > 30):
-            print("🔄 檢測到可能的外部修改，重新載入資料...")
-            self.reload_data_from_sheets()
-
-    def reload_data_from_sheets(self):
-        """重新從 Google Sheets 載入最新資料"""
-        if self.sheets_enabled:
-            print("🔄 重新載入 Google Sheets 最新資料...")
-            self.stock_data = {'accounts': {}, 'transactions': [], 'stock_codes': {}}
-            self.load_from_sheets_debug()
-
-    def sync_to_sheets_safe(self):
-        """安全同步資料到 Google Sheets"""
-        if not self.sheets_enabled:
-            return False
-        
-        try:
-            import time
-            self.last_sync_time = time.time()
-            
-            print("🔄 安全同步資料到 Google Sheets...")
-            
-            # 同步帳戶資訊
-            print("📊 同步帳戶資訊...")
-            try:
-                accounts_sheet = self.sheet.worksheet("帳戶資訊")
-                
-                try:
-                    current_header = accounts_sheet.row_values(1)
-                    expected_header = ['帳戶名稱', '現金餘額', '建立日期']
-                    if current_header != expected_header:
-                        accounts_sheet.update('A1:C1', [expected_header])
-                except:
-                    accounts_sheet.update('A1:C1', [['帳戶名稱', '現金餘額', '建立日期']])
-                
-                data_rows = []
-                for account_name, account_data in self.stock_data['accounts'].items():
-                    data_rows.append([
-                        account_name,
-                        account_data['cash'],
-                        account_data['created_date']
-                    ])
-                
-                if data_rows:
-                    range_name = f"A2:C{len(data_rows) + 1}"
-                    accounts_sheet.update(range_name, data_rows)
-                    
-                    current_rows = len(accounts_sheet.get_all_values())
-                    if current_rows > len(data_rows) + 1:
-                        clear_range = f"A{len(data_rows) + 2}:C{current_rows}"
-                        accounts_sheet.batch_clear([clear_range])
-                
-                print("✅ 帳戶資訊同步成功")
-            except Exception as e:
-                print(f"❌ 同步帳戶資訊失敗: {e}")
-            
-            # 同步持股明細
-            print("📈 同步持股明細...")
-            try:
-                holdings_sheet = None
-                worksheets = self.sheet.worksheets()
-                for ws in worksheets:
-                    if '持股明細' in ws.title.strip():
-                        holdings_sheet = ws
-                        break
-                
-                if holdings_sheet:
-                    try:
-                        expected_header = ['帳戶名稱', '股票名稱', '持股數量', '平均成本', '總成本']
-                        holdings_sheet.update('A1:E1', [expected_header])
-                    except:
-                        pass
-                    
-                    data_rows = []
-                    for account_name, account_data in self.stock_data['accounts'].items():
-                        for stock_name, stock_data in account_data['stocks'].items():
-                            data_rows.append([
-                                account_name,
-                                stock_name,
-                                stock_data['quantity'],
-                                stock_data['avg_cost'],
-                                stock_data['total_cost']
-                            ])
-                    
-                    if data_rows:
-                        range_name = f"A2:E{len(data_rows) + 1}"
-                        holdings_sheet.update(range_name, data_rows)
-                        
-                        current_rows = len(holdings_sheet.get_all_values())
-                        if current_rows > len(data_rows) + 1:
-                            clear_range = f"A{len(data_rows) + 2}:E{current_rows}"
-                            holdings_sheet.batch_clear([clear_range])
-                    else:
-                        current_rows = len(holdings_sheet.get_all_values())
-                        if current_rows > 1:
-                            clear_range = f"A2:E{current_rows}"
-                            holdings_sheet.batch_clear([clear_range])
-                    
-                    print("✅ 持股明細同步成功")
-                else:
-                    print("❌ 找不到持股明細工作表")
-            except Exception as e:
-                print(f"❌ 同步持股明細失敗: {e}")
-            
-            # 同步交易記錄
-            print("📋 同步交易記錄...")
-            try:
-                transactions_sheet = self.sheet.worksheet("交易記錄")
-                
-                try:
-                    expected_header = ['交易ID', '類型', '帳戶', '股票名稱', '數量', '金額', '單價', '日期', '現金餘額', '建立時間', '損益']
-                    transactions_sheet.update('A1:K1', [expected_header])
-                except:
-                    pass
-                
-                data_rows = []
-                for transaction in self.stock_data['transactions']:
-                    data_rows.append([
-                        transaction['id'],
-                        transaction['type'],
-                        transaction['account'],
-                        transaction.get('stock_code', ''),
-                        transaction['quantity'],
-                        transaction['amount'],
-                        transaction.get('price_per_share', 0),
-                        transaction['date'],
-                        transaction['cash_after'],
-                        transaction['created_at'],
-                        transaction.get('profit_loss', '')
-                    ])
-                
-                if data_rows:
-                    range_name = f"A2:K{len(data_rows) + 1}"
-                    transactions_sheet.update(range_name, data_rows)
-                    
-                    current_rows = len(transactions_sheet.get_all_values())
-                    if current_rows > len(data_rows) + 1:
-                        clear_range = f"A{len(data_rows) + 2}:K{current_rows}"
-                        transactions_sheet.batch_clear([clear_range])
-                else:
-                    current_rows = len(transactions_sheet.get_all_values())
-                    if current_rows > 1:
-                        clear_range = f"A2:K{current_rows}"
-                        transactions_sheet.batch_clear([clear_range])
-                
-                print("✅ 交易記錄同步成功")
-            except Exception as e:
-                print(f"❌ 同步交易記錄失敗: {e}")
-            
-            print("✅ 安全同步完成")
-            return True
-            
-        except Exception as e:
-            print(f"❌ 安全同步失敗: {e}")
-            traceback.print_exc()
-            return False
-    
-    def get_taiwan_time(self):
-        """獲取台灣時間"""
-        return datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
-    
-    def get_or_create_account(self, account_name):
-        """獲取或建立帳戶"""
-        if account_name not in self.stock_data['accounts']:
-            self.stock_data['accounts'][account_name] = {
-                'cash': 0,
-                'stocks': {},
-                'created_date': self.get_taiwan_time()
-            }
-            return True
-        return False
-    
-    def get_stock_price(self, stock_code):
-        """查詢股票即時價格"""
-        try:
-            import requests
-            import json
-            
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_code}.TW"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            data = response.json()
-            
-            if data['chart']['result'] and data['chart']['result'][0]['meta']:
-                price = data['chart']['result'][0]['meta']['regularMarketPrice']
-                return round(price, 2)
-            else:
-                return None
-                
-        except Exception as e:
-            print(f"⚠️ 股價查詢失敗: {e}")
-            return None
-    
-    def set_stock_code(self, stock_name, stock_code):
-        """設定股票代號對應"""
-        self.stock_data['stock_codes'][stock_name] = stock_code
-        return f"✅ 已設定 {stock_name} 代號為 {stock_code}"
-    
-    def get_missing_stock_codes(self, account_name=None):
-        """檢查缺少代號的股票"""
-        accounts_to_check = {account_name: self.stock_data['accounts'][account_name]} if account_name else self.stock_data['accounts']
-        
-        missing_stocks = set()
-        
-        for acc_name, account in accounts_to_check.items():
-            for stock_name in account['stocks'].keys():
-                if stock_name not in self.stock_data['stock_codes']:
-                    missing_stocks.add(stock_name)
-        
-        if missing_stocks:
-            result = "⚠️ 以下股票尚未設定代號：\n\n"
-            for stock in sorted(missing_stocks):
-                result += f"📈 {stock}\n"
-            result += "\n💡 使用方式：\n"
-            result += "• 設定代號 股票名稱 代號\n"
-            result += "• 或使用「批量設定代號」功能"
-            return result
-        else:
-            return "✅ 所有持股都已設定股票代號"
-    
-    def get_realtime_pnl(self, account_name=None):
-        """獲取即時損益"""
-        if account_name and account_name not in self.stock_data['accounts']:
-            return f"❌ 帳戶「{account_name}」不存在"
-        
-        accounts_to_check = {account_name: self.stock_data['accounts'][account_name]} if account_name else self.stock_data['accounts']
-        
-        result = f"💹 {'即時損益' if not account_name else f'{account_name} 即時損益'}：\n\n"
-        
-        total_cost = 0
-        total_value = 0
-        has_price_data = False
-        
-        for acc_name, account in accounts_to_check.items():
-            if not account['stocks']:
-                continue
-                
-            result += f"👤 {acc_name}：\n"
-            account_cost = 0
-            account_value = 0
-            
-            for stock_name, holding in account['stocks'].items():
-                cost = holding['total_cost']
-                account_cost += cost
-                
-                stock_code = self.stock_data['stock_codes'].get(stock_name)
-                if stock_code:
-                    current_price = self.get_stock_price(stock_code)
-                    if current_price:
-                        current_value = holding['quantity'] * current_price
-                        pnl = current_value - cost
-                        pnl_percent = (pnl / cost) * 100
-                        
-                        account_value += current_value
-                        has_price_data = True
-                        
-                        pnl_text = f"🟢 +{pnl:,.0f}元 (+{pnl_percent:.1f}%)" if pnl > 0 else f"🔴 {pnl:,.0f}元 ({pnl_percent:.1f}%)" if pnl < 0 else "💫 損益兩平"
-                        
-                        result += f"   📈 {stock_name} ({stock_code})\n"
-                        result += f"      💰 成本：{cost:,}元 ({holding['avg_cost']}元/股)\n"
-                        result += f"      💎 現值：{current_value:,}元 ({current_price}元/股)\n"
-                        result += f"      {pnl_text}\n\n"
-                    else:
-                        result += f"   📈 {stock_name} ({stock_code}) - ⚠️ 無法取得股價\n"
-                        result += f"      💰 成本：{cost:,}元\n\n"
-                else:
-                    result += f"   📈 {stock_name} - ⚠️ 請先設定股票代號\n"
-                    result += f"      💰 成本：{cost:,}元\n"
-                    result += f"      💡 使用：設定代號 {stock_name} XXXX\n\n"
-            
-            total_cost += account_cost
-            total_value += account_value
-        
-        if has_price_data and total_value > 0:
-            total_pnl = total_value - total_cost
-            total_pnl_percent = (total_pnl / total_cost) * 100
-            total_pnl_text = f"🟢 +{total_pnl:,.0f}元 (+{total_pnl_percent:.1f}%)" if total_pnl > 0 else f"🔴 {total_pnl:,.0f}元 ({total_pnl_percent:.1f}%)"
-            
-            result += f"📊 總投資成本：{total_cost:,}元\n"
-            result += f"💎 總投資現值：{total_value:,}元\n"
-            result += f"💹 總未實現損益：{total_pnl_text}\n\n"
-        
-        result += "💡 提示：\n"
-        result += "• 使用「設定代號 股票名稱 代號」來設定股票代號\n"
-        result += "• 股價資料來源：Yahoo Finance\n"
-        result += "• 股價可能有15分鐘延遲"
-        
-        return result
-    
-    def parse_command(self, message_text):
-        """解析股票相關指令"""
-        message_text = message_text.strip()
-        
-        if message_text == '批量設定代號':
-            return {'type': 'batch_code_guide'}
-        
-        elif match := re.match(r'檢查代號(?:\s+(.+))?', message_text):
-            account_name = match.group(1).strip() if match.group(1) else None
-            return {'type': 'check_codes', 'account': account_name}
-        
-        elif match := re.match(r'設定代號\s+(.+?)\s+(\w+)', message_text):
-            stock_name, stock_code = match.groups()
-            return {'type': 'set_code', 'stock_name': stock_name.strip(), 'stock_code': stock_code.strip()}
-        
-        elif match := re.match(r'(?:股價查詢|股價|估價查詢)\s+(.+)', message_text):
-            stock_name = match.group(1).strip()
-            return {'type': 'price_query', 'stock_name': stock_name}
-        
-        elif match := re.match(r'(.+?)入帳\s*(\d+)', message_text):
-            account, amount = match.groups()
-            return {'type': 'deposit', 'account': account.strip(), 'amount': int(amount)}
-        
-        elif match := re.match(r'(.+?)提款\s*(\d+)', message_text):
-            account, amount = match.groups()
-            return {'type': 'withdraw', 'account': account.strip(), 'amount': int(amount)}
-        
-        elif match := re.match(r'(.+?)持有\s+(.+?)\s+(\d+)\s+(\d+)', message_text):
-            account, stock_name, quantity, total_cost = match.groups()
-            return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
-        
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
-            account, stock_name, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-        
-        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
-            account, stock_name, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-        
-        elif match := re.match(r'新增帳戶\s*(.+)', message_text):
-            account = match.group(1).strip()
-            return {'type': 'create_account', 'account': account}
-        
-        return None
-    
-    def handle_holding(self, account_name, stock_name, quantity, total_cost):
-        """處理持有股票設定"""
-        is_new = self.get_or_create_account(account_name)
-        
-        avg_cost = round(total_cost / quantity, 2)
-        
-        self.stock_
+    print(sm.get_all_accounts_summary())
