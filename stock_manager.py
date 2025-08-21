@@ -360,27 +360,88 @@ class StockManager:
         return False
     
     def get_stock_price(self, stock_code):
-        """查詢股票即時價格"""
+        """查詢股票即時價格 - 改進版"""
         try:
             import requests
             import json
+            import time
             
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_code}.TW"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            data = response.json()
-            
-            if data['chart']['result'] and data['chart']['result'][0]['meta']:
-                price = data['chart']['result'][0]['meta']['regularMarketPrice']
-                return round(price, 2)
+            # 確保股票代號格式正確
+            if not stock_code.endswith('.TW'):
+                formatted_code = f"{stock_code}.TW"
             else:
-                return None
+                formatted_code = stock_code
+            
+            # 方法1: Yahoo Finance API
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{formatted_code}"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                if (data.get('chart') and 
+                    data['chart'].get('result') and 
+                    len(data['chart']['result']) > 0 and
+                    data['chart']['result'][0].get('meta')):
+                    
+                    meta = data['chart']['result'][0]['meta']
+                    price = meta.get('regularMarketPrice')
+                    
+                    if price and price > 0:
+                        print(f"✅ 取得 {stock_code} 股價: {price}")
+                        return round(float(price), 2)
+                
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ Yahoo Finance API 請求失敗: {e}")
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"⚠️ Yahoo Finance 資料解析失敗: {e}")
+            
+            # 方法2: 備用 Yahoo Finance URL
+            try:
+                time.sleep(0.5)  # 避免請求過於頻繁
+                url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{formatted_code}?modules=price"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                }
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                if (data.get('quoteSummary') and 
+                    data['quoteSummary'].get('result') and
+                    len(data['quoteSummary']['result']) > 0):
+                    
+                    price_info = data['quoteSummary']['result'][0].get('price', {})
+                    price = price_info.get('regularMarketPrice', {}).get('raw')
+                    
+                    if price and price > 0:
+                        print(f"✅ 備用方法取得 {stock_code} 股價: {price}")
+                        return round(float(price), 2)
+                        
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ 備用 API 請求失敗: {e}")
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"⚠️ 備用 API 資料解析失敗: {e}")
+            
+            # 檢查股票代號是否有效
+            if stock_code.isdigit() and len(stock_code) == 4:
+                print(f"⚠️ {stock_code} 股價查詢失敗 - 可能原因:")
+                print(f"   • 股票代號不存在或已下市")
+                print(f"   • 股票暫停交易")
+                print(f"   • 目前為非交易時間")
+                print(f"   • API 服務暫時不可用")
+            else:
+                print(f"⚠️ {stock_code} 股票代號格式可能不正確")
+            
+            return None
                 
         except Exception as e:
-            print(f"⚠️ 股價查詢失敗: {e}")
+            print(f"⚠️ 股價查詢發生未預期錯誤: {e}")
             return None
     
     def set_stock_code(self, stock_name, stock_code):
@@ -409,7 +470,7 @@ class StockManager:
             return "✅ 所有持股都已設定股票代號"
     
     def get_realtime_pnl(self, account_name=None):
-        """獲取即時損益"""
+        """獲取即時損益 - 改進版"""
         if account_name and account_name not in self.stock_data['accounts']:
             return f"❌ 帳戶「{account_name}」不存在"
         
@@ -420,6 +481,7 @@ class StockManager:
         total_cost = 0
         total_value = 0
         has_price_data = False
+        failed_stocks = []
         
         for acc_name, account in accounts_to_check.items():
             if not account['stocks']:
@@ -437,7 +499,9 @@ class StockManager:
                 stock_code = holding.get('stock_code') or self.stock_data['stock_codes'].get(stock_name)
                 
                 if stock_code:
+                    print(f"🔍 正在查詢 {stock_name} ({stock_code}) 的股價...")
                     current_price = self.get_stock_price(stock_code)
+                    
                     if current_price:
                         current_value = holding['quantity'] * current_price
                         pnl = current_value - cost
@@ -453,8 +517,10 @@ class StockManager:
                         result += f"      💎 現值：{current_value:,}元 ({current_price}元/股)\n"
                         result += f"      {pnl_text}\n\n"
                     else:
-                        result += f"   📈 {stock_name} ({stock_code}) - ⚠️ 無法取得股價\n"
-                        result += f"      💰 成本：{cost:,}元\n\n"
+                        failed_stocks.append(f"{stock_name} ({stock_code})")
+                        result += f"   📈 {stock_name} ({stock_code}) - ❌ 無法取得股價\n"
+                        result += f"      💰 成本：{cost:,}元 ({holding['avg_cost']}元/股)\n"
+                        result += f"      ⚠️ 請檢查股票代號或稍後再試\n\n"
                 else:
                     result += f"   📈 {stock_name} - ⚠️ 缺少股票代號\n"
                     result += f"      💰 成本：{cost:,}元\n"
@@ -472,10 +538,22 @@ class StockManager:
             result += f"💎 總投資現值：{total_value:,}元\n"
             result += f"💹 總未實現損益：{total_pnl_text}\n\n"
         
+        # 顯示失敗的股票查詢
+        if failed_stocks:
+            result += f"⚠️ 以下股票無法取得即時股價：\n"
+            for stock in failed_stocks:
+                result += f"   • {stock}\n"
+            result += f"\n💡 可能原因：\n"
+            result += f"   • 非交易時間（平日 09:00-13:30）\n"
+            result += f"   • 股票暫停交易或已下市\n"
+            result += f"   • 網路連線問題\n"
+            result += f"   • API 服務暫時不可用\n\n"
+        
         result += "💡 提示：\n"
         result += "• 新交易請使用格式：爸爸買 台積電 2330 100 50000 0820\n"
         result += "• 股價資料來源：Yahoo Finance\n"
-        result += "• 股價可能有15分鐘延遲"
+        result += "• 交易時間：週一至週五 09:00-13:30\n"
+        result += "• 如持續無法取得股價，請檢查股票代號是否正確"
         
         return result
     
