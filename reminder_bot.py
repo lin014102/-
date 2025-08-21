@@ -22,6 +22,14 @@ class ReminderBot:
             'evening_time': '18:00',
             'user_id': None
         }
+        # 新增：防重複提醒的日期追蹤
+        self.last_reminders = {
+            'daily_morning_date': None,
+            'daily_evening_date': None,
+            'dated_todo_preview_date': None,
+            'dated_todo_morning_date': None,
+            'dated_todo_evening_date': None
+        }
         self.reminder_thread = None
     
     def parse_short_reminder(self, text):
@@ -163,20 +171,48 @@ class ReminderBot:
                 current_time = get_taiwan_time_hhmm()
                 user_id = self.user_settings.get('user_id')
                 taiwan_now = get_taiwan_datetime()
+                today_date = taiwan_now.strftime('%Y-%m-%d')
                 
                 print(f"🔍 提醒檢查 - 台灣時間: {get_taiwan_time()}")
                 
-                # 檢查每日提醒
-                if user_id and (current_time == self.user_settings['morning_time'] or current_time == self.user_settings['evening_time']):
-                    self.send_daily_reminder(user_id, current_time)
+                # 檢查每日提醒（加入防重複機制）
+                if user_id:
+                    if (current_time == self.user_settings['morning_time'] and 
+                        self.last_reminders['daily_morning_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_morning_date'] = today_date
+                    
+                    elif (current_time == self.user_settings['evening_time'] and 
+                          self.last_reminders['daily_evening_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_evening_date'] = today_date
                 
-                # 檢查每月預告
-                if current_time == self.user_settings['evening_time']:
+                # 檢查每月預告（防重複）
+                if (user_id and current_time == self.user_settings['evening_time'] and 
+                    self.last_reminders['daily_evening_date'] == today_date):  # 確保晚上提醒已發送
                     self.check_monthly_preview(taiwan_now, user_id)
                 
                 # 檢查每月提醒
                 if current_time == "09:00":
                     self.check_monthly_reminders(taiwan_now, user_id)
+                
+                # 新增：檢查有日期待辦事項的預告（前一天晚上）
+                if (user_id and current_time == self.user_settings['evening_time'] and 
+                    self.last_reminders['dated_todo_preview_date'] != today_date):
+                    self.check_dated_todo_preview(taiwan_now, user_id)
+                    self.last_reminders['dated_todo_preview_date'] = today_date
+                
+                # 新增：檢查有日期待辦事項的當天提醒
+                if user_id:
+                    if (current_time == self.user_settings['morning_time'] and 
+                        self.last_reminders['dated_todo_morning_date'] != today_date):
+                        self.check_dated_todo_reminders(taiwan_now, user_id, 'morning')
+                        self.last_reminders['dated_todo_morning_date'] = today_date
+                    
+                    elif (current_time == self.user_settings['evening_time'] and 
+                          self.last_reminders['dated_todo_evening_date'] != today_date):
+                        self.check_dated_todo_reminders(taiwan_now, user_id, 'evening')
+                        self.last_reminders['dated_todo_evening_date'] = today_date
                 
                 # 檢查短期和時間提醒
                 self.check_short_reminders(taiwan_now)
@@ -281,6 +317,63 @@ class ReminderBot:
             
             send_push_message(user_id, message)
             print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
+    
+    def check_dated_todo_preview(self, taiwan_now, user_id):
+        """新增：檢查明天有日期的待辦事項預告"""
+        if not user_id:
+            return
+        
+        tomorrow = taiwan_now + timedelta(days=1)
+        tomorrow_str = tomorrow.strftime('%Y/%m/%d')
+        
+        # 獲取明天的有日期待辦事項（未完成的）
+        tomorrow_todos = []
+        for todo in self.todo_manager.get_pending_todos():
+            if todo.get('has_date') and todo.get('target_date') == tomorrow_str:
+                tomorrow_todos.append(todo)
+        
+        if tomorrow_todos:
+            message = f"📅 明日待辦提醒！\n\n明天 ({tomorrow.strftime('%m/%d')}) 有 {len(tomorrow_todos)} 項待辦事項：\n\n"
+            
+            for i, todo in enumerate(tomorrow_todos, 1):
+                message += f"{i}. 📋 {todo['content']}\n"
+            
+            message += f"\n💡 明天早上和晚上會持續提醒，直到完成或刪除\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送明日待辦預告，明天有 {len(tomorrow_todos)} 項有日期事項 - 台灣時間: {get_taiwan_time()}")
+    
+    def check_dated_todo_reminders(self, taiwan_now, user_id, time_type):
+        """新增：檢查有日期待辦事項的當天提醒"""
+        if not user_id:
+            return
+        
+        today_str = taiwan_now.strftime('%Y/%m/%d')
+        time_icon = '🌅' if time_type == 'morning' else '🌙'
+        time_text = '早上' if time_type == 'morning' else '晚上'
+        
+        # 獲取今天的有日期待辦事項（未完成的）
+        today_todos = []
+        for todo in self.todo_manager.get_pending_todos():
+            if todo.get('has_date') and todo.get('target_date') == today_str:
+                today_todos.append(todo)
+        
+        if today_todos:
+            message = f"{time_icon} {time_text}特別提醒！\n\n今天 ({taiwan_now.strftime('%m/%d')}) 有 {len(today_todos)} 項重要事項：\n\n"
+            
+            for i, todo in enumerate(today_todos, 1):
+                message += f"{i}. 🎯 {todo['content']}\n"
+            
+            if time_type == 'morning':
+                message += f"\n💪 今天要完成這些重要任務！"
+            else:
+                message += f"\n🌙 檢查一下今天的重要事項完成了嗎？"
+            
+            message += f"\n💡 完成後請標記完成或刪除，以停止提醒"
+            message += f"\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送今日有日期待辦提醒 ({time_text}，{len(today_todos)} 項) - 台灣時間: {get_taiwan_time()}")
     
     def check_short_reminders(self, taiwan_now):
         """檢查短期提醒"""
