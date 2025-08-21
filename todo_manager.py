@@ -50,6 +50,46 @@ class TodoManager:
                             "day_only": day
                         }
                         
+                elif pattern_type == 'month_day':
+                    month = int(match.group(1))
+                    day = int(match.group(2))
+                    content = match.group(3).strip()
+                    
+                    if 1 <= month <= 12 and 1 <= day <= 31 and content:
+                        target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                       hour=0, minute=0, second=0, microsecond=0)
+                        if target_date < taiwan_now:
+                            target_date = target_date.replace(year=current_year + 1)
+                        
+                        return {
+                            "has_date": True,
+                            "date": target_date,
+                            "content": content,
+                            "date_string": f"{month}/{day}"
+                        }
+                        
+                elif pattern_type == 'content_day':
+                    content = match.group(1).strip()
+                    day = int(match.group(2))
+                    
+                    if 1 <= day <= 31 and content:
+                        month = taiwan_now.month
+                        target_date = taiwan_now.replace(year=current_year, month=month, day=day,
+                                                       hour=0, minute=0, second=0, microsecond=0)
+                        if target_date < taiwan_now:
+                            if month == 12:
+                                target_date = target_date.replace(year=current_year + 1, month=1)
+                            else:
+                                target_date = target_date.replace(month=month + 1)
+                        
+                        return {
+                            "has_date": True,
+                            "date": target_date,
+                            "content": content,
+                            "date_string": f"{month}/{day}",
+                            "day_only": day
+                        }
+                        
                 elif pattern_type == 'content_month_day':
                     content = match.group(1).strip()
                     month = int(match.group(2))
@@ -288,44 +328,4 @@ class TodoManager:
 
 
 # 建立全域實例，供其他模組使用
-todo_manager = TodoManager()_date < taiwan_now:
-                            if month == 12:
-                                target_date = target_date.replace(year=current_year + 1, month=1)
-                            else:
-                                target_date = target_date.replace(month=month + 1)
-                        
-                        return {
-                            "has_date": True,
-                            "date": target_date,
-                            "content": content,
-                            "date_string": f"{month}/{day}",
-                            "day_only": day
-                        }
-                        
-                elif pattern_type == 'month_day':
-                    month = int(match.group(1))
-                    day = int(match.group(2))
-                    content = match.group(3).strip()
-                    
-                    if 1 <= month <= 12 and 1 <= day <= 31 and content:
-                        target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                       hour=0, minute=0, second=0, microsecond=0)
-                        if target_date < taiwan_now:
-                            target_date = target_date.replace(year=current_year + 1)
-                        
-                        return {
-                            "has_date": True,
-                            "date": target_date,
-                            "content": content,
-                            "date_string": f"{month}/{day}"
-                        }
-                        
-                elif pattern_type == 'content_day':
-                    content = match.group(1).strip()
-                    day = int(match.group(2))
-                    
-                    if 1 <= day <= 31 and content:
-                        month = taiwan_now.month
-                        target_date = taiwan_now.replace(year=current_year, month=month, day=day,
-                                                       hour=0, minute=0, second=0, microsecond=0)
-                        if target
+todo_manager = TodoManager()
