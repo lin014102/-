@@ -361,28 +361,28 @@ class StockManager:
     
     def get_stock_price(self, stock_code):
         """查詢股票即時價格 - 改進版"""
-    
-    # 修正問題股票代號
-    if stock_code == '915':
-        stock_code = '00915.TW'
-    elif stock_code == '929':
-        stock_code = '00929.TW'
-    elif stock_code == '3078':
-        stock_code = '3078.TWO'
-    elif stock_code == '3374':
-        stock_code = '3374.TWO'
-    elif stock_code == '5483':
-        stock_code = '5483.TWO'
-    elif stock_code == '4541':
-        stock_code = '4541.TWO'
-    
-    try:
-        import requests
-        import json
-        import time
+        
+        # 修正問題股票代號
+        if stock_code == '915':
+            stock_code = '00915.TW'
+        elif stock_code == '929':
+            stock_code = '00929.TW'
+        elif stock_code == '3078':
+            stock_code = '3078.TWO'
+        elif stock_code == '3374':
+            stock_code = '3374.TWO'
+        elif stock_code == '5483':
+            stock_code = '5483.TWO'
+        elif stock_code == '4541':
+            stock_code = '4541.TWO'
+        
+        try:
+            import requests
+            import json
+            import time
             
             # 確保股票代號格式正確
-            if not stock_code.endswith('.TW'):
+            if not stock_code.endswith('.TW') and not stock_code.endswith('.TWO'):
                 formatted_code = f"{stock_code}.TW"
             else:
                 formatted_code = stock_code
@@ -415,44 +415,7 @@ class StockManager:
             except (KeyError, TypeError, ValueError) as e:
                 print(f"⚠️ Yahoo Finance 資料解析失敗: {e}")
             
-            # 方法2: 備用 Yahoo Finance URL
-            try:
-                time.sleep(0.5)  # 避免請求過於頻繁
-                url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{formatted_code}?modules=price"
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                }
-                
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                
-                if (data.get('quoteSummary') and 
-                    data['quoteSummary'].get('result') and
-                    len(data['quoteSummary']['result']) > 0):
-                    
-                    price_info = data['quoteSummary']['result'][0].get('price', {})
-                    price = price_info.get('regularMarketPrice', {}).get('raw')
-                    
-                    if price and price > 0:
-                        print(f"✅ 備用方法取得 {stock_code} 股價: {price}")
-                        return round(float(price), 2)
-                        
-            except requests.exceptions.RequestException as e:
-                print(f"⚠️ 備用 API 請求失敗: {e}")
-            except (KeyError, TypeError, ValueError) as e:
-                print(f"⚠️ 備用 API 資料解析失敗: {e}")
-            
-            # 檢查股票代號是否有效
-            if stock_code.isdigit() and len(stock_code) == 4:
-                print(f"⚠️ {stock_code} 股價查詢失敗 - 可能原因:")
-                print(f"   • 股票代號不存在或已下市")
-                print(f"   • 股票暫停交易")
-                print(f"   • 目前為非交易時間")
-                print(f"   • API 服務暫時不可用")
-            else:
-                print(f"⚠️ {stock_code} 股票代號格式可能不正確")
-            
+            print(f"⚠️ {stock_code} 股價查詢失敗")
             return None
                 
         except Exception as e:
