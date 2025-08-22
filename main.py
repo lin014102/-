@@ -147,6 +147,11 @@ class MessageRouter:
         
         elif message_text == '每月清單':
             return self.todo_manager.get_monthly_list()
+            
+        elif message_text.startswith('每月刪除 '):
+            index_str = message_text[5:].strip()
+            return self.todo_manager.delete_monthly_todo(index_str)
+
         
         # === 系統功能 ===
         elif message_text in ['幫助', 'help', '說明']:
