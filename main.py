@@ -1,6 +1,6 @@
 """
 main.py - LINE Todo Reminder Bot 主程式
-v3.0 完全模組化架構
+v3.0 + Gemini AI 完全模組化架構
 """
 from flask import Flask, request, jsonify
 import os
@@ -17,8 +17,11 @@ from reminder_bot import ReminderBot
 from stock_manager import (
     handle_stock_command, get_stock_summary, get_stock_transactions,
     get_stock_cost_analysis, get_stock_account_list, get_stock_help,
-    is_stock_command, is_stock_query, get_stock_realtime_pnl  # 👈 新增這個
+    is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
+
+# 🆕 匯入 Gemini AI 模組
+from gemini_analyzer import EnhancedMessageRouter
 
 # 初始化 Flask 應用
 app = Flask(__name__)
@@ -26,202 +29,8 @@ app = Flask(__name__)
 # 建立模組實例
 reminder_bot = ReminderBot(todo_manager)
 
-class MessageRouter:
-    """訊息路由器 - 分發訊息到對應模組"""
-    
-    def __init__(self, todo_mgr, reminder_bot, stock_mgr):
-        self.todo_manager = todo_mgr
-        self.reminder_bot = reminder_bot
-        # stock_manager 是靜態函數，不需要實例
-    
-    def route_message(self, message_text, user_id):
-        """路由訊息到對應的處理模組"""
-        message_text = message_text.strip()
-        
-        # 設定用戶ID
-        self.reminder_bot.set_user_id(user_id)
-        
-        # === 股票功能路由 ===
-        if is_stock_command(message_text):
-            return handle_stock_command(message_text)
-        
-        elif message_text == '總覽':
-            return get_stock_summary()
-        
-        elif message_text.endswith('查詢') and message_text != '查詢':
-            account_name = message_text[:-2].strip()
-            if account_name in ['股票', '帳戶']:
-                return get_stock_summary()
-            else:
-                return get_stock_summary(account_name)
-        
-        # 🆕 新增的股票查詢功能
-        elif message_text == '即時股價查詢':
-            return "💹 即時股價查詢說明：\n\n使用方式：\n• 股價查詢 台積電\n• 估價查詢 鴻海\n• 股價 中華電\n\n💡 記得先用「設定代號 股票名稱 代號」設定股票代號"
-
-        elif message_text.startswith('估價查詢 '):
-            stock_name = message_text.replace('估價查詢 ', '').strip()
-            return handle_stock_command(f"股價查詢 {stock_name}")
-
-        elif message_text.startswith('即時損益 '):
-            account_name = message_text.replace('即時損益 ', '').strip()
-            return get_stock_realtime_pnl(account_name)
-
-        elif message_text == '即時損益':
-            return get_stock_realtime_pnl()
-        
-        elif message_text.startswith('檢查代號'):
-            return handle_stock_command(message_text)
-        
-        elif message_text.startswith('設定代號 '):
-            return handle_stock_command(message_text)
-        
-        elif message_text.startswith('股價查詢 ') or message_text.startswith('股價 '):
-            return handle_stock_command(message_text)
-        
-        # 原有的股票功能繼續
-        elif message_text == '交易記錄':
-            return get_stock_transactions()
-        
-        elif message_text.startswith('交易記錄 '):
-            account_name = message_text[5:].strip()
-            return get_stock_transactions(account_name)
-        
-        elif message_text.startswith('成本查詢 ') and ' ' in message_text[5:]:
-            parts = message_text[5:].strip().split(' ', 1)
-            if len(parts) == 2:
-                account_name, stock_code = parts
-                return get_stock_cost_analysis(account_name, stock_code)
-            else:
-                return "❌ 格式不正確\n💡 例如：成本查詢 爸爸 2330"
-        
-        elif message_text == '帳戶列表':
-            return get_stock_account_list()
-        
-        elif message_text == '股票幫助':
-            return get_stock_help()
-        
-        # === 提醒功能路由 ===
-        elif message_text == '查詢時間':
-            return self.reminder_bot.get_time_settings()
-        
-        elif message_text.startswith('早上時間 '):
-            time_str = message_text[5:].strip()
-            if is_valid_time_format(time_str):
-                return self.reminder_bot.set_morning_time(time_str)
-            else:
-                return "❌ 時間格式不正確，請使用 HH:MM 格式，例如：08:30"
-        
-        elif message_text.startswith('晚上時間 '):
-            time_str = message_text[5:].strip()
-            if is_valid_time_format(time_str):
-                return self.reminder_bot.set_evening_time(time_str)
-            else:
-                return "❌ 時間格式不正確，請使用 HH:MM 格式，例如：19:00"
-        
-        elif any(keyword in message_text for keyword in ['分鐘後', '小時後', '秒後']):
-            return self.reminder_bot.add_short_reminder(message_text, user_id)
-        
-        elif re.match(r'^\d{1,2}:\d{2}.+', message_text):
-            return self.reminder_bot.add_time_reminder(message_text, user_id)
-        
-        # === 待辦事項功能路由 ===
-        elif message_text.startswith('新增 '):
-            todo_text = message_text[3:].strip()
-            return self.todo_manager.add_todo(todo_text)
-        
-        elif message_text in ['查詢', '清單']:
-            return self.todo_manager.get_todo_list()
-        
-        elif message_text.startswith('刪除 '):
-            index_str = message_text[3:]
-            return self.todo_manager.delete_todo(index_str)
-        
-        elif message_text.startswith('完成 '):
-            index_str = message_text[3:]
-            return self.todo_manager.complete_todo(index_str)
-        
-        elif message_text.startswith('每月新增 '):
-            todo_text = message_text[5:].strip()
-            return self.todo_manager.add_monthly_todo(todo_text)
-        
-        elif message_text == '每月清單':
-            return self.todo_manager.get_monthly_list()
-            
-        elif message_text.startswith('每月刪除 '):
-            index_str = message_text[5:].strip()
-            return self.todo_manager.delete_monthly_todo(index_str)
-
-        
-        # === 系統功能 ===
-        elif message_text in ['幫助', 'help', '說明']:
-            return self.get_help_message()
-        
-        elif message_text == '測試':
-            return self.get_system_status()
-        
-        else:
-            return self.get_default_response(message_text)
-    
-    def get_help_message(self):
-        """獲取幫助訊息"""
-        return """📋 LINE Todo Bot v3.0 完整功能：
-
-🔹 待辦事項：
-- 新增 [事項] - 新增待辦事項
-- 查詢 - 查看待辦清單
-- 刪除 [編號] - 刪除事項
-- 完成 [編號] - 標記完成
-
-⏰ 提醒功能：
-- 5分鐘後倒垃圾 - 短期提醒
-- 12:00開會 - 時間提醒
-- 早上時間 09:00 - 設定早上提醒
-- 晚上時間 18:00 - 設定晚上提醒
-
-🔄 每月功能：
-- 每月新增 5號繳卡費 - 每月固定事項
-- 每月清單 - 查看每月事項
-- 每月刪除 [編號] - 刪除每月事項
-
-💰 股票記帳：
-- 爸爸入帳 50000 - 入金
-- 爸爸買 2330 100 50000 0820 - 買股票
-- 總覽 - 查看所有帳戶
-- 即時損益 - 查看即時損益
-- 估價查詢 台積電 - 查詢股價
-- 設定代號 台積電 2330 - 設定股票代號
-- 股票幫助 - 股票功能詳細說明
-
-🚀 v3.0 新功能：完全模組化架構，易於擴充！"""
-    
-    def get_system_status(self):
-        """獲取系統狀態"""
-        return f"""✅ 系統狀態檢查
-🇹🇼 當前台灣時間：{get_taiwan_time()}
-
-📊 模組狀態：
-⏰ 提醒機器人：✅ 運行中
-📋 待辦事項管理：✅ 已載入
-💰 股票記帳模組：✅ 已載入
-💹 即時損益功能：✅ 已啟用
-
-🔧 架構：完全模組化
-🚀 版本：v3.0
-
-💡 輸入「幫助」查看功能列表"""
-    
-    def get_default_response(self, message_text):
-        """預設回應"""
-        return f"""您說：{message_text}
-🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}
-
-💡 輸入「幫助」查看待辦功能
-💰 輸入「股票幫助」查看股票功能
-💹 輸入「即時損益」查看股票損益"""
-
-# 建立訊息路由器實例
-message_router = MessageRouter(todo_manager, reminder_bot, None)
+# 🆕 使用增強版訊息路由器
+message_router = EnhancedMessageRouter(todo_manager, reminder_bot, None)
 
 # 背景服務管理
 class BackgroundServices:
@@ -272,10 +81,11 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.0</h1>
+    <h1>LINE Todo Reminder Bot v3.0 + Gemini AI</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>🚀 模組化架構，完全重構！</p>
     <p>💹 新增即時損益功能！</p>
+    <p>🤖 整合 Gemini AI 智能對話！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     """
 
@@ -313,12 +123,15 @@ def health():
     # 獲取各模組狀態
     reminder_counts = reminder_bot.get_reminder_counts()
     
+    # 🆕 獲取 Gemini AI 狀態
+    gemini_status = message_router.gemini_analyzer.enabled
+    
     return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.0_modular_architecture_with_realtime_pnl',
+        'version': 'v3.0_modular_architecture_with_realtime_pnl_and_gemini_ai',
         
         # 模組狀態
         'modules': {
@@ -338,6 +151,10 @@ def health():
                 'realtime_pnl_enabled': True,
                 'features': ['basic_accounting', 'google_sheets_sync', 'realtime_stock_prices', 'pnl_analysis']
             },
+            'gemini_ai': {
+                'enabled': gemini_status,
+                'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification']
+            },
             'background_services': bg_services.services
         }
     })
@@ -356,7 +173,7 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 使用訊息路由器處理
+                # 🆕 使用增強版訊息路由器處理（整合 Gemini AI）
                 reply_text = message_router.route_message(message_text, user_id)
                 
                 # 回覆訊息
@@ -370,7 +187,7 @@ def webhook():
 
 def initialize_app():
     """初始化應用程式"""
-    print("🚀 LINE Todo Reminder Bot v3.0 啟動中...")
+    print("🚀 LINE Todo Reminder Bot v3.0 + Gemini AI 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
@@ -382,6 +199,7 @@ def initialize_app():
     print("⏰ 提醒機器人：✅ 已啟動") 
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
+    print("🤖 Gemini AI 模組：✅ 已整合")
     print("🔧 模組化架構：✅ 完全重構")
     print("=" * 50)
     print("🎉 系統初始化完成！")
