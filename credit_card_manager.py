@@ -185,14 +185,48 @@ class CreditCardManager:
                 print("⚠️ 未找到 GROQ_API_KEY 環境變數")
                 return False
             
-            # 簡化初始化，避免版本相容性問題
-            self.groq_client = Groq(api_key=groq_key)
+            # 嘗試不同的初始化方式，避免 proxies 參數問題
+            try:
+                # 方法1: 最簡單的初始化
+                import os
+                # 清除可能的代理設定
+                if 'HTTP_PROXY' in os.environ:
+                    del os.environ['HTTP_PROXY']
+                if 'HTTPS_PROXY' in os.environ:
+                    del os.environ['HTTPS_PROXY']
+                if 'http_proxy' in os.environ:
+                    del os.environ['http_proxy']
+                if 'https_proxy' in os.environ:
+                    del os.environ['https_proxy']
+                
+                self.groq_client = Groq(api_key=groq_key)
+                
+            except Exception as e1:
+                print(f"初始化方法1失敗: {e1}")
+                # 方法2: 嘗試舊版本的方式
+                try:
+                    from groq import Client
+                    self.groq_client = Client(api_key=groq_key)
+                except Exception as e2:
+                    print(f"初始化方法2失敗: {e2}")
+                    # 方法3: 手動指定參數
+                    try:
+                        self.groq_client = Groq(
+                            api_key=groq_key,
+                            base_url="https://api.groq.com/openai/v1"
+                        )
+                    except Exception as e3:
+                        print(f"初始化方法3失敗: {e3}")
+                        raise e3
+            
             self.groq_enabled = True
             print("✅ Groq API 連接成功")
             return True
             
         except Exception as e:
             print(f"❌ Groq API 連接失敗: {e}")
+            print("💡 將使用備用方案處理帳單")
+            self.groq_enabled = False
             return False
     
     def load_bank_passwords(self):
@@ -481,7 +515,8 @@ class CreditCardManager:
         """使用LLM解析帳單內容"""
         try:
             if not self.groq_enabled:
-                return None
+                print("⚠️ Groq API 不可用，使用基礎解析方案")
+                return self.basic_parse_bill(extracted_text, bank_name)
             
             prompt = f"""你是專業的信用卡帳單解析專家。請從以下{bank_name}信用卡帳單文字中，提取並整理成JSON格式：
 
@@ -539,14 +574,70 @@ class CreditCardManager:
                     return structured_data
                 else:
                     print(f"   ❌ 未找到有效JSON格式")
-                    return None
+                    return self.basic_parse_bill(extracted_text, bank_name)
                     
             except json.JSONDecodeError as e:
                 print(f"   ❌ JSON解析失敗: {e}")
-                return None
+                return self.basic_parse_bill(extracted_text, bank_name)
             
         except Exception as e:
             print(f"   ❌ LLM處理失敗: {e}")
+            return self.basic_parse_bill(extracted_text, bank_name)
+    
+    def basic_parse_bill(self, extracted_text, bank_name):
+        """基礎帳單解析方案(不使用LLM)"""
+        try:
+            print("   🔧 使用基礎解析方案")
+            
+            # 基本資料結構
+            bill_data = {
+                "bank_name": bank_name,
+                "card_number": None,
+                "statement_period": None,
+                "due_date": None,
+                "total_amount": None,
+                "minimum_payment": None,
+                "transactions": [],
+                "summary": {
+                    "transaction_count": 0,
+                    "total_spending": 0
+                }
+            }
+            
+            # 簡單的關鍵字匹配
+            lines = extracted_text.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                
+                # 查找金額
+                if '本期應繳' in line or '應繳金額' in line:
+                    amounts = re.findall(r'[\d,]+', line)
+                    if amounts:
+                        bill_data['total_amount'] = amounts[-1].replace(',', '')
+                
+                # 查找最低應繳
+                elif '最低應繳' in line:
+                    amounts = re.findall(r'[\d,]+', line)
+                    if amounts:
+                        bill_data['minimum_payment'] = amounts[-1].replace(',', '')
+                
+                # 查找繳款期限
+                elif '繳款期限' in line or '到期日' in line:
+                    dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
+                    if dates:
+                        bill_data['due_date'] = dates[0]
+            
+            # 如果找到了基本資訊就算成功
+            if bill_data['total_amount'] or bill_data['minimum_payment']:
+                print("   ✅ 基礎解析成功")
+                return bill_data
+            else:
+                print("   ❌ 基礎解析失敗")
+                return None
+                
+        except Exception as e:
+            print(f"   ❌ 基礎解析失敗: {e}")
             return None
     
     def is_bill_already_processed(self, message_id):
