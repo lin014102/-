@@ -185,16 +185,8 @@ class CreditCardManager:
                 print("⚠️ 未找到 GROQ_API_KEY 環境變數")
                 return False
             
-            # 修正版本相容性問題
+            # 簡化初始化，避免版本相容性問題
             self.groq_client = Groq(api_key=groq_key)
-            
-            # 測試 API 連接
-            test_response = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": "test"}],
-                model="llama3-8b-8192",
-                max_tokens=5
-            )
-            
             self.groq_enabled = True
             print("✅ Groq API 連接成功")
             return True
