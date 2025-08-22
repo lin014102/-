@@ -185,40 +185,8 @@ class CreditCardManager:
                 print("⚠️ 未找到 GROQ_API_KEY 環境變數")
                 return False
             
-            # 嘗試不同的初始化方式，避免 proxies 參數問題
-            try:
-                # 方法1: 最簡單的初始化
-                import os
-                # 清除可能的代理設定
-                if 'HTTP_PROXY' in os.environ:
-                    del os.environ['HTTP_PROXY']
-                if 'HTTPS_PROXY' in os.environ:
-                    del os.environ['HTTPS_PROXY']
-                if 'http_proxy' in os.environ:
-                    del os.environ['http_proxy']
-                if 'https_proxy' in os.environ:
-                    del os.environ['https_proxy']
-                
-                self.groq_client = Groq(api_key=groq_key)
-                
-            except Exception as e1:
-                print(f"初始化方法1失敗: {e1}")
-                # 方法2: 嘗試舊版本的方式
-                try:
-                    from groq import Client
-                    self.groq_client = Client(api_key=groq_key)
-                except Exception as e2:
-                    print(f"初始化方法2失敗: {e2}")
-                    # 方法3: 手動指定參數
-                    try:
-                        self.groq_client = Groq(
-                            api_key=groq_key,
-                            base_url="https://api.groq.com/openai/v1"
-                        )
-                    except Exception as e3:
-                        print(f"初始化方法3失敗: {e3}")
-                        raise e3
-            
+            # 最簡單的初始化方式
+            self.groq_client = Groq(api_key=groq_key)
             self.groq_enabled = True
             print("✅ Groq API 連接成功")
             return True
