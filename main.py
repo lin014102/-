@@ -1,6 +1,6 @@
 """
 main.py - LINE Todo Reminder Bot 主程式
-v3.0 + Gemini AI 完全模組化架構
+v3.1 + Gemini AI + 信用卡帳單監控 完全模組化架構
 """
 from flask import Flask, request, jsonify
 import os
@@ -18,6 +18,13 @@ from stock_manager import (
     handle_stock_command, get_stock_summary, get_stock_transactions,
     get_stock_cost_analysis, get_stock_account_list, get_stock_help,
     is_stock_command, is_stock_query, get_stock_realtime_pnl
+)
+
+# 🆕 匯入信用卡帳單模組
+from credit_card_manager import (
+    handle_credit_card_command, is_credit_card_command, 
+    is_credit_card_query, get_credit_card_summary,
+    start_credit_card_monitor, get_credit_card_status
 )
 
 # 🆕 匯入 Gemini AI 模組
@@ -72,6 +79,15 @@ class BackgroundServices:
         reminder_bot.start_reminder_thread()
         self.services.append('reminder_bot')
         print("✅ 提醒機器人已啟動")
+    
+    def start_credit_card_monitor(self):
+        """啟動信用卡帳單監控"""
+        try:
+            result = start_credit_card_monitor()
+            self.services.append('credit_card_monitor')
+            print("✅ 信用卡帳單監控已啟動")
+        except Exception as e:
+            print(f"⚠️ 信用卡帳單監控啟動失敗: {e}")
 
 # 建立背景服務管理器
 bg_services = BackgroundServices()
@@ -81,11 +97,12 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.0 + Gemini AI</h1>
+    <h1>LINE Todo Reminder Bot v3.1 + Gemini AI + 信用卡帳單監控</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>🚀 模組化架構，完全重構！</p>
     <p>💹 新增即時損益功能！</p>
     <p>🤖 整合 Gemini AI 智能對話！</p>
+    <p>💳 新增信用卡帳單自動監控！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     """
 
@@ -126,12 +143,18 @@ def health():
     # 🆕 獲取 Gemini AI 狀態
     gemini_status = message_router.gemini_analyzer.enabled
     
+    # 🆕 獲取信用卡帳單監控狀態
+    try:
+        credit_card_status = get_credit_card_status()
+    except:
+        credit_card_status = {'status': 'error', 'gmail_enabled': False, 'groq_enabled': False}
+    
     return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.0_modular_architecture_with_realtime_pnl_and_gemini_ai',
+        'version': 'v3.1_modular_architecture_with_credit_card_monitoring',
         
         # 模組狀態
         'modules': {
@@ -155,6 +178,16 @@ def health():
                 'enabled': gemini_status,
                 'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification']
             },
+            'credit_card_manager': {
+                'status': credit_card_status.get('status', 'unknown'),
+                'gmail_enabled': credit_card_status.get('gmail_enabled', False),
+                'groq_enabled': credit_card_status.get('groq_enabled', False),
+                'tesseract_enabled': credit_card_status.get('tesseract_enabled', False),
+                'monitored_banks': credit_card_status.get('monitored_banks', []),
+                'processed_bills_count': credit_card_status.get('processed_bills_count', 0),
+                'last_check_time': credit_card_status.get('last_check_time'),
+                'features': ['gmail_monitoring', 'auto_pdf_unlock', 'ocr_processing', 'llm_analysis']
+            },
             'background_services': bg_services.services
         }
     })
@@ -173,8 +206,8 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 🆕 使用增強版訊息路由器處理（整合 Gemini AI）
-                reply_text = message_router.route_message(message_text, user_id)
+                # 🆕 增強版訊息路由處理（包含信用卡帳單功能）
+                reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
                 reply_message(reply_token, reply_text)
@@ -185,23 +218,73 @@ def webhook():
         print(f"❌ Webhook 處理錯誤: {e} - {get_taiwan_time()}")
         return 'OK', 200
 
+def enhanced_message_router(message_text, user_id):
+    """增強版訊息路由器 - 整合所有功能模組"""
+    try:
+        # 🆕 優先檢查信用卡帳單指令
+        if is_credit_card_command(message_text) or is_credit_card_query(message_text):
+            print(f"🔀 路由到信用卡帳單模組: {message_text}")
+            return handle_credit_card_command(message_text)
+        
+        # 檢查股票相關指令
+        elif is_stock_command(message_text):
+            print(f"🔀 路由到股票模組: {message_text}")
+            return handle_stock_command(message_text)
+        
+        elif is_stock_query(message_text):
+            print(f"🔀 路由到股票查詢: {message_text}")
+            
+            if message_text == '總覽':
+                return get_stock_summary()
+            elif message_text == '帳戶列表':
+                return get_stock_account_list()
+            elif message_text == '股票幫助':
+                return get_stock_help()
+            elif message_text.startswith('交易記錄'):
+                parts = message_text.split()
+                account_name = parts[1] if len(parts) > 1 else None
+                return get_stock_transactions(account_name)
+            elif message_text.startswith('成本查詢'):
+                parts = message_text.split()
+                if len(parts) >= 3:
+                    return get_stock_cost_analysis(parts[1], parts[2])
+                else:
+                    return "❌ 請指定帳戶和股票名稱\n💡 格式：成本查詢 帳戶名稱 股票名稱"
+            elif message_text.startswith('即時損益'):
+                parts = message_text.split()
+                account_name = parts[1] if len(parts) > 1 else None
+                return get_stock_realtime_pnl(account_name)
+            elif message_text.endswith('查詢'):
+                account_name = message_text[:-2]
+                return get_stock_summary(account_name)
+        
+        # 🆕 其他指令繼續使用原本的 Gemini AI 路由器
+        else:
+            return message_router.route_message(message_text, user_id)
+    
+    except Exception as e:
+        print(f"❌ 訊息路由錯誤: {e}")
+        return f"❌ 系統處理錯誤，請稍後再試\n🕒 {get_taiwan_time()}"
+
 def initialize_app():
     """初始化應用程式"""
-    print("🚀 LINE Todo Reminder Bot v3.0 + Gemini AI 啟動中...")
+    print("🚀 LINE Todo Reminder Bot v3.1 + Gemini AI + 信用卡帳單監控 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
     bg_services.start_keep_alive()
     bg_services.start_reminder_bot()
+    bg_services.start_credit_card_monitor()  # 🆕 啟動信用卡帳單監控
     
-    print("=" * 50)
+    print("=" * 60)
     print("📋 待辦事項管理：✅ 已載入")
     print("⏰ 提醒機器人：✅ 已啟動") 
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
     print("🤖 Gemini AI 模組：✅ 已整合")
+    print("💳 信用卡帳單監控：✅ 已啟動")  # 🆕
     print("🔧 模組化架構：✅ 完全重構")
-    print("=" * 50)
+    print("=" * 60)
     print("🎉 系統初始化完成！")
 
 if __name__ == '__main__':
