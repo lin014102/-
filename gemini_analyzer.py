@@ -1,5 +1,5 @@
 """
-gemini_analyzer.py - Gemini API 訊息分析器
+gemini_analyzer.py - Gemini API 訊息分析器 (修正版)
 整合到 LINE Todo Reminder Bot v3.0
 """
 import google.generativeai as genai
@@ -30,6 +30,7 @@ class GeminiAnalyzer:
     def analyze_message(self, message_text: str) -> Dict[str, Any]:
         """分析用戶訊息，返回意圖和參數"""
         if not self.enabled:
+            print("📝 Gemini 未啟用，使用降級分析")
             return self._fallback_analysis(message_text)
         
         try:
@@ -46,11 +47,12 @@ class GeminiAnalyzer:
                     response_text = response_text[:-3]
                 
                 result = json.loads(response_text)
-                print(f"🤖 Gemini 分析結果: {result.get('intent')} - {result.get('confidence')}")
+                print(f"🤖 Gemini 分析: 訊息='{message_text}' → 意圖={result.get('intent')} 置信度={result.get('confidence')}")
                 return result
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # 如果 JSON 解析失敗，降級到關鍵字匹配
-                print(f"⚠️ Gemini 回應解析失敗，降級處理: {response.text[:100]}")
+                print(f"⚠️ Gemini JSON 解析失敗: {e}")
+                print(f"📄 原始回應: {response.text[:200]}")
                 return self._fallback_analysis(message_text)
                 
         except Exception as e:
@@ -69,26 +71,24 @@ class GeminiAnalyzer:
 1. 待辦事項 (todo)：
    - 新增待辦：「新增 買菜」
    - 查詢清單：「查詢」、「清單」  
-   - 刪除事項：「刪除 1」
-   - 完成事項：「完成 1」
-   - 每月待辦：「每月新增 5號繳卡費」
+   - 自然語言待辦：「等一下要洗碗」、「記得買菜」、「8/28要開會」
 
 2. 提醒功能 (reminder)：
    - 短期提醒：「30分鐘後開會」、「2小時後倒垃圾」
    - 時間提醒：「19:00吃晚餐」
-   - 設定提醒時間：「早上時間 09:00」、「晚上時間 18:00」
+   - 日期提醒：「明天提醒開會」、「記得明天放假」
 
 3. 股票記帳 (stock)：
    - 股票交易：「爸爸買 2330 100 50000 0820」
-   - 入金：「爸爸入帳 50000」
-   - 查詢總覽：「總覽」
-   - 即時損益：「即時損益」
-   - 股價查詢：「股價查詢 台積電」、「估價查詢 台積電」
-   - 設定代號：「設定代號 台積電 2330」
+   - 股票查詢：「我想買台積電」、「台積電多少錢」
 
-4. 系統功能 (system)：
-   - 幫助：「幫助」、「help」、「說明」
-   - 測試：「測試」
+4. 系統功能 (system)：幫助、測試等
+
+分析規則：
+- 如果包含「等一下」「要」「記得」「別忘了」→ 很可能是待辦事項
+- 如果包含「明天」「後天」「下週」→ 很可能是提醒功能
+- 如果包含日期格式「8/28」「12/25」→ 很可能是提醒功能
+- 如果包含股票相關詞彙→ 股票功能
 
 請回傳 JSON 格式：
 {{
@@ -101,30 +101,45 @@ class GeminiAnalyzer:
     "suggested_command": "如果訊息不夠明確，建議的完整指令"
 }}
 
-範例：
-- "幫我記住明天開會" → {{"intent": "reminder", "action": "add_reminder", "confidence": 0.8, "parameters": {{"extracted_info": "明天開會"}}, "suggested_command": "明天的具體時間提醒功能開發中，目前支援：19:00開會"}}
-- "我想買台積電" → {{"intent": "stock", "action": "stock_interest", "confidence": 0.7, "parameters": {{"extracted_info": "買台積電"}}, "suggested_command": "爸爸買 2330 100 50000 0820"}}
-- "幫我記住買菜" → {{"intent": "todo", "action": "add_todo", "confidence": 0.9, "parameters": {{"extracted_info": "買菜"}}, "suggested_command": "新增 買菜"}}
+範例分析：
+- "等一下要洗碗" → {{"intent": "todo", "confidence": 0.85, "suggested_command": "新增 洗碗"}}
+- "8/28要開會" → {{"intent": "reminder", "confidence": 0.9, "suggested_command": "新增 8/28開會"}}
+- "記得明天放假" → {{"intent": "reminder", "confidence": 0.9}}
+- "我想買台積電" → {{"intent": "stock", "confidence": 0.8}}
 
-請只回傳 JSON，不要其他文字。
+請只回傳純 JSON，不要包含任何其他文字或 markdown 格式。
 """
     
     def _fallback_analysis(self, message_text: str) -> Dict[str, Any]:
         """降級分析（關鍵字匹配）"""
         message_lower = message_text.lower().strip()
+        print(f"🔍 降級分析: {message_text}")
         
-        # 股票相關
-        if any(keyword in message_text for keyword in ['買', '賣', '股票', '股價', '損益', '入帳', '總覽', '台積電', '鴻海']):
+        # 待辦事項相關 - 優先檢查
+        if any(keyword in message_text for keyword in ['等一下要', '等等要', '記得', '別忘了', '要做', '待辦']):
+            print("📝 匹配到待辦關鍵字")
             return {
-                "intent": "stock",
-                "action": "stock_command",
+                "intent": "todo",
+                "action": "add_todo_suggestion",
+                "confidence": 0.8,
+                "parameters": {"extracted_info": message_text},
+                "suggested_command": None
+            }
+        
+        # 日期提醒相關
+        elif any(keyword in message_text for keyword in ['明天', '後天', '下週']) or '/' in message_text:
+            print("📅 匹配到日期關鍵字")
+            return {
+                "intent": "reminder",
+                "action": "date_reminder",
                 "confidence": 0.8,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": None
             }
         
         # 提醒相關
-        elif any(keyword in message_text for keyword in ['提醒', '分鐘後', '小時後', '時間', '記得']):
+        elif any(keyword in message_text for keyword in ['提醒', '分鐘後', '小時後', '時間']):
+            print("⏰ 匹配到提醒關鍵字")
             return {
                 "intent": "reminder", 
                 "action": "add_reminder",
@@ -133,8 +148,20 @@ class GeminiAnalyzer:
                 "suggested_command": None
             }
         
-        # 待辦事項
-        elif any(keyword in message_text for keyword in ['新增', '刪除', '完成', '清單', '查詢', '待辦', '要做']):
+        # 股票相關
+        elif any(keyword in message_text for keyword in ['買', '賣', '股票', '股價', '損益', '入帳', '總覽', '台積電', '鴻海']):
+            print("💰 匹配到股票關鍵字")
+            return {
+                "intent": "stock",
+                "action": "stock_command",
+                "confidence": 0.8,
+                "parameters": {"extracted_info": message_text},
+                "suggested_command": None
+            }
+        
+        # 待辦事項 - 更廣泛的匹配
+        elif any(keyword in message_text for keyword in ['新增', '刪除', '完成', '清單', '查詢']):
+            print("📋 匹配到管理關鍵字")
             return {
                 "intent": "todo",
                 "action": "todo_management", 
@@ -145,6 +172,7 @@ class GeminiAnalyzer:
         
         # 系統功能
         elif message_text in ['幫助', 'help', '說明', '測試']:
+            print("🔧 匹配到系統關鍵字")
             return {
                 "intent": "system",
                 "action": "help_or_status",
@@ -153,12 +181,13 @@ class GeminiAnalyzer:
                 "suggested_command": None
             }
         
-        # 預設為聊天
+        # 預設為聊天 - 但提高機會被 AI 處理
         else:
+            print("💬 預設為聊天")
             return {
                 "intent": "chat",
                 "action": "general_chat",
-                "confidence": 0.3,
+                "confidence": 0.6,  # 提高置信度讓更多訊息被處理
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": self._suggest_command(message_text)
             }
@@ -167,14 +196,14 @@ class GeminiAnalyzer:
         """為不明確的訊息建議指令"""
         message_lower = message_text.lower()
         
-        if any(word in message_lower for word in ['提醒', '記得', '別忘了']):
+        if any(word in message_lower for word in ['要', '等一下', '等等']):
+            return "💡 看起來是待辦事項？\n• 新增 [您的事項]\n• 或直接說完整的事情"
+        
+        elif any(word in message_lower for word in ['提醒', '記得', '別忘了']):
             return "💡 提醒功能範例：\n• 30分鐘後開會\n• 19:00吃晚餐\n• 早上時間 09:00"
         
         elif any(word in message_lower for word in ['股票', '買', '賣', '投資', '台積電']):
             return "💡 股票功能範例：\n• 爸爸買 2330 100 50000 0820\n• 總覽\n• 即時損益\n• 股價查詢 台積電"
-        
-        elif any(word in message_lower for word in ['待辦', '事情', '要做', '任務']):
-            return "💡 待辦功能範例：\n• 新增 買菜\n• 查詢\n• 完成 1"
         
         return None
 
@@ -216,20 +245,27 @@ class EnhancedMessageRouter:
         # 設定用戶ID
         self.reminder_bot.set_user_id(user_id)
         
+        print(f"🎯 路由分析開始: '{message_text}'")
+        
         # 🚀 使用 Gemini 分析訊息
         analysis = self.gemini_analyzer.analyze_message(message_text)
         
         # 先檢查是否為精確匹配的指令（高優先級）
         if self._is_exact_command(message_text):
+            print("✅ 精確指令匹配，使用原邏輯")
             return self._handle_original_logic(message_text, user_id)
         
-        # 如果置信度高，使用 AI 建議的處理方式
-        if analysis.get('confidence', 0) >= 0.7:
+        # 🔥 降低置信度閾值，讓更多訊息被 AI 處理
+        confidence_threshold = 0.5  # 從 0.7 降到 0.5
+        
+        if analysis.get('confidence', 0) >= confidence_threshold:
+            print(f"🤖 使用 AI 處理 (置信度: {analysis.get('confidence')})")
             ai_response = self._handle_ai_analyzed_message(analysis, message_text, user_id)
             if ai_response:
                 return ai_response
         
         # 否則使用原有的精確匹配邏輯
+        print("📋 使用原邏輯處理")
         return self._handle_original_logic(message_text, user_id)
     
     def _is_exact_command(self, message_text):
@@ -277,6 +313,8 @@ class EnhancedMessageRouter:
         suggested_command = analysis.get('suggested_command')
         extracted_info = params.get('extracted_info', '')
         
+        print(f"🧠 AI 處理: intent={intent}, action={action}")
+        
         # 根據意圖提供智能建議
         if intent == 'stock':
             if '買' in message_text or '購買' in message_text:
@@ -294,15 +332,20 @@ class EnhancedMessageRouter:
                 task = self._extract_task_from_reminder(message_text)
                 return f"⏰ 明天的提醒功能開發中！\n\n您想提醒：{task}\n\n🔧 目前支援：\n• 30分鐘後{task}\n• 19:00{task}（當日時間提醒）\n• 新增 明天{task}（加入待辦清單）"
             
+            elif '/' in message_text:  # 日期格式
+                return f"📅 您想設定日期提醒嗎？\n\n目前的替代方案：\n📋 新增 {message_text}（加入待辦清單）\n⏰ 或使用當日時間提醒：19:00{message_text}"
+            
             elif any(word in message_text for word in ['記得', '別忘了', '提醒我']):
                 task = self._extract_task_from_reminder(message_text)
                 return f"📝 您想設定提醒：{task}\n\n請選擇方式：\n⏰ 30分鐘後{task}\n🕐 19:00{task}\n📋 新增 {task}（加入待辦清單）"
         
         elif intent == 'todo':
-            if any(word in message_text for word in ['要做', '記住', '別忘了']):
+            if action == 'add_todo_suggestion':
                 task = self._extract_todo_content(message_text)
                 if task:
                     return f"📝 您想新增待辦事項嗎？\n\n建議內容：{task}\n\n✅ 請回覆「新增 {task}」確認新增\n📅 或回覆「每月新增 {task}」設為每月固定事項"
+                else:
+                    return f"📝 這似乎是待辦事項！\n\n您說：{message_text}\n\n✅ 要新增到待辦清單嗎？\n回覆「新增 {message_text}」即可新增"
         
         elif intent == 'chat':
             # 一般對話 - 提供友善回應和建議
@@ -337,13 +380,21 @@ class EnhancedMessageRouter:
     
     def _extract_todo_content(self, message_text):
         """從自然語言中提取待辦內容"""
+        # 更智能的提取
+        if '等一下要' in message_text:
+            return message_text.replace('等一下要', '').strip()
+        elif '等等要' in message_text:
+            return message_text.replace('等等要', '').strip()
+        elif '要' in message_text and '/' in message_text:
+            return message_text  # 保持日期格式
+        
         for prefix in ['要做', '要', '需要', '記得', '別忘了', '記住']:
             if prefix in message_text:
                 parts = message_text.split(prefix, 1)
                 if len(parts) > 1:
                     content = parts[1].strip()
                     return self._clean_task_text(content)
-        return None
+        return message_text  # 如果沒找到特殊前綴，返回整句
     
     def _clean_task_text(self, text):
         """清理任務文字"""
@@ -509,7 +560,8 @@ class EnhancedMessageRouter:
 - 自然語言理解，例如：
 - 「我想買台積電」
 - 「記得明天開會」
-- 「幫我記住買菜」
+- 「等一下要洗碗」
+- 「8/28要開會」
 
 🚀 v3.0 + AI：模組化架構 + 智能對話！"""
     
@@ -541,6 +593,6 @@ class EnhancedMessageRouter:
 💹 輸入「即時損益」查看股票損益
 
 🤖 提示：您可以用自然語言跟我對話！
-例如：「我想買台積電」、「記得明天開會」"""
+例如：「我想買台積電」、「記得明天開會」、「等一下要洗碗」"""
         
         return basic_response
