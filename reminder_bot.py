@@ -1,27 +1,50 @@
 """
-reminder_bot.py - 提醒機器人模組
+reminder_bot.py - 提醒機器人模組 (MongoDB Atlas 版本)
 從 app.py 拆分出來
 """
 import re
+import os
 import threading
 import time
 from datetime import datetime, timedelta
+from pymongo import MongoClient
 from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_datetime, TAIWAN_TZ
 from utils.line_api import send_push_message
 
 class ReminderBot:
-    """提醒機器人"""
+    """提醒機器人 (MongoDB Atlas 版本)"""
     
     def __init__(self, todo_manager):
         """初始化提醒機器人"""
         self.todo_manager = todo_manager
-        self.short_reminders = []
-        self.time_reminders = []
-        self.user_settings = {
-            'morning_time': '09:00',
-            'evening_time': '18:00',
-            'user_id': None
-        }
+        
+        # 初始化 MongoDB 連接（與 todo_manager 共用相同邏輯）
+        mongodb_uri = os.getenv('MONGODB_URI')
+        if not mongodb_uri:
+            print("⚠️ 警告：ReminderBot 找不到 MONGODB_URI 環境變數，使用記憶體模式")
+            self.short_reminders = []
+            self.time_reminders = []
+            self.use_mongodb = False
+        else:
+            try:
+                # 連接到 MongoDB Atlas
+                self.client = MongoClient(mongodb_uri)
+                self.db = self.client.get_default_database()
+                self.short_reminders_collection = self.db.short_reminders
+                self.time_reminders_collection = self.db.time_reminders
+                self.user_settings_collection = self.db.user_settings
+                self.use_mongodb = True
+                print("✅ ReminderBot 成功連接到 MongoDB Atlas")
+            except Exception as e:
+                print(f"❌ ReminderBot MongoDB 連接失敗: {e}")
+                print("⚠️ ReminderBot 使用記憶體模式")
+                self.short_reminders = []
+                self.time_reminders = []
+                self.use_mongodb = False
+        
+        # 載入或初始化用戶設定
+        self.user_settings = self._load_user_settings()
+        
         # 新增：防重複提醒的日期追蹤
         self.last_reminders = {
             'daily_morning_date': None,
@@ -31,6 +54,96 @@ class ReminderBot:
             'dated_todo_evening_date': None
         }
         self.reminder_thread = None
+    
+    def _load_user_settings(self):
+        """載入用戶設定"""
+        if self.use_mongodb:
+            settings = self.user_settings_collection.find_one({"type": "main_settings"})
+            if settings:
+                return {
+                    'morning_time': settings.get('morning_time', '09:00'),
+                    'evening_time': settings.get('evening_time', '18:00'),
+                    'user_id': settings.get('user_id', None)
+                }
+        
+        # 預設設定
+        return {
+            'morning_time': '09:00',
+            'evening_time': '18:00',
+            'user_id': None
+        }
+    
+    def _save_user_settings(self):
+        """儲存用戶設定"""
+        if self.use_mongodb:
+            self.user_settings_collection.update_one(
+                {"type": "main_settings"},
+                {"$set": {
+                    "type": "main_settings",
+                    "morning_time": self.user_settings['morning_time'],
+                    "evening_time": self.user_settings['evening_time'],
+                    "user_id": self.user_settings['user_id']
+                }},
+                upsert=True
+            )
+    
+    def _get_short_reminders(self):
+        """獲取短期提醒列表"""
+        if self.use_mongodb:
+            return list(self.short_reminders_collection.find({}))
+        else:
+            return self.short_reminders
+    
+    def _get_time_reminders(self):
+        """獲取時間提醒列表"""
+        if self.use_mongodb:
+            return list(self.time_reminders_collection.find({}))
+        else:
+            return self.time_reminders
+    
+    def _add_short_reminder(self, reminder_item):
+        """新增短期提醒"""
+        if self.use_mongodb:
+            result = self.short_reminders_collection.insert_one(reminder_item)
+            reminder_item['_id'] = result.inserted_id
+        else:
+            self.short_reminders.append(reminder_item)
+    
+    def _add_time_reminder(self, reminder_item):
+        """新增時間提醒"""
+        if self.use_mongodb:
+            result = self.time_reminders_collection.insert_one(reminder_item)
+            reminder_item['_id'] = result.inserted_id
+        else:
+            self.time_reminders.append(reminder_item)
+    
+    def _remove_short_reminder(self, reminder_id):
+        """移除短期提醒"""
+        if self.use_mongodb:
+            self.short_reminders_collection.delete_one({"id": reminder_id})
+        else:
+            self.short_reminders = [r for r in self.short_reminders if r['id'] != reminder_id]
+    
+    def _remove_time_reminder(self, reminder_id):
+        """移除時間提醒"""
+        if self.use_mongodb:
+            self.time_reminders_collection.delete_one({"id": reminder_id})
+        else:
+            self.time_reminders = [r for r in self.time_reminders if r['id'] != reminder_id]
+    
+    def _get_next_short_reminder_id(self):
+        """獲取下一個短期提醒 ID"""
+        short_reminders = self._get_short_reminders()
+        if not short_reminders:
+            return 1
+        return max(r['id'] for r in short_reminders) + 1
+    
+    def _get_next_time_reminder_id(self):
+        """獲取下一個時間提醒 ID"""
+        time_reminders = self._get_time_reminders()
+        if not time_reminders:
+            return 1
+        return max(r['id'] for r in time_reminders) + 1
     
     def parse_short_reminder(self, text):
         """解析短期提醒"""
@@ -104,16 +217,17 @@ class ReminderBot:
             taiwan_now = get_taiwan_datetime()
             reminder_time = taiwan_now + timedelta(minutes=parsed['minutes'])
             reminder_item = {
-                'id': len(self.short_reminders) + 1,
+                'id': self._get_next_short_reminder_id(),
                 'user_id': user_id,
                 'content': parsed['content'],
                 'reminder_time': reminder_time.isoformat(),
                 'original_value': parsed['original_value'],
                 'unit': parsed['unit']
             }
-            self.short_reminders.append(reminder_item)
+            self._add_short_reminder(reminder_item)
             
-            return f"⏰ 已設定短期提醒：「{parsed['content']}」\n⏳ {parsed['original_value']}{parsed['unit']}後提醒\n📅 提醒時間：{reminder_time.strftime('%H:%M')}\n🇹🇼 台灣時間"
+            status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+            return f"⏰ 已設定短期提醒：「{parsed['content']}」\n⏳ {parsed['original_value']}{parsed['unit']}後提醒\n📅 提醒時間：{reminder_time.strftime('%H:%M')}\n🇹🇼 台灣時間\n{status_msg}"
         else:
             return f"❌ {parsed['error']}"
     
@@ -133,43 +247,50 @@ class ReminderBot:
                 target_time += timedelta(days=1)
             
             reminder_item = {
-                'id': len(self.time_reminders) + 1,
+                'id': self._get_next_time_reminder_id(),
                 'user_id': user_id,
                 'content': parsed['content'],
                 'time_string': parsed['time_string'],
                 'reminder_time': target_time.isoformat()
             }
-            self.time_reminders.append(reminder_item)
+            self._add_time_reminder(reminder_item)
             
             date_text = '今天' if target_time.date() == taiwan_now.date() else '明天'
-            return f"🕐 已設定時間提醒：「{parsed['content']}」\n⏰ {date_text} {parsed['time_string']} 提醒\n🇹🇼 台灣時間"
+            status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+            return f"🕐 已設定時間提醒：「{parsed['content']}」\n⏰ {date_text} {parsed['time_string']} 提醒\n🇹🇼 台灣時間\n{status_msg}"
         else:
             return f"❌ {parsed['error']}"
     
     def set_morning_time(self, time_str):
         """設定早上提醒時間"""
         self.user_settings['morning_time'] = time_str
+        self._save_user_settings()
         # 重置防重複標記，允許新時間立即提醒
         self.last_reminders['daily_morning_date'] = None
         self.last_reminders['dated_todo_morning_date'] = None
-        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效"
+        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
     
     def set_evening_time(self, time_str):
         """設定晚上提醒時間"""
         self.user_settings['evening_time'] = time_str
+        self._save_user_settings()
         # 重置防重複標記，允許新時間立即提醒
         self.last_reminders['daily_evening_date'] = None
         self.last_reminders['dated_todo_evening_date'] = None
         self.last_reminders['dated_todo_preview_date'] = None
-        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效"
+        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
     
     def set_user_id(self, user_id):
         """設定用戶ID"""
         self.user_settings['user_id'] = user_id
+        self._save_user_settings()
     
     def get_time_settings(self):
         """獲取時間設定"""
-        return f"🇹🇼 台灣當前時間：{get_taiwan_time()}\n⏰ 目前提醒時間設定：\n🌅 早上：{self.user_settings['morning_time']}\n🌙 晚上：{self.user_settings['evening_time']}\n\n✅ 時區已修正為台灣時間！"
+        status_msg = "💾 設定已同步到雲端" if self.use_mongodb else ""
+        return f"🇹🇼 台灣當前時間：{get_taiwan_time()}\n⏰ 目前提醒時間設定：\n🌅 早上：{self.user_settings['morning_time']}\n🌙 晚上：{self.user_settings['evening_time']}\n\n✅ 時區已修正為台灣時間！\n{status_msg}"
     
     def check_reminders(self):
         """檢查並發送提醒 - 主要循環"""
@@ -384,7 +505,8 @@ class ReminderBot:
     
     def check_short_reminders(self, taiwan_now):
         """檢查短期提醒"""
-        for reminder in self.short_reminders[:]:
+        short_reminders = self._get_short_reminders()
+        for reminder in short_reminders[:]:
             reminder_time_str = reminder['reminder_time']
             try:
                 if '+' in reminder_time_str or reminder_time_str.endswith('Z'):
@@ -394,7 +516,7 @@ class ReminderBot:
                     reminder_time = TAIWAN_TZ.localize(datetime.fromisoformat(reminder_time_str))
             except:
                 print(f"⚠️ 無法解析提醒時間: {reminder_time_str}")
-                self.short_reminders.remove(reminder)
+                self._remove_short_reminder(reminder['id'])
                 continue
             
             if reminder_time <= taiwan_now:
@@ -403,11 +525,12 @@ class ReminderBot:
                     message = f"⏰ 短期提醒時間到！\n\n📋 {reminder['content']}\n🎯 該去執行了！\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
                     send_push_message(user_id, message)
                     print(f"✅ 已發送短期提醒: {reminder['content']} - 台灣時間: {get_taiwan_time()}")
-                self.short_reminders.remove(reminder)
+                self._remove_short_reminder(reminder['id'])
     
     def check_time_reminders(self, taiwan_now):
         """檢查時間提醒"""
-        for reminder in self.time_reminders[:]:
+        time_reminders = self._get_time_reminders()
+        for reminder in time_reminders[:]:
             reminder_time_str = reminder['reminder_time']
             try:
                 if '+' in reminder_time_str or reminder_time_str.endswith('Z'):
@@ -417,7 +540,7 @@ class ReminderBot:
                     reminder_time = TAIWAN_TZ.localize(datetime.fromisoformat(reminder_time_str))
             except:
                 print(f"⚠️ 無法解析提醒時間: {reminder_time_str}")
-                self.time_reminders.remove(reminder)
+                self._remove_time_reminder(reminder['id'])
                 continue
                 
             if reminder_time <= taiwan_now:
@@ -426,7 +549,7 @@ class ReminderBot:
                     message = f"🕐 時間提醒！\n\n📋 {reminder['content']}\n⏰ {reminder['time_string']}\n🎯 該去執行了！\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
                     send_push_message(user_id, message)
                     print(f"✅ 已發送時間提醒: {reminder['content']} - 台灣時間: {get_taiwan_time()}")
-                self.time_reminders.remove(reminder)
+                self._remove_time_reminder(reminder['id'])
     
     def start_reminder_thread(self):
         """啟動提醒執行緒"""
@@ -438,6 +561,16 @@ class ReminderBot:
     def get_reminder_counts(self):
         """獲取提醒數量"""
         return {
-            'short_reminders': len(self.short_reminders),
-            'time_reminders': len(self.time_reminders)
+            'short_reminders': len(self._get_short_reminders()),
+            'time_reminders': len(self._get_time_reminders())
         }
+
+    @property 
+    def short_reminders(self):
+        """為了向後相容性，提供 short_reminders 屬性"""
+        return self._get_short_reminders()
+
+    @property
+    def time_reminders(self):
+        """為了向後相容性，提供 time_reminders 屬性"""
+        return self._get_time_reminders()
