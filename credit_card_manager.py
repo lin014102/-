@@ -110,7 +110,7 @@ class CreditCardManager:
         return datetime.now(TAIWAN_TZ)
     
     def init_gmail_api(self):
-        """初始化 Gmail API 連接（支援 Render 雲端環境）"""
+        """初始化 Gmail API 連接(支援 Render 雲端環境)"""
         try:
             # 🌐 方法1: 從環境變數載入服務帳戶憑證
             google_credentials = os.getenv('GOOGLE_CREDENTIALS')
