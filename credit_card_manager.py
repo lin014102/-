@@ -1,13 +1,4 @@
-def init_tesseract(self):
-        """初始化 Tesseract OCR"""
-        try:
-            # Windows 用戶需要設定路徑
-            if os.name == 'nt':  # Windows
-                tesseract_path = os.getenv('TESSERACT_PATH')
-                if tesseract_path and os.path.exists(tesseract_path):
-                    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-                else:
-                    #"""
+"""
 credit_card_manager.py - 信用卡帳單管理模組
 自動監控 Gmail 帳單 + OCR + LLM 處理 v1.0
 """
@@ -27,10 +18,7 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-# OCR 和 LLM
-import pytesseract
-from PIL import Image
-from pdf2image import convert_from_bytes
+# LLM
 import PyPDF2
 from groq import Groq
 from dotenv import load_dotenv
@@ -83,10 +71,9 @@ class CreditCardManager:
         self.gmail_service = None
         self.gmail_enabled = False
         
-        # OCR 和 LLM 設定
+        # LLM 設定
         self.groq_client = None
         self.groq_enabled = False
-        self.tesseract_enabled = False
         
         # 監控狀態
         self.monitoring_thread = None
@@ -96,7 +83,6 @@ class CreditCardManager:
         # 初始化各項服務
         self.init_gmail_api()
         self.init_groq_api()
-        self.init_tesseract()
         self.load_bank_passwords()
         
         print("📧 信用卡帳單管理器初始化完成")
@@ -112,7 +98,7 @@ class CreditCardManager:
     def init_gmail_api(self):
         """初始化 Gmail API 連接(支援 Render 雲端環境)"""
         try:
-            # 🌐 方法1: 從環境變數載入服務帳戶憑證
+            # 方法1: 從環境變數載入服務帳戶憑證
             google_credentials = os.getenv('GOOGLE_CREDENTIALS')
             if google_credentials:
                 try:
@@ -124,13 +110,13 @@ class CreditCardManager:
                     
                     self.gmail_service = build('gmail', 'v1', credentials=credentials)
                     self.gmail_enabled = True
-                    print("✅ Gmail API 連接成功（服務帳戶模式）")
+                    print("✅ Gmail API 連接成功(服務帳戶模式)")
                     return True
                     
                 except Exception as e:
                     print(f"❌ 服務帳戶認證失敗: {e}")
             
-            # 🌐 方法2: 從環境變數載入 OAuth Token
+            # 方法2: 從環境變數載入 OAuth Token
             gmail_token_b64 = os.getenv('GMAIL_TOKEN')
             if gmail_token_b64:
                 try:
@@ -144,19 +130,19 @@ class CreditCardManager:
                     if creds.expired and creds.refresh_token:
                         creds.refresh(Request())
                         
-                        # 更新環境變數中的 token（可選）
+                        # 更新環境變數中的 token(可選)
                         updated_token = base64.b64encode(pickle.dumps(creds)).decode('utf-8')
                         print("🔄 Token 已刷新")
                     
                     self.gmail_service = build('gmail', 'v1', credentials=creds)
                     self.gmail_enabled = True
-                    print("✅ Gmail API 連接成功（OAuth Token 模式）")
+                    print("✅ Gmail API 連接成功(OAuth Token 模式)")
                     return True
                     
                 except Exception as e:
                     print(f"❌ OAuth Token 認證失敗: {e}")
             
-            # 💻 方法3: 本地開發模式
+            # 方法3: 本地開發模式
             creds = None
             
             # 檢查是否有儲存的認證
@@ -184,7 +170,7 @@ class CreditCardManager:
             
             self.gmail_service = build('gmail', 'v1', credentials=creds)
             self.gmail_enabled = True
-            print("✅ Gmail API 連接成功（本地 OAuth 模式）")
+            print("✅ Gmail API 連接成功(本地 OAuth 模式)")
             return True
             
         except Exception as e:
@@ -217,40 +203,10 @@ class CreditCardManager:
             print(f"❌ Groq API 連接失敗: {e}")
             return False
     
-    def init_tesseract(self):
-        """初始化 Tesseract OCR"""
-        try:
-            # Windows 用戶需要設定路徑
-            if os.name == 'nt':  # Windows
-                tesseract_path = os.getenv('TESSERACT_PATH')
-                if tesseract_path and os.path.exists(tesseract_path):
-                    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-                else:
-                    # 嘗試常見的安裝路徑
-                    possible_paths = [
-                        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-                        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
-                    ]
-                    
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            pytesseract.pytesseract.tesseract_cmd = path
-                            break
-            
-            # 測試 Tesseract
-            version = pytesseract.get_tesseract_version()
-            self.tesseract_enabled = True
-            print(f"✅ Tesseract OCR 初始化成功 - 版本: {version}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Tesseract OCR 初始化失敗: {e}")
-            return False
-    
     def load_bank_passwords(self):
         """載入銀行密碼設定"""
         try:
-            # 從環境變數載入密碼（格式：BANK_PASSWORDS={"永豐銀行":"password1","台新銀行":"password2"}）
+            # 從環境變數載入密碼
             passwords_json = os.getenv('BANK_PASSWORDS')
             if passwords_json:
                 self.bill_data['bank_passwords'] = json.loads(passwords_json)
@@ -274,7 +230,7 @@ class CreditCardManager:
         try:
             print(f"🔍 開始檢查信用卡帳單 - {self.get_taiwan_time()}")
             
-            # 計算檢查範圍（過去24小時）
+            # 計算檢查範圍(過去24小時)
             yesterday = (self.get_taiwan_datetime() - timedelta(days=1)).strftime('%Y/%m/%d')
             
             found_bills = []
@@ -418,24 +374,24 @@ class CreditCardManager:
                     'processed_time': self.get_taiwan_time()
                 }
             
-            print(f"   👁️ 執行OCR識別...")
+            print(f"   📄 提取PDF文字...")
             
-            # OCR處理
-            ocr_text = self.pdf_to_text_ocr(unlocked_pdf)
-            if not ocr_text:
+            # 直接提取文字
+            extracted_text = self.pdf_to_text_backup(unlocked_pdf)
+            if not extracted_text:
                 return {
                     'bank_name': bank_name,
                     'message_id': message_id,
                     'subject': subject,
                     'date': date,
-                    'status': '❌ OCR識別失敗',
+                    'status': '❌ 文字提取失敗',
                     'processed_time': self.get_taiwan_time()
                 }
             
             print(f"   🤖 LLM分析中...")
             
             # LLM處理
-            structured_data = self.llm_parse_bill(ocr_text, bank_name)
+            structured_data = self.llm_parse_bill(extracted_text, bank_name)
             if not structured_data:
                 return {
                     'bank_name': bank_name,
@@ -507,37 +463,35 @@ class CreditCardManager:
             print(f"   ❌ PDF解鎖失敗: {e}")
             return None
     
-    def pdf_to_text_ocr(self, pdf_data):
-        """PDF轉文字（OCR）"""
+    def pdf_to_text_backup(self, pdf_data):
+        """PDF轉文字備用方案(直接提取文字)"""
         try:
-            if not self.tesseract_enabled:
-                return None
-            
-            # PDF轉圖片
-            images = convert_from_bytes(pdf_data)
+            import io
+            reader = PyPDF2.PdfReader(io.BytesIO(pdf_data))
             
             all_text = ""
-            for i, image in enumerate(images):
-                print(f"     📄 處理第 {i+1} 頁...")
-                
-                # OCR識別
-                text = pytesseract.image_to_string(image, lang='chi_tra+eng')
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
                 all_text += f"\n--- 第 {i+1} 頁 ---\n{text}\n"
             
-            print(f"   ✅ OCR完成，識別 {len(all_text)} 個字元")
-            return all_text
-            
+            if all_text.strip():
+                print(f"   ✅ 文字提取成功，提取 {len(all_text)} 個字元")
+                return all_text
+            else:
+                print("   ❌ 文字提取失敗，PDF可能是圖片格式")
+                return None
+                
         except Exception as e:
-            print(f"   ❌ OCR處理失敗: {e}")
+            print(f"   ❌ 文字提取失敗: {e}")
             return None
     
-    def llm_parse_bill(self, ocr_text, bank_name):
+    def llm_parse_bill(self, extracted_text, bank_name):
         """使用LLM解析帳單內容"""
         try:
             if not self.groq_enabled:
                 return None
             
-            prompt = f"""你是專業的信用卡帳單解析專家。請從以下OCR識別的{bank_name}信用卡帳單文字中，提取並整理成JSON格式：
+            prompt = f"""你是專業的信用卡帳單解析專家。請從以下{bank_name}信用卡帳單文字中，提取並整理成JSON格式：
 
 請提取以下資訊：
 {{
@@ -564,10 +518,10 @@ class CreditCardManager:
 1. 金額請提取數字部分，去除貨幣符號
 2. 日期請使用 YYYY/MM/DD 格式
 3. 如果某項資訊找不到，請填入 null
-4. OCR可能有錯誤，請根據上下文推斷正確內容
+4. 文字可能有識別錯誤，請根據上下文推斷正確內容
 
-OCR識別文字：
-{ocr_text}
+帳單文字：
+{extracted_text}
 
 請回傳JSON格式的結果："""
 
@@ -709,9 +663,6 @@ OCR識別文字：
                         # 執行檢查
                         result = self.check_gmail_for_bills()
                         print(f"📧 定時檢查結果：{result}")
-                        
-                        # 如果有新帳單，可以在這裡發送通知到LINE
-                        # 這部分可以與你的LINE Bot整合
                 
                 except Exception as e:
                     print(f"❌ 監控執行緒錯誤: {e}")
@@ -734,7 +685,7 @@ OCR識別文字：
                 'status': 'stopped',
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
-                'tesseract_enabled': self.tesseract_enabled,
+                'tesseract_enabled': False,
                 'monitored_banks': list(BANK_CONFIGS.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
@@ -744,7 +695,7 @@ OCR識別文字：
                 'status': 'running',
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
-                'tesseract_enabled': self.tesseract_enabled,
+                'tesseract_enabled': False,
                 'monitored_banks': list(BANK_CONFIGS.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
@@ -774,7 +725,7 @@ OCR識別文字：
                 result += f"🔄 監控狀態：{'🟢 執行中' if status['status'] == 'running' else '🔴 已停止'}\n"
                 result += f"📧 Gmail API：{'✅ 已啟用' if status['gmail_enabled'] else '❌ 未啟用'}\n"
                 result += f"🤖 Groq LLM：{'✅ 已啟用' if status['groq_enabled'] else '❌ 未啟用'}\n"
-                result += f"👁️ Tesseract OCR：{'✅ 已啟用' if status['tesseract_enabled'] else '❌ 未啟用'}\n\n"
+                result += f"👁️ Tesseract OCR：{'⚠️ 未安裝' if not status['tesseract_enabled'] else '✅ 已啟用'}\n\n"
                 result += f"🏦 監控銀行：{', '.join(status['monitored_banks'])}\n"
                 result += f"📊 已處理帳單：{status['processed_bills_count']} 份\n"
                 if status['last_check_time']:
@@ -818,8 +769,8 @@ OCR識別文字：
 ⚙️ 系統功能：
 - 📧 自動監控Gmail信用卡帳單
 - 🔓 自動解鎖PDF密碼保護
-- 👁️ OCR文字識別（Tesseract）
-- 🤖 LLM智能解析（Groq + Llama）
+- 📄 PDF文字提取
+- 🤖 LLM智能解析(Groq + Llama)
 - 📊 結構化數據提取
 - 💾 帳單記錄保存
 
@@ -836,14 +787,14 @@ OCR識別文字：
 
 🔧 技術架構：
 - Gmail API：郵件監控和附件下載
-- Tesseract OCR：PDF文字識別
+- PyPDF2：PDF文字提取
 - Groq LLM：智能內容解析
 - 背景執行緒：定時自動監控
 
 📊 資料格式：
 - 帳單週期、繳款期限
 - 本期應繳、最低應繳金額
-- 交易明細（日期、商家、金額）
+- 交易明細(日期、商家、金額)
 - 消費統計和分析"""
 
 
