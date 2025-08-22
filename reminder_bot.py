@@ -22,14 +22,21 @@ class ReminderBot:
         mongodb_uri = os.getenv('MONGODB_URI')
         if not mongodb_uri:
             print("⚠️ 警告：ReminderBot 找不到 MONGODB_URI 環境變數，使用記憶體模式")
-            self.short_reminders = []
-            self.time_reminders = []
+            self._short_reminders = []
+            self._time_reminders = []
             self.use_mongodb = False
         else:
             try:
                 # 連接到 MongoDB Atlas
                 self.client = MongoClient(mongodb_uri)
-                self.db = self.client.get_default_database()
+                
+                # 指定資料庫名稱 (如果 URI 中沒有預設資料庫)
+                try:
+                    self.db = self.client.get_default_database()
+                except:
+                    # 如果沒有預設資料庫，使用 'reminderbot' 作為資料庫名稱
+                    self.db = self.client.reminderbot
+                
                 self.short_reminders_collection = self.db.short_reminders
                 self.time_reminders_collection = self.db.time_reminders
                 self.user_settings_collection = self.db.user_settings
@@ -38,8 +45,8 @@ class ReminderBot:
             except Exception as e:
                 print(f"❌ ReminderBot MongoDB 連接失敗: {e}")
                 print("⚠️ ReminderBot 使用記憶體模式")
-                self.short_reminders = []
-                self.time_reminders = []
+                self._short_reminders = []
+                self._time_reminders = []
                 self.use_mongodb = False
         
         # 載入或初始化用戶設定
@@ -92,14 +99,14 @@ class ReminderBot:
         if self.use_mongodb:
             return list(self.short_reminders_collection.find({}))
         else:
-            return self.short_reminders
+            return self._short_reminders
     
     def _get_time_reminders(self):
         """獲取時間提醒列表"""
         if self.use_mongodb:
             return list(self.time_reminders_collection.find({}))
         else:
-            return self.time_reminders
+            return self._time_reminders
     
     def _add_short_reminder(self, reminder_item):
         """新增短期提醒"""
@@ -107,7 +114,7 @@ class ReminderBot:
             result = self.short_reminders_collection.insert_one(reminder_item)
             reminder_item['_id'] = result.inserted_id
         else:
-            self.short_reminders.append(reminder_item)
+            self._short_reminders.append(reminder_item)
     
     def _add_time_reminder(self, reminder_item):
         """新增時間提醒"""
@@ -115,21 +122,21 @@ class ReminderBot:
             result = self.time_reminders_collection.insert_one(reminder_item)
             reminder_item['_id'] = result.inserted_id
         else:
-            self.time_reminders.append(reminder_item)
+            self._time_reminders.append(reminder_item)
     
     def _remove_short_reminder(self, reminder_id):
         """移除短期提醒"""
         if self.use_mongodb:
             self.short_reminders_collection.delete_one({"id": reminder_id})
         else:
-            self.short_reminders = [r for r in self.short_reminders if r['id'] != reminder_id]
+            self._short_reminders = [r for r in self._short_reminders if r['id'] != reminder_id]
     
     def _remove_time_reminder(self, reminder_id):
         """移除時間提醒"""
         if self.use_mongodb:
             self.time_reminders_collection.delete_one({"id": reminder_id})
         else:
-            self.time_reminders = [r for r in self.time_reminders if r['id'] != reminder_id]
+            self._time_reminders = [r for r in self._time_reminders if r['id'] != reminder_id]
     
     def _get_next_short_reminder_id(self):
         """獲取下一個短期提醒 ID"""
