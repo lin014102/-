@@ -321,6 +321,28 @@ class TodoManager:
         
         return f"🔄 已新增每月事項：「{parsed['content']}」\n📅 每月 {date_display} 提醒\n📋 目前共有 {monthly_count} 項每月事項\n💡 會在前一天預告 + 當天提醒\n💾 已同步到雲端"
     
+    def delete_monthly_todo(self, index_str):
+        """刪除每月固定事項"""
+        try:
+            monthly_todos = self._get_monthly_todos()
+            index = int(index_str.strip()) - 1
+            if 0 <= index < len(monthly_todos):
+                deleted_item = monthly_todos[index]
+                
+                # 從資料庫刪除
+                if self.use_mongodb:
+                    self.monthly_collection.delete_one({'id': deleted_item['id']})
+                else:
+                    self._monthly_todos = [item for item in self._monthly_todos if item['id'] != deleted_item['id']]
+                
+                date_display = deleted_item.get('date_display', f"{deleted_item.get('day', 1)}號")
+                status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+                return f"🗑️ 已刪除每月事項：「{deleted_item['content']}」\n📅 原本每月 {date_display} 提醒\n{status_msg}"
+            else:
+                return "❌ 編號不正確"
+        except:
+            return "❌ 請輸入正確編號"
+
     def get_monthly_list(self):
         """查詢每月固定事項清單"""
         monthly_todos = self._get_monthly_todos()
