@@ -1,4 +1,13 @@
-"""
+def init_tesseract(self):
+        """初始化 Tesseract OCR"""
+        try:
+            # Windows 用戶需要設定路徑
+            if os.name == 'nt':  # Windows
+                tesseract_path = os.getenv('TESSERACT_PATH')
+                if tesseract_path and os.path.exists(tesseract_path):
+                    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                else:
+                    #"""
 credit_card_manager.py - 信用卡帳單管理模組
 自動監控 Gmail 帳單 + OCR + LLM 處理 v1.0
 """
