@@ -17,15 +17,22 @@ class TodoManager:
         mongodb_uri = os.getenv('MONGODB_URI')
         if not mongodb_uri:
             print("⚠️ 警告：找不到 MONGODB_URI 環境變數，使用記憶體模式")
-            self.todos = []
-            self.monthly_todos = []
+            self._todos = []
+            self._monthly_todos = []
             self.use_mongodb = False
             return
         
         try:
             # 連接到 MongoDB Atlas
             self.client = MongoClient(mongodb_uri)
-            self.db = self.client.get_default_database()  # 使用 URI 中的預設資料庫
+            
+            # 指定資料庫名稱 (如果 URI 中沒有預設資料庫)
+            try:
+                self.db = self.client.get_default_database()
+            except:
+                # 如果沒有預設資料庫，使用 'reminderbot' 作為資料庫名稱
+                self.db = self.client.reminderbot
+            
             self.todos_collection = self.db.todos
             self.monthly_collection = self.db.monthly_todos
             self.use_mongodb = True
@@ -38,8 +45,8 @@ class TodoManager:
         except Exception as e:
             print(f"❌ MongoDB 連接失敗: {e}")
             print("⚠️ 使用記憶體模式")
-            self.todos = []
-            self.monthly_todos = []
+            self._todos = []
+            self._monthly_todos = []
             self.use_mongodb = False
     
     def _get_todos(self):
@@ -47,14 +54,14 @@ class TodoManager:
         if self.use_mongodb:
             return list(self.todos_collection.find({}))
         else:
-            return self.todos
+            return self._todos
     
     def _get_monthly_todos(self):
         """獲取所有每月事項"""
         if self.use_mongodb:
             return list(self.monthly_collection.find({}))
         else:
-            return self.monthly_todos
+            return self._monthly_todos
     
     def _add_todo(self, todo_item):
         """新增待辦事項到資料庫"""
@@ -63,7 +70,7 @@ class TodoManager:
             todo_item['_id'] = result.inserted_id
             return todo_item
         else:
-            self.todos.append(todo_item)
+            self._todos.append(todo_item)
             return todo_item
     
     def _add_monthly_todo(self, monthly_item):
@@ -73,7 +80,7 @@ class TodoManager:
             monthly_item['_id'] = result.inserted_id
             return monthly_item
         else:
-            self.monthly_todos.append(monthly_item)
+            self._monthly_todos.append(monthly_item)
             return monthly_item
     
     def _update_todo(self, todo_id, update_data):
@@ -84,7 +91,7 @@ class TodoManager:
                 {'$set': update_data}
             )
         else:
-            for todo in self.todos:
+            for todo in self._todos:
                 if todo['id'] == todo_id:
                     todo.update(update_data)
                     break
@@ -94,7 +101,7 @@ class TodoManager:
         if self.use_mongodb:
             self.todos_collection.delete_one({'id': todo_id})
         else:
-            self.todos = [todo for todo in self.todos if todo['id'] != todo_id]
+            self._todos = [todo for todo in self._todos if todo['id'] != todo_id]
     
     def _get_next_todo_id(self):
         """獲取下一個待辦事項 ID"""
