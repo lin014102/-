@@ -930,6 +930,69 @@ def init_credit_card_manager():
         credit_card_manager = CreditCardManager()
     return credit_card_manager
 
+def is_credit_card_query(message):
+    """判斷是否為信用卡相關查詢"""
+    try:
+        if not message:
+            return False
+        
+        message = message.strip().lower()
+        
+        # 信用卡查詢相關關鍵字
+        query_keywords = [
+            # 中文查詢關鍵字
+            '我的信用卡', '信用卡餘額', '信用卡額度', '信用卡消費',
+            '帳單金額', '應繳金額', '最低應繳', '繳費期限', '到期日',
+            '信用卡明細', '消費記錄', '交易明細', '刷卡記錄',
+            '信用卡狀態', '帳單狀態', '還款狀態',
+            '永豐信用卡', '台新信用卡', '星展信用卡',
+            '本期帳單', '上期帳單', '帳單查詢',
+            
+            # 英文查詢關鍵字  
+            'my credit card', 'credit card balance', 'card balance',
+            'bill amount', 'payment due', 'minimum payment',
+            'transaction history', 'spending', 'charges',
+            'card status', 'bill status', 'payment status',
+            'current bill', 'previous bill', 'bill inquiry',
+            
+            # 查詢動詞
+            '查詢', '查看', '顯示', '告訴我', '我想知道',
+            'show me', 'tell me', 'what is', 'how much',
+            'check my', 'view my', 'display',
+            
+            # 銀行特定查詢
+            '永豐帳單', '台新帳單', '星展帳單',
+            'sinopac bill', 'taishin bill', 'dbs bill'
+        ]
+        
+        # 檢查是否包含查詢關鍵字
+        for keyword in query_keywords:
+            if keyword in message:
+                return True
+        
+        # 檢查問句格式
+        question_patterns = [
+            r'.*信用卡.*多少',      # 信用卡相關的多少錢
+            r'.*帳單.*什麼時候',     # 帳單什麼時候到期
+            r'.*還要.*繳',          # 還要繳多少
+            r'.*什麼時候.*到期',     # 什麼時候到期
+            r'how much.*card',      # 英文金額查詢
+            r'when.*due',          # 英文到期查詢
+            r'.*card.*balance',    # 卡片餘額查詢
+        ]
+        
+        import re
+        for pattern in question_patterns:
+            if re.search(pattern, message):
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error in is_credit_card_query: {e}")
+        return False
+
+
 def is_credit_card_command(message):
     """判斷是否為信用卡相關指令"""
     try:
