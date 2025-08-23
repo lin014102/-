@@ -181,7 +181,9 @@ class CreditCardManager:
                     else:
                         print("❌ 未找到任何有效的 Gmail 認證方式")
                         print("💡 請設定 GOOGLE_CREDENTIALS 或 GMAIL_TOKEN 環境變數")
-                        return False
+                    except Exception as e:
+            print(f"❌ Google Vision OCR 初始化失敗: {e}")
+            return False
     
     def init_gmail_labels(self):
         """初始化 Gmail 標籤系統"""
