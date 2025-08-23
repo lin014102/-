@@ -1026,53 +1026,57 @@ def stop_auto_monitoring():
     
     def get_bills_summary(self):
         """獲取帳單摘要統計"""
-        bills = self.bill_data['processed_bills']
-        
-        if not bills:
-            return "📊 暫無帳單資料"
-        
-        summary = {
-            'total_bills': len(bills),
-            'banks': {},
-            'total_amount': 0,
-            'recent_bills': []
-        }
-        
-        for bill in bills:
-            bank = bill['bank_name']
-            if bank not in summary['banks']:
-                summary['banks'][bank] = {'count': 0, 'total_amount': 0}
+        try:
+            bills = self.bill_data['processed_bills']
             
-            summary['banks'][bank]['count'] += 1
+            if not bills:
+                return "📊 暫無帳單資料"
             
-            if bill.get('bill_data') and bill['bill_data'].get('total_amount'):
-                try:
-                    amount = int(bill['bill_data']['total_amount'])
-                    summary['banks'][bank]['total_amount'] += amount
-                    summary['total_amount'] += amount
-                except:
-                    pass
+            summary = {
+                'total_bills': len(bills),
+                'banks': {},
+                'total_amount': 0,
+                'recent_bills': []
+            }
             
-            # 最近5份帳單
-            if len(summary['recent_bills']) < 5:
-                summary['recent_bills'].append({
-                    'bank': bank,
-                    'date': bill.get('processed_time', '未知'),
-                    'amount': bill.get('bill_data', {}).get('total_amount', '未知'),
-                    'status': bill.get('status', '未知')
-                })
-        
-        result = f"📊 帳單統計摘要\n"
-        result += f"📄 總帳單數: {summary['total_bills']}\n"
-        result += f"💰 總金額: NT$ {summary['total_amount']:,}\n\n"
-        
-        result += "🏦 各銀行統計:\n"
-        for bank, data in summary['banks'].items():
-            result += f"   {bank}: {data['count']}份, NT$ {data['total_amount']:,}\n"
-        
-        if summary['recent_bills']:
-            result += "\n📋 最近處理的帳單:\n"
-            for bill in summary['recent_bills']:
-                result += f"   {bill['bank']} - {bill['date'][:10]} - NT$ {bill['amount']} - {bill['status']}\n"
-        
-        return result
+            for bill in bills:
+                bank = bill['bank_name']
+                if bank not in summary['banks']:
+                    summary['banks'][bank] = {'count': 0, 'total_amount': 0}
+                
+                summary['banks'][bank]['count'] += 1
+                
+                if bill.get('bill_data') and bill['bill_data'].get('total_amount'):
+                    try:
+                        amount = int(bill['bill_data']['total_amount'])
+                        summary['banks'][bank]['total_amount'] += amount
+                        summary['total_amount'] += amount
+                    except:
+                        pass
+                
+                # 最近5份帳單
+                if len(summary['recent_bills']) < 5:
+                    summary['recent_bills'].append({
+                        'bank': bank,
+                        'date': bill.get('processed_time', '未知'),
+                        'amount': bill.get('bill_data', {}).get('total_amount', '未知'),
+                        'status': bill.get('status', '未知')
+                    })
+            
+            result = f"📊 帳單統計摘要\n"
+            result += f"📄 總帳單數: {summary['total_bills']}\n"
+            result += f"💰 總金額: NT$ {summary['total_amount']:,}\n\n"
+            
+            result += "🏦 各銀行統計:\n"
+            for bank, data in summary['banks'].items():
+                result += f"   {bank}: {data['count']}份, NT$ {data['total_amount']:,}\n"
+            
+            if summary['recent_bills']:
+                result += "\n📋 最近處理的帳單:\n"
+                for bill in summary['recent_bills']:
+                    result += f"   {bill['bank']} - {bill['date'][:10]} - NT$ {bill['amount']} - {bill['status']}\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"❌ 統計摘要生成失敗: {e}"
