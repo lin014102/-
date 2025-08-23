@@ -1,6 +1,6 @@
 """
 credit_card_manager.py - 信用卡帳單管理模組
-自動監控 Gmail 帳單 + OCR + LLM 處理 v1.1 + Gmail 標籤管理
+自動監控 Gmail 帳單 + OCR + LLM 處理 v1.0
 """
 import re
 import os
@@ -23,7 +23,7 @@ import PyPDF2
 from groq import Groq
 from dotenv import load_dotenv
 
-# Google Vision OCR
+# 🆕 Google Vision OCR
 try:
     from google.cloud import vision
     from google.oauth2.service_account import Credentials
@@ -40,7 +40,7 @@ load_dotenv()
 TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 
 # Gmail API 權限範圍
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify']
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # 銀行監控設定
 BANK_CONFIGS = {
@@ -65,7 +65,7 @@ BANK_CONFIGS = {
 }
 
 class CreditCardManager:
-    """信用卡帳單管理器 - 整合 Gmail 監控 + OCR + LLM + 標籤管理"""
+    """信用卡帳單管理器 - 整合 Gmail 監控 + OCR + LLM"""
     
     def __init__(self):
         """初始化信用卡帳單管理器"""
@@ -80,15 +80,14 @@ class CreditCardManager:
         # Gmail API 設定
         self.gmail_service = None
         self.gmail_enabled = False
-        self.processed_label_id = None
-        
-        # Google Vision OCR 設定
-        self.vision_client = None
-        self.vision_enabled = False
         
         # LLM 設定
         self.groq_client = None
         self.groq_enabled = False
+        
+        # 🆕 Google Vision OCR 設定
+        self.vision_client = None
+        self.vision_enabled = False
         
         # 監控狀態
         self.monitoring_thread = None
@@ -100,10 +99,6 @@ class CreditCardManager:
         self.init_groq_api()
         self.init_vision_ocr()
         self.load_bank_passwords()
-        
-        # 初始化 Gmail 標籤
-        if self.gmail_enabled:
-            self.init_gmail_labels()
         
         print("📧 信用卡帳單管理器初始化完成")
     
@@ -149,6 +144,9 @@ class CreditCardManager:
                     # 檢查是否需要刷新
                     if creds.expired and creds.refresh_token:
                         creds.refresh(Request())
+                        
+                        # 更新環境變數中的 token(可選)
+                        updated_token = base64.b64encode(pickle.dumps(creds)).decode('utf-8')
                         print("🔄 Token 已刷新")
                     
                     self.gmail_service = build('gmail', 'v1', credentials=creds)
@@ -162,10 +160,12 @@ class CreditCardManager:
             # 方法3: 本地開發模式
             creds = None
             
+            # 檢查是否有儲存的認證
             if os.path.exists('gmail_token.pickle'):
                 with open('gmail_token.pickle', 'rb') as token:
                     creds = pickle.load(token)
             
+            # 如果沒有有效認證，進行 OAuth 流程
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
@@ -176,8 +176,10 @@ class CreditCardManager:
                         creds = flow.run_local_server(port=0)
                     else:
                         print("❌ 未找到任何有效的 Gmail 認證方式")
+                        print("💡 請設定 GOOGLE_CREDENTIALS 或 GMAIL_TOKEN 環境變數")
                         return False
                 
+                # 儲存認證以供下次使用
                 with open('gmail_token.pickle', 'wb') as token:
                     pickle.dump(creds, token)
             
@@ -217,6 +219,7 @@ class CreditCardManager:
                 print("⚠️ Google Vision 套件未安裝，OCR 功能不可用")
                 return False
             
+            # 使用現有的 GOOGLE_CREDENTIALS 環境變數
             google_credentials = os.getenv('GOOGLE_CREDENTIALS')
             if google_credentials:
                 try:
@@ -236,51 +239,29 @@ class CreditCardManager:
         except Exception as e:
             print(f"❌ Google Vision OCR 初始化失敗: {e}")
             return False
-    
-    def init_gmail_labels(self):
-        """初始化 Gmail 標籤系統"""
+        """初始化 Groq API"""
         try:
-            labels_result = self.gmail_service.users().labels().list(userId='me').execute()
-            labels = labels_result.get('labels', [])
+            groq_key = os.getenv('GROQ_API_KEY')
+            if not groq_key:
+                print("⚠️ 未找到 GROQ_API_KEY 環境變數")
+                self.groq_enabled = False
+                return False
             
-            label_name = '信用卡帳單已處理'
-            existing_label = None
-            
-            for label in labels:
-                if label['name'] == label_name:
-                    existing_label = label
-                    break
-            
-            if existing_label:
-                self.processed_label_id = existing_label['id']
-                print(f"✅ 找到現有標籤：{label_name}")
-            else:
-                label_object = {
-                    'name': label_name,
-                    'messageListVisibility': 'show',
-                    'labelListVisibility': 'labelShow',
-                    'color': {
-                        'textColor': '#ffffff',
-                        'backgroundColor': '#16a085'
-                    }
-                }
-                
-                created_label = self.gmail_service.users().labels().create(
-                    userId='me', body=label_object
-                ).execute()
-                
-                self.processed_label_id = created_label['id']
-                print(f"✅ 建立新標籤：{label_name}")
-            
-            return True
+            print("💡 暫時跳過 Groq API，使用基礎解析方案")
+            print("🔧 這是為了避免 Render 環境的 proxies 參數衝突")
+            self.groq_enabled = False
+            return False
             
         except Exception as e:
-            print(f"❌ Gmail 標籤初始化失敗: {e}")
+            print(f"❌ Groq API 連接失敗: {e}")
+            print("💡 將使用備用方案處理帳單")
+            self.groq_enabled = False
             return False
     
     def load_bank_passwords(self):
         """載入銀行密碼設定"""
         try:
+            # 從環境變數載入密碼
             passwords_json = os.getenv('BANK_PASSWORDS')
             if passwords_json:
                 self.bill_data['bank_passwords'] = json.loads(passwords_json)
@@ -296,47 +277,6 @@ class CreditCardManager:
         self.bill_data['bank_passwords'][bank_name] = password
         return f"✅ 已設定 {bank_name} 的PDF密碼"
     
-    def is_bill_already_processed(self, message_id):
-        """檢查帳單是否已處理(通過標籤和記憶體記錄)"""
-        try:
-            # 方法1: 檢查記憶體中的記錄
-            if any(bill['message_id'] == message_id for bill in self.bill_data['processed_bills']):
-                return True
-            
-            # 方法2: 檢查 Gmail 標籤
-            if self.processed_label_id:
-                message = self.gmail_service.users().messages().get(
-                    userId='me', id=message_id, format='minimal'
-                ).execute()
-                
-                label_ids = message.get('labelIds', [])
-                if self.processed_label_id in label_ids:
-                    print(f"   ⏭️ 郵件已有處理標籤，跳過")
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            print(f"   ⚠️ 檢查處理狀態失敗: {e}")
-            return False
-    
-    def mark_bill_as_processed(self, message_id):
-        """標記帳單為已處理"""
-        try:
-            if self.processed_label_id:
-                self.gmail_service.users().messages().modify(
-                    userId='me',
-                    id=message_id,
-                    body={'addLabelIds': [self.processed_label_id]}
-                ).execute()
-                print(f"   🏷️ 已標記郵件為已處理")
-                return True
-            return False
-            
-        except Exception as e:
-            print(f"   ❌ 標記失敗: {e}")
-            return False
-    
     def check_gmail_for_bills(self):
         """檢查 Gmail 中的信用卡帳單"""
         if not self.gmail_enabled:
@@ -345,42 +285,29 @@ class CreditCardManager:
         try:
             print(f"🔍 開始檢查信用卡帳單 - {self.get_taiwan_time()}")
             
+            # 計算檢查範圍(過去24小時)
             yesterday = (self.get_taiwan_datetime() - timedelta(days=1)).strftime('%Y/%m/%d')
             
             found_bills = []
             
+            # 檢查每家銀行
             for bank_name, config in BANK_CONFIGS.items():
                 print(f"🏦 檢查 {bank_name}...")
                 
+                # 建立搜尋查詢
                 query_parts = []
-                
-                # 搜尋原始銀行寄件者 OR 轉發郵件
-                sender_queries = [
-                    f"from:{config['sender_domain']}",
-                    f"from:jiayu8227@gmail.com"
-                ]
-                query_parts.append(f"({' OR '.join(sender_queries)})")
-                
+                query_parts.append(f"from:{config['sender_domain']}")
                 query_parts.append(f"after:{yesterday}")
                 query_parts.append("has:attachment")
                 
-                # 加入主旨關鍵字(包含轉發格式)
-                subject_keywords = []
+                # 加入主旨關鍵字
                 for keyword in config['subject_keywords']:
-                    subject_keywords.append(f'subject:"{keyword}"')
-                    subject_keywords.append(f'subject:"Fwd: {keyword}"')
+                    query_parts.append(f'subject:"{keyword}"')
                 
-                if subject_keywords:
-                    query_parts.append(f"({' OR '.join(subject_keywords)})")
-                
-                # 排除已處理的郵件
-                exclude_processed = ""
-                if self.processed_label_id:
-                    exclude_processed = f" -label:{self.processed_label_id}"
-                
-                query = " ".join(query_parts) + exclude_processed
+                query = " ".join(query_parts)
                 
                 try:
+                    # 執行搜尋
                     results = self.gmail_service.users().messages().list(
                         userId='me', q=query, maxResults=10
                     ).execute()
@@ -416,25 +343,30 @@ class CreditCardManager:
     def process_gmail_message(self, message_id, bank_name):
         """處理單封 Gmail 訊息"""
         try:
+            # 獲取郵件詳細資訊
             message = self.gmail_service.users().messages().get(
                 userId='me', id=message_id, format='full'
             ).execute()
             
+            # 提取郵件基本資訊
             headers = message['payload'].get('headers', [])
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
             date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
             
             print(f"   📧 處理郵件: {subject[:50]}...")
             
+            # 檢查是否已處理過
             if self.is_bill_already_processed(message_id):
                 print(f"   ⏭️ 已處理過，跳過")
                 return None
             
+            # 尋找PDF附件
             pdf_data = self.extract_pdf_attachment(message)
             if not pdf_data:
                 print(f"   ⚠️ 未找到PDF附件")
                 return None
             
+            # 處理PDF
             bill_info = self.process_pdf_bill(pdf_data, bank_name, message_id, subject, date)
             
             return bill_info
@@ -485,6 +417,7 @@ class CreditCardManager:
         try:
             print(f"   🔓 嘗試解鎖PDF...")
             
+            # 嘗試解鎖PDF
             unlocked_pdf = self.unlock_pdf(pdf_data, bank_name)
             if not unlocked_pdf:
                 return {
@@ -498,6 +431,7 @@ class CreditCardManager:
             
             print(f"   📄 提取PDF文字...")
             
+            # 🆕 使用智能 OCR 處理
             extracted_text = self.pdf_to_text_with_smart_ocr(unlocked_pdf)
             if not extracted_text:
                 return {
@@ -511,6 +445,7 @@ class CreditCardManager:
             
             print(f"   🤖 LLM分析中...")
             
+            # LLM處理
             structured_data = self.llm_parse_bill(extracted_text, bank_name)
             if not structured_data:
                 return {
@@ -522,6 +457,7 @@ class CreditCardManager:
                     'processed_time': self.get_taiwan_time()
                 }
             
+            # 儲存處理結果
             bill_info = {
                 'bank_name': bank_name,
                 'message_id': message_id,
@@ -533,9 +469,6 @@ class CreditCardManager:
             }
             
             self.bill_data['processed_bills'].append(bill_info)
-            
-            # 標記為已處理
-            self.mark_bill_as_processed(message_id)
             
             print(f"   ✅ 帳單處理完成")
             return bill_info
@@ -566,6 +499,7 @@ class CreditCardManager:
                 if reader.decrypt(password):
                     print(f"   🔓 PDF解鎖成功")
                     
+                    # 重新建立無密碼的PDF
                     writer = PyPDF2.PdfWriter()
                     for page in reader.pages:
                         writer.add_page(page)
@@ -589,18 +523,22 @@ class CreditCardManager:
         try:
             print(f"   📄 開始智能文字提取...")
             
+            # 第1層：嘗試直接文字提取
             direct_text = self.pdf_to_text_backup(pdf_data)
             
+            # 評估直接提取的品質
             if direct_text and self.is_text_quality_good(direct_text):
                 print(f"   ✅ 直接文字提取成功，品質良好")
                 return direct_text
             
+            # 第2層：使用 Google Vision OCR
             if self.vision_enabled:
                 print(f"   🔍 直接提取品質不佳，使用 Google Vision OCR...")
                 ocr_text = self.google_vision_ocr(pdf_data)
                 if ocr_text:
                     return ocr_text
             
+            # 第3層：返回直接提取的結果（總比沒有好）
             print(f"   ⚠️ OCR 不可用，使用直接提取結果")
             return direct_text
             
@@ -613,9 +551,11 @@ class CreditCardManager:
         if not text or len(text.strip()) < 100:
             return False
         
+        # 檢查是否包含常見的帳單關鍵字
         keywords = ['本期應繳', '應繳金額', '繳款期限', '信用卡', '帳單', '交易', '消費']
         keyword_count = sum(1 for keyword in keywords if keyword in text)
         
+        # 至少要有2個關鍵字才認為品質良好
         return keyword_count >= 2
     
     def google_vision_ocr(self, pdf_data):
@@ -624,24 +564,29 @@ class CreditCardManager:
             if not self.vision_enabled:
                 return None
             
+            # PDF轉圖片
             images = convert_from_bytes(pdf_data, dpi=200, fmt='PNG')
             
             all_text = ""
             for i, image in enumerate(images):
                 print(f"     📷 OCR處理第 {i+1} 頁...")
                 
+                # 將PIL圖片轉為bytes
                 import io
                 img_byte_arr = io.BytesIO()
                 image.save(img_byte_arr, format='PNG')
                 image_content = img_byte_arr.getvalue()
                 
+                # Google Vision OCR
                 vision_image = vision.Image(content=image_content)
                 response = self.vision_client.text_detection(image=vision_image)
                 
+                # 檢查錯誤
                 if response.error.message:
                     print(f"     ❌ Google Vision API 錯誤: {response.error.message}")
                     continue
                 
+                # 提取文字
                 if response.text_annotations:
                     page_text = response.text_annotations[0].description
                     all_text += f"\n--- 第 {i+1} 頁 (OCR) ---\n{page_text}\n"
@@ -659,8 +604,6 @@ class CreditCardManager:
         except Exception as e:
             print(f"   ❌ Google Vision OCR 失敗: {e}")
             return None
-    
-    def pdf_to_text_backup(self, pdf_data):
         """PDF轉文字備用方案(直接提取文字)"""
         try:
             import io
@@ -689,8 +632,67 @@ class CreditCardManager:
                 print("⚠️ Groq API 不可用，使用基礎解析方案")
                 return self.basic_parse_bill(extracted_text, bank_name)
             
-            # Groq 處理邏輯（目前跳過）
-            return self.basic_parse_bill(extracted_text, bank_name)
+            prompt = f"""你是專業的信用卡帳單解析專家。請從以下{bank_name}信用卡帳單文字中，提取並整理成JSON格式：
+
+請提取以下資訊：
+{{
+  "bank_name": "銀行名稱",
+  "card_number": "卡號後4碼",
+  "statement_period": "帳單週期",
+  "due_date": "繳款期限", 
+  "total_amount": "本期應繳金額",
+  "minimum_payment": "最低應繳金額",
+  "transactions": [
+    {{
+      "date": "交易日期",
+      "description": "交易描述/商家名稱",
+      "amount": "金額"
+    }}
+  ],
+  "summary": {{
+    "transaction_count": "交易筆數",
+    "total_spending": "總消費金額"
+  }}
+}}
+
+請注意：
+1. 金額請提取數字部分，去除貨幣符號
+2. 日期請使用 YYYY/MM/DD 格式
+3. 如果某項資訊找不到，請填入 null
+4. 文字可能有識別錯誤，請根據上下文推斷正確內容
+
+帳單文字：
+{extracted_text}
+
+請回傳JSON格式的結果："""
+
+            response = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama3-8b-8192",
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # 嘗試解析JSON
+            try:
+                # 找到JSON部分
+                json_start = result_text.find('{')
+                json_end = result_text.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_text = result_text[json_start:json_end]
+                    structured_data = json.loads(json_text)
+                    print(f"   ✅ LLM解析成功")
+                    return structured_data
+                else:
+                    print(f"   ❌ 未找到有效JSON格式")
+                    return self.basic_parse_bill(extracted_text, bank_name)
+                    
+            except json.JSONDecodeError as e:
+                print(f"   ❌ JSON解析失敗: {e}")
+                return self.basic_parse_bill(extracted_text, bank_name)
             
         except Exception as e:
             print(f"   ❌ LLM處理失敗: {e}")
@@ -701,6 +703,7 @@ class CreditCardManager:
         try:
             print("   🔧 使用基礎解析方案")
             
+            # 基本資料結構
             bill_data = {
                 "bank_name": bank_name,
                 "card_number": None,
@@ -715,465 +718,343 @@ class CreditCardManager:
                 }
             }
             
+            # 簡單的關鍵字匹配
             lines = extracted_text.split('\n')
             
             for line in lines:
                 line = line.strip()
                 
-                # 解析本期應繳金額
+                # 查找金額
                 if '本期應繳' in line or '應繳金額' in line:
                     amounts = re.findall(r'[\d,]+', line)
                     if amounts:
                         bill_data['total_amount'] = amounts[-1].replace(',', '')
                 
-                # 解析最低應繳金額
+                # 查找最低應繳
                 elif '最低應繳' in line:
                     amounts = re.findall(r'[\d,]+', line)
                     if amounts:
                         bill_data['minimum_payment'] = amounts[-1].replace(',', '')
                 
-                # 解析繳款期限
+                # 查找繳款期限
                 elif '繳款期限' in line or '到期日' in line:
                     dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
                     if dates:
                         bill_data['due_date'] = dates[0]
+            
+            # 如果找到了基本資訊就算成功
+            if bill_data['total_amount'] or bill_data['minimum_payment']:
+                print("   ✅ 基礎解析成功")
+                return bill_data
+            else:
+                print("   ❌ 基礎解析失敗")
+                return None
                 
-                # 解析帳單期間
-                elif '帳單期間' in line or '結帳期間' in line:
-                    dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
-                    if len(dates) >= 2:
-                        bill_data['statement_period'] = f"{dates[0]} ~ {dates[1]}"
-                
-                # 解析卡號
-                elif '卡號' in line or '信用卡號' in line:
-                    # 尋找卡號格式 (通常是 **** **** **** 1234)
-                    card_numbers = re.findall(r'[\*\d]{4}[\s\-]?[\*\d]{4}[\s\-]?[\*\d]{4}[\s\-]?\d{4}', line)
-                    if card_numbers:
-                        bill_data['card_number'] = card_numbers[0]
-            
-            # 嘗試解析交易明細
-            bill_data['transactions'] = self.extract_transactions(extracted_text)
-            bill_data['summary']['transaction_count'] = len(bill_data['transactions'])
-            
-            # 計算總消費金額
-            total_spending = 0
-            for transaction in bill_data['transactions']:
-                if transaction.get('amount'):
-                    try:
-                        amount = float(transaction['amount'].replace(',', ''))
-                        total_spending += amount
-                    except:
-                        pass
-            
-            bill_data['summary']['total_spending'] = total_spending
-            
-            print(f"   ✅ 基礎解析完成：應繳 {bill_data.get('total_amount', '未知')} 元")
-            return bill_data
-            
         except Exception as e:
             print(f"   ❌ 基礎解析失敗: {e}")
             return None
     
-    def extract_transactions(self, text):
-        """從文字中提取交易明細"""
-        try:
-            transactions = []
-            lines = text.split('\n')
+    def is_bill_already_processed(self, message_id):
+        """檢查帳單是否已處理"""
+        return any(bill['message_id'] == message_id for bill in self.bill_data['processed_bills'])
+    
+    def get_recent_bills(self, limit=5):
+        """獲取最近處理的帳單"""
+        if not self.bill_data['processed_bills']:
+            return "📝 尚未處理任何帳單"
+        
+        recent_bills = sorted(
+            self.bill_data['processed_bills'], 
+            key=lambda x: x['processed_time'], 
+            reverse=True
+        )[:limit]
+        
+        result = f"📧 最近 {len(recent_bills)} 份帳單：\n\n"
+        
+        for i, bill in enumerate(recent_bills, 1):
+            result += f"{i}. 🏦 {bill['bank_name']}\n"
+            result += f"   📅 {bill['date'][:10] if bill['date'] else '未知日期'}\n"
+            result += f"   {bill['status']}\n"
+            result += f"   🕒 {bill['processed_time']}\n"
             
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # 尋找包含日期和金額的行（可能是交易記錄）
-                # 格式範例：01/15 超商消費 150
-                date_match = re.search(r'(\d{1,2}/\d{1,2})', line)
-                amount_match = re.search(r'(\d{1,3}(?:,\d{3})*)', line)
-                
-                if date_match and amount_match:
-                    # 提取商家名稱（日期和金額之間的文字）
-                    date_pos = date_match.end()
-                    amount_pos = amount_match.start()
+            if bill.get('bill_data') and bill['status'] == '✅ 處理成功':
+                bill_info = bill['bill_data']
+                result += f"   💰 應繳：{bill_info.get('total_amount', 'N/A')}\n"
+                result += f"   📊 交易：{len(bill_info.get('transactions', []))} 筆\n"
+            
+            result += "\n"
+        
+        return result
+    
+    def get_bill_summary(self, bank_name=None):
+        """獲取帳單摘要"""
+        processed_bills = self.bill_data['processed_bills']
+        
+        if bank_name:
+            processed_bills = [b for b in processed_bills if b['bank_name'] == bank_name]
+            if not processed_bills:
+                return f"📝 {bank_name} 尚未處理任何帳單"
+        
+        if not processed_bills:
+            return "📝 尚未處理任何帳單"
+        
+        successful_bills = [b for b in processed_bills if b['status'] == '✅ 處理成功']
+        
+        result = f"📊 {'帳單處理摘要' if not bank_name else f'{bank_name} 帳單摘要'}：\n\n"
+        result += f"📧 總處理數量：{len(processed_bills)} 份\n"
+        result += f"✅ 成功處理：{len(successful_bills)} 份\n"
+        result += f"❌ 處理失敗：{len(processed_bills) - len(successful_bills)} 份\n\n"
+        
+        if successful_bills:
+            total_amount = 0
+            total_transactions = 0
+            
+            for bill in successful_bills:
+                if bill.get('bill_data'):
+                    bill_info = bill['bill_data']
+                    try:
+                        amount = bill_info.get('total_amount', '0')
+                        if isinstance(amount, str):
+                            amount = re.sub(r'[^\d.]', '', amount)
+                        total_amount += float(amount or 0)
+                    except:
+                        pass
                     
-                    if amount_pos > date_pos:
-                        merchant = line[date_pos:amount_pos].strip()
-                        # 過濾掉過短的商家名稱
-                        if len(merchant) >= 2:
-                            transaction = {
-                                'date': date_match.group(1),
-                                'merchant': merchant,
-                                'amount': amount_match.group(1)
-                            }
-                            transactions.append(transaction)
+                    total_transactions += len(bill_info.get('transactions', []))
             
-            return transactions[:20]  # 最多回傳20筆交易
-            
-        except Exception as e:
-            print(f"   ⚠️ 交易明細提取失敗: {e}")
-            return []
+            result += f"💰 總應繳金額：{total_amount:,.0f} 元\n"
+            result += f"📊 總交易筆數：{total_transactions} 筆\n"
+        
+        return result
     
-    def get_bill_summary(self):
-        """獲取帳單處理摘要"""
-        try:
-            total_bills = len(self.bill_data['processed_bills'])
-            
-            if total_bills == 0:
-                return "📊 帳單摘要：\n暫無已處理的帳單"
-            
-            summary = f"📊 帳單處理摘要 ({self.get_taiwan_time()})\n\n"
-            summary += f"📈 總計處理：{total_bills} 份帳單\n\n"
-            
-            # 按銀行統計
-            bank_stats = {}
-            for bill in self.bill_data['processed_bills']:
-                bank = bill['bank_name']
-                if bank not in bank_stats:
-                    bank_stats[bank] = {'count': 0, 'success': 0}
-                bank_stats[bank]['count'] += 1
-                if '成功' in bill['status']:
-                    bank_stats[bank]['success'] += 1
-            
-            summary += "🏦 各銀行統計：\n"
-            for bank, stats in bank_stats.items():
-                summary += f"   {bank}：{stats['success']}/{stats['count']} 成功\n"
-            
-            # 最近處理的帳單
-            summary += f"\n📋 最近處理：\n"
-            recent_bills = sorted(self.bill_data['processed_bills'], 
-                                key=lambda x: x['processed_time'], reverse=True)[:5]
-            
-            for bill in recent_bills:
-                summary += f"   {bill['bank_name']} - {bill['status']}\n"
-                summary += f"   {bill['processed_time']}\n\n"
-            
-            if self.bill_data['last_check_time']:
-                summary += f"🕒 最後檢查：{self.bill_data['last_check_time']}\n"
-            
-            return summary
-            
-        except Exception as e:
-            return f"❌ 摘要生成失敗: {e}"
-    
-    def start_monitoring(self):
-        """啟動自動監控"""
+    def start_monitoring_thread(self):
+        """啟動背景監控執行緒"""
         if self.is_monitoring:
-            return "⚠️ 監控已在運行中"
+            return "⚠️ 監控已在執行中"
         
-        if not self.gmail_enabled:
-            return "❌ Gmail API 未啟用，無法啟動監控"
-        
-        try:
+        def monitoring_loop():
             self.is_monitoring = True
-            self.monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
-            self.monitoring_thread.start()
+            print("🔄 信用卡帳單監控執行緒已啟動")
             
-            return f"✅ 自動監控已啟動\n🕒 啟動時間：{self.get_taiwan_time()}"
-            
-        except Exception as e:
-            self.is_monitoring = False
-            return f"❌ 監控啟動失敗: {e}"
+            while self.is_monitoring:
+                try:
+                    # 每天 08:00 執行檢查
+                    now = self.get_taiwan_datetime()
+                    target_time = now.replace(hour=8, minute=0, second=0, microsecond=0)
+                    
+                    # 如果今天已過8點，設定為明天8點
+                    if now > target_time:
+                        target_time += timedelta(days=1)
+                    
+                    sleep_seconds = (target_time - now).total_seconds()
+                    
+                    print(f"💤 下次檢查時間：{target_time.strftime('%Y/%m/%d %H:%M')}")
+                    
+                    # 分段睡眠，以便可以中斷
+                    while sleep_seconds > 0 and self.is_monitoring:
+                        sleep_time = min(300, sleep_seconds)  # 每5分鐘檢查一次是否要停止
+                        time.sleep(sleep_time)
+                        sleep_seconds -= sleep_time
+                    
+                    if self.is_monitoring:
+                        # 執行檢查
+                        result = self.check_gmail_for_bills()
+                        print(f"📧 定時檢查結果：{result}")
+                
+                except Exception as e:
+                    print(f"❌ 監控執行緒錯誤: {e}")
+                    time.sleep(300)  # 錯誤時等待5分鐘再繼續
+        
+        self.monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+        self.monitoring_thread.start()
+        
+        return "✅ 信用卡帳單監控已啟動"
     
     def stop_monitoring(self):
-        """停止自動監控"""
-        if not self.is_monitoring:
-            return "⚠️ 監控未在運行"
-        
+        """停止背景監控"""
         self.is_monitoring = False
-        return f"⏹️ 自動監控已停止\n🕒 停止時間：{self.get_taiwan_time()}"
-    
-    def _monitoring_loop(self):
-        """監控循環"""
-        print("🔄 自動監控線程已啟動")
-        
-        while self.is_monitoring:
-            try:
-                # 每30分鐘檢查一次
-                time.sleep(1800)  # 30 * 60 秒
-                
-                if not self.is_monitoring:
-                    break
-                
-                print(f"🔄 定時檢查開始 - {self.get_taiwan_time()}")
-                self.check_gmail_for_bills()
-                self.last_sync_time = self.get_taiwan_time()
-                
-            except Exception as e:
-                print(f"❌ 監控循環錯誤: {e}")
-                time.sleep(300)  # 錯誤時等待5分鐘再重試
-        
-        print("⏹️ 自動監控線程已結束")
+        return "⏹️ 信用卡帳單監控已停止"
     
     def get_monitoring_status(self):
         """獲取監控狀態"""
-        if self.is_monitoring:
-            status = f"✅ 自動監控運行中\n"
-            if self.last_sync_time:
-                status += f"🕒 最後同步：{self.last_sync_time}\n"
-            status += f"📧 Gmail API：{'✅ 正常' if self.gmail_enabled else '❌ 未連接'}\n"
-            status += f"🔍 OCR服務：{'✅ 可用' if self.vision_enabled else '⚠️ 不可用'}\n"
-            status += f"🤖 LLM服務：{'✅ 可用' if self.groq_enabled else '⚠️ 使用基礎解析'}\n"
-        else:
-            status = f"⏹️ 自動監控已停止\n"
-            if self.bill_data['last_check_time']:
-                status += f"🕒 最後檢查：{self.bill_data['last_check_time']}\n"
-        
-        return status
-
-
-# 全域實例
-credit_card_manager = None
-
-def init_credit_card_manager():
-    """初始化全域信用卡管理器實例"""
-    global credit_card_manager
-    if credit_card_manager is None:
-        credit_card_manager = CreditCardManager()
-    return credit_card_manager
-
-def is_credit_card_query(message):
-    """判斷是否為信用卡相關查詢"""
-    try:
-        if not message:
-            return False
-        
-        message = message.strip().lower()
-        
-        # 信用卡查詢相關關鍵字
-        query_keywords = [
-            # 中文查詢關鍵字
-            '我的信用卡', '信用卡餘額', '信用卡額度', '信用卡消費',
-            '帳單金額', '應繳金額', '最低應繳', '繳費期限', '到期日',
-            '信用卡明細', '消費記錄', '交易明細', '刷卡記錄',
-            '信用卡狀態', '帳單狀態', '還款狀態',
-            '永豐信用卡', '台新信用卡', '星展信用卡',
-            '本期帳單', '上期帳單', '帳單查詢',
-            
-            # 英文查詢關鍵字  
-            'my credit card', 'credit card balance', 'card balance',
-            'bill amount', 'payment due', 'minimum payment',
-            'transaction history', 'spending', 'charges',
-            'card status', 'bill status', 'payment status',
-            'current bill', 'previous bill', 'bill inquiry',
-            
-            # 查詢動詞
-            '查詢', '查看', '顯示', '告訴我', '我想知道',
-            'show me', 'tell me', 'what is', 'how much',
-            'check my', 'view my', 'display',
-            
-            # 銀行特定查詢
-            '永豐帳單', '台新帳單', '星展帳單',
-            'sinopac bill', 'taishin bill', 'dbs bill'
-        ]
-        
-        # 檢查是否包含查詢關鍵字
-        for keyword in query_keywords:
-            if keyword in message:
-                return True
-        
-        # 檢查問句格式
-        question_patterns = [
-            r'.*信用卡.*多少',      # 信用卡相關的多少錢
-            r'.*帳單.*什麼時候',     # 帳單什麼時候到期
-            r'.*還要.*繳',          # 還要繳多少
-            r'.*什麼時候.*到期',     # 什麼時候到期
-            r'how much.*card',      # 英文金額查詢
-            r'when.*due',          # 英文到期查詢
-            r'.*card.*balance',    # 卡片餘額查詢
-        ]
-        
-        import re
-        for pattern in question_patterns:
-            if re.search(pattern, message):
-                return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Error in is_credit_card_query: {e}")
-        return False
-
-
-def is_credit_card_command(message):
-    """判斷是否為信用卡相關指令"""
-    try:
-        if not message:
-            return False
-        
-        message = message.strip().lower()
-        
-        # 信用卡相關關鍵字
-        credit_card_keywords = [
-            # 中文關鍵字
-            '信用卡', '帳單', '檢查帳單', '查詢帳單', '帳單摘要', '摘要',
-            '啟動監控', '開始監控', '停止監控', '結束監控', '監控狀態', '狀態',
-            '設定密碼', '銀行密碼', '永豐', '台新', '星展',
-            'pdf密碼', '帳單處理', '信用卡管理',
-            
-            # 英文關鍵字
-            'credit card', 'bill', 'bills', 'check bills', 'check gmail',
-            'summary', 'monitoring', 'start monitoring', 'stop monitoring',
-            'monitoring status', 'status', 'set password', 'bank password',
-            'sinopac', 'taishin', 'dbs',
-            
-            # 銀行相關
-            '永豐銀行', '台新銀行', '星展銀行', 'banksinopac', 'taishinbank'
-        ]
-        
-        # 檢查是否包含任何關鍵字
-        for keyword in credit_card_keywords:
-            if keyword in message:
-                return True
-        
-        # 檢查特定指令格式
-        command_patterns = [
-            r'設定.*密碼',  # 設定密碼相關
-            r'check.*bill',  # check bill 相關
-            r'.*監控.*',     # 監控相關
-            r'.*帳單.*',     # 帳單相關
-        ]
-        
-        import re
-        for pattern in command_patterns:
-            if re.search(pattern, message):
-                return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Error in is_credit_card_command: {e}")
-        return False
-
-
-def handle_credit_card_command(command):
-    """處理信用卡相關指令"""
-    try:
-        manager = init_credit_card_manager()
-        
-        # 正規化指令
-        command = command.strip().lower()
-        
-        # 檢查帳單指令
-        if any(keyword in command for keyword in ['檢查帳單', '查詢帳單', 'check bills', 'check gmail']):
-            return manager.check_gmail_for_bills()
-        
-        # 帳單摘要指令
-        elif any(keyword in command for keyword in ['帳單摘要', '摘要', 'summary', '統計']):
-            return manager.get_bill_summary()
-        
-        # 啟動監控指令
-        elif any(keyword in command for keyword in ['啟動監控', '開始監控', 'start monitoring']):
-            return manager.start_monitoring()
-        
-        # 停止監控指令
-        elif any(keyword in command for keyword in ['停止監控', '結束監控', 'stop monitoring']):
-            return manager.stop_monitoring()
-        
-        # 監控狀態指令
-        elif any(keyword in command for keyword in ['監控狀態', '狀態', 'monitoring status', 'status']):
-            return manager.get_monitoring_status()
-        
-        # 設定銀行密碼指令
-        elif '設定密碼' in command or 'set password' in command:
-            return handle_password_setting(command, manager)
-        
-        # 幫助指令
-        elif any(keyword in command for keyword in ['幫助', 'help', '指令']):
-            return get_help_message()
-        
-        # 預設回應
-        else:
-            return get_default_response()
-    
-    except Exception as e:
-        error_msg = f"❌ 指令處理失敗: {e}"
-        print(f"Error in handle_credit_card_command: {e}")
-        print(f"Command: {command}")
-        import traceback
-        traceback.print_exc()
-        return error_msg
-
-def handle_password_setting(command, manager):
-    """處理密碼設定指令"""
-    try:
-        # 簡單的密碼設定格式解析
-        # 格式: 設定密碼 銀行名稱 密碼
-        parts = command.split()
-        if len(parts) >= 3:
-            bank_name = parts[1]
-            password = parts[2]
-            
-            # 映射銀行名稱
-            bank_mapping = {
-                '永豐': '永豐銀行',
-                '台新': '台新銀行', 
-                '星展': '星展銀行',
-                'sinopac': '永豐銀行',
-                'taishin': '台新銀行',
-                'dbs': '星展銀行'
+        if not self.is_monitoring:
+            return {
+                'status': 'stopped',
+                'gmail_enabled': self.gmail_enabled,
+                'groq_enabled': self.groq_enabled,
+                'vision_ocr_enabled': self.vision_enabled,
+                'monitored_banks': list(BANK_CONFIGS.keys()),
+                'last_check_time': self.bill_data.get('last_check_time'),
+                'processed_bills_count': len(self.bill_data['processed_bills'])
             }
-            
-            actual_bank = bank_mapping.get(bank_name, bank_name)
-            return manager.set_bank_password(actual_bank, password)
         else:
-            return "❌ 密碼設定格式錯誤\n正確格式：設定密碼 [銀行名稱] [密碼]\n例如：設定密碼 永豐 123456"
+            return {
+                'status': 'running',
+                'gmail_enabled': self.gmail_enabled,
+                'groq_enabled': self.groq_enabled,
+                'vision_ocr_enabled': self.vision_enabled,
+                'monitored_banks': list(BANK_CONFIGS.keys()),
+                'last_check_time': self.bill_data.get('last_check_time'),
+                'processed_bills_count': len(self.bill_data['processed_bills'])
+            }
     
-    except Exception as e:
-        return f"❌ 密碼設定失敗: {e}"
+    def handle_command(self, message_text):
+        """處理信用卡帳單相關指令"""
+        message_text = message_text.strip()
+        
+        try:
+            if message_text == '檢查帳單':
+                return self.check_gmail_for_bills()
+            
+            elif message_text == '最近帳單':
+                return self.get_recent_bills()
+            
+            elif message_text == '帳單摘要':
+                return self.get_bill_summary()
+            
+            elif message_text.startswith('帳單摘要 '):
+                bank_name = message_text[4:].strip()
+                return self.get_bill_summary(bank_name)
+            
+            elif message_text == '帳單監控狀態':
+                status = self.get_monitoring_status()
+                result = f"📊 信用卡帳單監控狀態：\n\n"
+                result += f"🔄 監控狀態：{'🟢 執行中' if status['status'] == 'running' else '🔴 已停止'}\n"
+                result += f"📧 Gmail API：{'✅ 已啟用' if status['gmail_enabled'] else '❌ 未啟用'}\n"
+                result += f"🤖 Groq LLM：{'✅ 已啟用' if status['groq_enabled'] else '❌ 未啟用'}\n"
+                result += f"👁️ Google Vision OCR：{'✅ 已啟用' if status['vision_ocr_enabled'] else '⚠️ 未啟用'}\n\n"
+                result += f"🏦 監控銀行：{', '.join(status['monitored_banks'])}\n"
+                result += f"📊 已處理帳單：{status['processed_bills_count']} 份\n"
+                if status['last_check_time']:
+                    result += f"🕒 上次檢查：{status['last_check_time']}\n"
+                return result
+            
+            elif match := re.match(r'設定密碼\s+(.+?)\s+(.+)', message_text):
+                bank_name, password = match.groups()
+                return self.set_bank_password(bank_name.strip(), password.strip())
+            
+            elif message_text == '帳單幫助':
+                return self.get_help_text()
+            
+            else:
+                return "❌ 指令格式不正確\n💡 輸入「帳單幫助」查看使用說明"
+        
+        except Exception as e:
+            return f"❌ 處理失敗：{str(e)}\n💡 請檢查指令格式"
+    
+    def get_help_text(self):
+        """獲取幫助訊息"""
+        return """💳 信用卡帳單自動監控功能 v1.0：
 
-def get_help_message():
-    """獲取幫助訊息"""
-    return """📖 信用卡帳單管理器 - 指令說明
+📧 監控功能：
+- 檢查帳單 - 立即檢查Gmail新帳單
+- 帳單監控狀態 - 查看監控系統狀態
+- 最近帳單 - 顯示最近處理的帳單
+- 帳單摘要 - 所有帳單處理摘要
+- 帳單摘要 永豐銀行 - 特定銀行帳單摘要
 
-🔍 帳單相關指令：
-   • 檢查帳單 / check bills - 檢查Gmail新帳單
-   • 帳單摘要 / summary - 顯示處理摘要統計
+🔧 設定功能：
+- 設定密碼 永豐銀行 your_password - 設定PDF密碼
+- 設定密碼 台新銀行 your_password - 設定PDF密碼
+- 設定密碼 星展銀行 your_password - 設定PDF密碼
 
-🔄 監控相關指令：  
-   • 啟動監控 / start monitoring - 開始自動監控
-   • 停止監控 / stop monitoring - 停止自動監控
-   • 監控狀態 / status - 查看目前狀態
+🏦 支援銀行：
+- 永豐銀行 (ebillservice@newebill.banksinopac.com.tw)
+- 台新銀行 (webmaster@bhurecv.taishinbank.com.tw)
+- 星展銀行 (eservicetw@dbs.com)
 
-🔧 設定相關指令：
-   • 設定密碼 [銀行] [密碼] - 設定PDF解鎖密碼
-   • 例如：設定密碼 永豐 123456
+⚙️ 系統功能：
+- 📧 自動監控Gmail信用卡帳單
+- 🔓 自動解鎖PDF密碼保護
+- 📄 PDF文字提取
+- 🤖 LLM智能解析(Groq + Llama)
+- 📊 結構化數據提取
+- 💾 帳單記錄保存
 
-💡 支援的銀行：
-   • 永豐銀行 (永豐/sinopac)
-   • 台新銀行 (台新/taishin)  
-   • 星展銀行 (星展/dbs)
+🕒 監控時間：
+- 每天早上08:00自動檢查Gmail
+- 檢查過去24小時的新郵件
+- 自動處理符合條件的帳單
 
-ℹ️ 其他指令：
-   • 幫助 / help - 顯示此說明"""
+💡 使用提示：
+- 首次使用請先設定各銀行PDF密碼
+- 確保Gmail API和Groq API已正確設定
+- 系統會自動跳過已處理的帳單
+- 處理結果會保存在系統記憶中
 
-def get_default_response():
-    """預設回應"""
-    manager = init_credit_card_manager()
-    status_info = []
-    
-    # 系統狀態
-    status_info.append("📧 信用卡帳單管理器")
-    status_info.append(f"🕒 目前時間：{manager.get_taiwan_time()}")
-    
-    # 服務狀態
-    services = []
-    services.append(f"Gmail API：{'✅' if manager.gmail_enabled else '❌'}")
-    services.append(f"OCR服務：{'✅' if manager.vision_enabled else '⚠️'}")
-    services.append(f"LLM服務：{'✅' if manager.groq_enabled else '⚠️'}")
-    status_info.append("🔧 服務狀態：" + " | ".join(services))
-    
-    # 監控狀態
-    if manager.is_monitoring:
-        status_info.append("📊 狀態：✅ 自動監控運行中")
-    else:
-        status_info.append("📊 狀態：⏹️ 監控已停止")
-    
-    # 統計資訊
-    total_bills = len(manager.bill_data['processed_bills'])
-    status_info.append(f"📈 已處理帳單：{total_bills} 份")
-    
-    if manager.bill_data['last_check_time']:
-        status_info.append(f"🔍 最後檢查：{manager.bill_data['last_check_time']}")
-    
-    status_info.append("\n💡 輸入「幫助」查看可用指令")
-    
-    return "\n".join(status_info)
+🔧 技術架構：
+- Gmail API：郵件監控和附件下載
+- PyPDF2：PDF文字提取
+- Groq LLM：智能內容解析
+- 背景執行緒：定時自動監控
+
+📊 資料格式：
+- 帳單週期、繳款期限
+- 本期應繳、最低應繳金額
+- 交易明細(日期、商家、金額)
+- 消費統計和分析"""
+
+
+# 建立全域實例
+credit_card_manager = CreditCardManager()
+
+
+# 對外接口函數，供 main.py 使用
+def handle_credit_card_command(message_text):
+    """處理信用卡帳單指令 - 對外接口"""
+    return credit_card_manager.handle_command(message_text)
+
+
+def get_credit_card_summary():
+    """獲取信用卡帳單摘要 - 對外接口"""
+    return credit_card_manager.get_bill_summary()
+
+
+def get_recent_bills(limit=5):
+    """獲取最近帳單 - 對外接口"""
+    return credit_card_manager.get_recent_bills(limit)
+
+
+def start_credit_card_monitor():
+    """啟動信用卡帳單監控 - 對外接口"""
+    return credit_card_manager.start_monitoring_thread()
+
+
+def stop_credit_card_monitor():
+    """停止信用卡帳單監控 - 對外接口"""
+    return credit_card_manager.stop_monitoring()
+
+
+def get_credit_card_status():
+    """獲取監控狀態 - 對外接口"""
+    return credit_card_manager.get_monitoring_status()
+
+
+def is_credit_card_command(message_text):
+    """判斷是否為信用卡帳單指令 - 對外接口"""
+    credit_card_keywords = [
+        '檢查帳單', '最近帳單', '帳單摘要', '帳單監控狀態', 
+        '設定密碼', '帳單幫助'
+    ]
+    return any(keyword in message_text for keyword in credit_card_keywords)
+
+
+def is_credit_card_query(message_text):
+    """判斷是否為信用卡查詢指令 - 對外接口"""
+    query_patterns = [
+        '最近帳單', '帳單摘要', '帳單監控狀態', '帳單幫助'
+    ]
+    return any(pattern in message_text for pattern in query_patterns)
+
+
+if __name__ == "__main__":
+    # 測試功能
+    ccm = CreditCardManager()
+    print("=== 測試信用卡帳單監控 ===")
+    print(ccm.handle_command("帳單監控狀態"))
+    print()
+    print("=== 測試檢查帳單 ===")
+    print(ccm.handle_command("檢查帳單"))
+    print()
+    print("=== 測試幫助 ===")
+    print(ccm.handle_command("帳單幫助"))
