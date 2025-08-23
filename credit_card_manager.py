@@ -930,6 +930,57 @@ def init_credit_card_manager():
         credit_card_manager = CreditCardManager()
     return credit_card_manager
 
+def is_credit_card_command(message):
+    """判斷是否為信用卡相關指令"""
+    try:
+        if not message:
+            return False
+        
+        message = message.strip().lower()
+        
+        # 信用卡相關關鍵字
+        credit_card_keywords = [
+            # 中文關鍵字
+            '信用卡', '帳單', '檢查帳單', '查詢帳單', '帳單摘要', '摘要',
+            '啟動監控', '開始監控', '停止監控', '結束監控', '監控狀態', '狀態',
+            '設定密碼', '銀行密碼', '永豐', '台新', '星展',
+            'pdf密碼', '帳單處理', '信用卡管理',
+            
+            # 英文關鍵字
+            'credit card', 'bill', 'bills', 'check bills', 'check gmail',
+            'summary', 'monitoring', 'start monitoring', 'stop monitoring',
+            'monitoring status', 'status', 'set password', 'bank password',
+            'sinopac', 'taishin', 'dbs',
+            
+            # 銀行相關
+            '永豐銀行', '台新銀行', '星展銀行', 'banksinopac', 'taishinbank'
+        ]
+        
+        # 檢查是否包含任何關鍵字
+        for keyword in credit_card_keywords:
+            if keyword in message:
+                return True
+        
+        # 檢查特定指令格式
+        command_patterns = [
+            r'設定.*密碼',  # 設定密碼相關
+            r'check.*bill',  # check bill 相關
+            r'.*監控.*',     # 監控相關
+            r'.*帳單.*',     # 帳單相關
+        ]
+        
+        import re
+        for pattern in command_patterns:
+            if re.search(pattern, message):
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error in is_credit_card_command: {e}")
+        return False
+
+
 def handle_credit_card_command(command):
     """處理信用卡相關指令"""
     try:
