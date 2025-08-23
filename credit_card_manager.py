@@ -18,10 +18,20 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-# LLM
+# LLM 和 OCR
 import PyPDF2
 from groq import Groq
 from dotenv import load_dotenv
+
+# 🆕 Google Vision OCR
+try:
+    from google.cloud import vision
+    from google.oauth2.service_account import Credentials
+    from pdf2image import convert_from_bytes
+    VISION_AVAILABLE = True
+except ImportError:
+    VISION_AVAILABLE = False
+    print("⚠️ Google Vision 或 pdf2image 套件未安裝")
 
 # 載入環境變數
 load_dotenv()
@@ -75,6 +85,10 @@ class CreditCardManager:
         self.groq_client = None
         self.groq_enabled = False
         
+        # 🆕 Google Vision OCR 設定
+        self.vision_client = None
+        self.vision_enabled = False
+        
         # 監控狀態
         self.monitoring_thread = None
         self.is_monitoring = False
@@ -83,6 +97,7 @@ class CreditCardManager:
         # 初始化各項服務
         self.init_gmail_api()
         self.init_groq_api()
+        self.init_vision_ocr()
         self.load_bank_passwords()
         
         print("📧 信用卡帳單管理器初始化完成")
@@ -177,19 +192,45 @@ class CreditCardManager:
             print(f"❌ Gmail API 連接失敗: {e}")
             return False
     
-    def init_groq_api(self):
+    def init_vision_ocr(self):
+        """初始化 Google Vision OCR"""
+        try:
+            if not VISION_AVAILABLE:
+                print("⚠️ Google Vision 套件未安裝，OCR 功能不可用")
+                return False
+            
+            # 使用現有的 GOOGLE_CREDENTIALS 環境變數
+            google_credentials = os.getenv('GOOGLE_CREDENTIALS')
+            if google_credentials:
+                try:
+                    creds_dict = json.loads(google_credentials)
+                    credentials = Credentials.from_service_account_info(creds_dict)
+                    self.vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+                    self.vision_enabled = True
+                    print("✅ Google Vision OCR 初始化成功")
+                    return True
+                except Exception as e:
+                    print(f"❌ Google Vision OCR 憑證載入失敗: {e}")
+                    return False
+            else:
+                print("⚠️ 未找到 GOOGLE_CREDENTIALS，OCR 功能不可用")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Google Vision OCR 初始化失敗: {e}")
+            return False
         """初始化 Groq API"""
         try:
             groq_key = os.getenv('GROQ_API_KEY')
             if not groq_key:
                 print("⚠️ 未找到 GROQ_API_KEY 環境變數")
+                self.groq_enabled = False
                 return False
             
-            # 最簡單的初始化方式
-            self.groq_client = Groq(api_key=groq_key)
-            self.groq_enabled = True
-            print("✅ Groq API 連接成功")
-            return True
+            print("💡 暫時跳過 Groq API，使用基礎解析方案")
+            print("🔧 這是為了避免 Render 環境的 proxies 參數衝突")
+            self.groq_enabled = False
+            return False
             
         except Exception as e:
             print(f"❌ Groq API 連接失敗: {e}")
@@ -370,8 +411,8 @@ class CreditCardManager:
             
             print(f"   📄 提取PDF文字...")
             
-            # 直接提取文字
-            extracted_text = self.pdf_to_text_backup(unlocked_pdf)
+            # 🆕 使用智能 OCR 處理
+            extracted_text = self.pdf_to_text_with_smart_ocr(unlocked_pdf)
             if not extracted_text:
                 return {
                     'bank_name': bank_name,
@@ -457,7 +498,92 @@ class CreditCardManager:
             print(f"   ❌ PDF解鎖失敗: {e}")
             return None
     
-    def pdf_to_text_backup(self, pdf_data):
+    def pdf_to_text_with_smart_ocr(self, pdf_data):
+        """智能PDF文字提取(直接提取 + OCR)"""
+        try:
+            print(f"   📄 開始智能文字提取...")
+            
+            # 第1層：嘗試直接文字提取
+            direct_text = self.pdf_to_text_backup(pdf_data)
+            
+            # 評估直接提取的品質
+            if direct_text and self.is_text_quality_good(direct_text):
+                print(f"   ✅ 直接文字提取成功，品質良好")
+                return direct_text
+            
+            # 第2層：使用 Google Vision OCR
+            if self.vision_enabled:
+                print(f"   🔍 直接提取品質不佳，使用 Google Vision OCR...")
+                ocr_text = self.google_vision_ocr(pdf_data)
+                if ocr_text:
+                    return ocr_text
+            
+            # 第3層：返回直接提取的結果（總比沒有好）
+            print(f"   ⚠️ OCR 不可用，使用直接提取結果")
+            return direct_text
+            
+        except Exception as e:
+            print(f"   ❌ 智能文字提取失敗: {e}")
+            return None
+    
+    def is_text_quality_good(self, text):
+        """評估文字提取品質"""
+        if not text or len(text.strip()) < 100:
+            return False
+        
+        # 檢查是否包含常見的帳單關鍵字
+        keywords = ['本期應繳', '應繳金額', '繳款期限', '信用卡', '帳單', '交易', '消費']
+        keyword_count = sum(1 for keyword in keywords if keyword in text)
+        
+        # 至少要有2個關鍵字才認為品質良好
+        return keyword_count >= 2
+    
+    def google_vision_ocr(self, pdf_data):
+        """使用 Google Vision 進行 OCR"""
+        try:
+            if not self.vision_enabled:
+                return None
+            
+            # PDF轉圖片
+            images = convert_from_bytes(pdf_data, dpi=200, fmt='PNG')
+            
+            all_text = ""
+            for i, image in enumerate(images):
+                print(f"     📷 OCR處理第 {i+1} 頁...")
+                
+                # 將PIL圖片轉為bytes
+                import io
+                img_byte_arr = io.BytesIO()
+                image.save(img_byte_arr, format='PNG')
+                image_content = img_byte_arr.getvalue()
+                
+                # Google Vision OCR
+                vision_image = vision.Image(content=image_content)
+                response = self.vision_client.text_detection(image=vision_image)
+                
+                # 檢查錯誤
+                if response.error.message:
+                    print(f"     ❌ Google Vision API 錯誤: {response.error.message}")
+                    continue
+                
+                # 提取文字
+                if response.text_annotations:
+                    page_text = response.text_annotations[0].description
+                    all_text += f"\n--- 第 {i+1} 頁 (OCR) ---\n{page_text}\n"
+                    print(f"     ✅ 第 {i+1} 頁 OCR 完成")
+                else:
+                    print(f"     ⚠️ 第 {i+1} 頁未識別到文字")
+            
+            if all_text.strip():
+                print(f"   ✅ Google Vision OCR 完成，識別 {len(all_text)} 個字元")
+                return all_text
+            else:
+                print(f"   ❌ Google Vision OCR 未識別到任何文字")
+                return None
+                
+        except Exception as e:
+            print(f"   ❌ Google Vision OCR 失敗: {e}")
+            return None
         """PDF轉文字備用方案(直接提取文字)"""
         try:
             import io
@@ -736,7 +862,7 @@ class CreditCardManager:
                 'status': 'stopped',
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
-                'tesseract_enabled': False,
+                'vision_ocr_enabled': self.vision_enabled,
                 'monitored_banks': list(BANK_CONFIGS.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
@@ -746,7 +872,7 @@ class CreditCardManager:
                 'status': 'running',
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
-                'tesseract_enabled': False,
+                'vision_ocr_enabled': self.vision_enabled,
                 'monitored_banks': list(BANK_CONFIGS.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
@@ -776,7 +902,7 @@ class CreditCardManager:
                 result += f"🔄 監控狀態：{'🟢 執行中' if status['status'] == 'running' else '🔴 已停止'}\n"
                 result += f"📧 Gmail API：{'✅ 已啟用' if status['gmail_enabled'] else '❌ 未啟用'}\n"
                 result += f"🤖 Groq LLM：{'✅ 已啟用' if status['groq_enabled'] else '❌ 未啟用'}\n"
-                result += f"👁️ Tesseract OCR：{'⚠️ 未安裝' if not status['tesseract_enabled'] else '✅ 已啟用'}\n\n"
+                result += f"👁️ Google Vision OCR：{'✅ 已啟用' if status['vision_ocr_enabled'] else '⚠️ 未啟用'}\n\n"
                 result += f"🏦 監控銀行：{', '.join(status['monitored_banks'])}\n"
                 result += f"📊 已處理帳單：{status['processed_bills_count']} 份\n"
                 if status['last_check_time']:
