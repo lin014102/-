@@ -192,6 +192,26 @@ class CreditCardManager:
             print(f"❌ Gmail API 連接失敗: {e}")
             return False
     
+    def init_groq_api(self):
+        """初始化 Groq API"""
+        try:
+            groq_key = os.getenv('GROQ_API_KEY')
+            if not groq_key:
+                print("⚠️ 未找到 GROQ_API_KEY 環境變數")
+                self.groq_enabled = False
+                return False
+            
+            print("💡 暫時跳過 Groq API，使用基礎解析方案")
+            print("🔧 這是為了避免 Render 環境的 proxies 參數衝突")
+            self.groq_enabled = False
+            return False
+            
+        except Exception as e:
+            print(f"❌ Groq API 連接失敗: {e}")
+            print("💡 將使用備用方案處理帳單")
+            self.groq_enabled = False
+            return False
+    
     def init_vision_ocr(self):
         """初始化 Google Vision OCR"""
         try:
