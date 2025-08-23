@@ -733,3 +733,213 @@ class CreditCardManager:
                 elif '繳款期限' in line or '到期日' in line:
                     dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
                     if dates:
+                        bill_data['due_date'] = dates[0]
+                
+                elif '帳單期間' in line or '對帳單期間' in line:
+                    dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
+                    if len(dates) >= 2:
+                        bill_data['statement_period'] = f"{dates[0]} ~ {dates[1]}"
+                
+                elif '卡號' in line and ('****' in line or '*' in line):
+                    card_nums = re.findall(r'[\d*]{4,}', line)
+                    if card_nums:
+                        bill_data['card_number'] = card_nums[0]
+            
+            # 簡單統計
+            if bill_data['total_amount']:
+                bill_data['summary']['total_spending'] = int(bill_data['total_amount'])
+            
+            print(f"   ✅ 基礎解析完成")
+            print(f"      應繳金額: {bill_data['total_amount']}")
+            print(f"      繳款期限: {bill_data['due_date']}")
+            
+            return bill_data
+            
+        except Exception as e:
+            print(f"   ❌ 基礎解析失敗: {e}")
+            return None
+    
+    def get_processed_bills(self):
+        """獲取已處理的帳單列表"""
+        return self.bill_data['processed_bills']
+    
+    def get_processing_log(self):
+        """獲取處理日誌"""
+        return self.bill_data['processing_log']
+    
+    def get_system_status(self):
+        """獲取系統狀態"""
+        status = {
+            'gmail_enabled': self.gmail_enabled,
+            'vision_enabled': self.vision_enabled,
+            'groq_enabled': self.groq_enabled,
+            'processed_bills_count': len(self.bill_data['processed_bills']),
+            'last_check_time': self.bill_data.get('last_check_time'),
+            'bank_passwords_count': len(self.bill_data['bank_passwords']),
+            'is_monitoring': self.is_monitoring
+        }
+        return status
+    
+    def start_monitoring(self, interval_minutes=60):
+        """開始自動監控"""
+        if self.is_monitoring:
+            return "⚠️ 監控已在運行中"
+        
+        if not self.gmail_enabled:
+            return "❌ Gmail API 未啟用，無法開始監控"
+        
+        self.is_monitoring = True
+        
+        def monitoring_loop():
+            while self.is_monitoring:
+                try:
+                    print(f"🔄 自動監控檢查 - {self.get_taiwan_time()}")
+                    self.check_gmail_for_bills()
+                    time.sleep(interval_minutes * 60)  # 轉換為秒
+                except Exception as e:
+                    print(f"❌ 監控循環錯誤: {e}")
+                    time.sleep(60)  # 錯誤時等待1分鐘再試
+        
+        self.monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+        self.monitoring_thread.start()
+        
+        return f"✅ 開始自動監控，間隔 {interval_minutes} 分鐘"
+    
+    def stop_monitoring(self):
+        """停止自動監控"""
+        if not self.is_monitoring:
+            return "⚠️ 監控未在運行"
+        
+        self.is_monitoring = False
+        
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            print("🛑 停止監控中...")
+            # 等待監控線程結束（最多等30秒）
+            self.monitoring_thread.join(timeout=30)
+        
+        return "✅ 自動監控已停止"
+    
+    def manual_process_bill(self, pdf_file_path, bank_name):
+        """手動處理單份帳單文件"""
+        try:
+            if not os.path.exists(pdf_file_path):
+                return "❌ 檔案不存在"
+            
+            with open(pdf_file_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            print(f"📄 手動處理帳單: {pdf_file_path}")
+            
+            # 解鎖PDF
+            unlocked_pdf = self.unlock_pdf(pdf_data, bank_name)
+            if not unlocked_pdf:
+                return "❌ PDF解鎖失敗，請檢查密碼設定"
+            
+            # 提取文字
+            extracted_text = self.pdf_to_text_with_smart_ocr(unlocked_pdf)
+            if not extracted_text:
+                return "❌ 文字提取失敗"
+            
+            # LLM解析
+            structured_data = self.llm_parse_bill(extracted_text, bank_name)
+            if not structured_data:
+                return "❌ 帳單解析失敗"
+            
+            # 儲存結果
+            bill_info = {
+                'bank_name': bank_name,
+                'message_id': f'manual_{int(time.time())}',
+                'subject': f'手動處理 - {os.path.basename(pdf_file_path)}',
+                'date': self.get_taiwan_time(),
+                'status': '✅ 手動處理成功',
+                'processed_time': self.get_taiwan_time(),
+                'bill_data': structured_data
+            }
+            
+            self.bill_data['processed_bills'].append(bill_info)
+            
+            return f"✅ 手動處理完成\n應繳金額: {structured_data.get('total_amount', '未識別')}\n繳款期限: {structured_data.get('due_date', '未識別')}"
+            
+        except Exception as e:
+            return f"❌ 手動處理失敗: {e}"
+    
+    def export_bills_to_json(self, file_path=None):
+        """匯出帳單資料為JSON"""
+        try:
+            if not file_path:
+                file_path = f"bills_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            
+            export_data = {
+                'export_time': self.get_taiwan_time(),
+                'total_bills': len(self.bill_data['processed_bills']),
+                'bills': self.bill_data['processed_bills'],
+                'system_status': self.get_system_status()
+            }
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+            
+            return f"✅ 帳單資料已匯出至: {file_path}"
+            
+        except Exception as e:
+            return f"❌ 匯出失敗: {e}"
+    
+    def clear_processed_bills(self):
+        """清空已處理的帳單記錄"""
+        count = len(self.bill_data['processed_bills'])
+        self.bill_data['processed_bills'] = []
+        self.bill_data['processing_log'] = []
+        return f"✅ 已清空 {count} 份帳單記錄"
+    
+    def get_bills_summary(self):
+        """獲取帳單摘要統計"""
+        bills = self.bill_data['processed_bills']
+        
+        if not bills:
+            return "📊 暫無帳單資料"
+        
+        summary = {
+            'total_bills': len(bills),
+            'banks': {},
+            'total_amount': 0,
+            'recent_bills': []
+        }
+        
+        for bill in bills:
+            bank = bill['bank_name']
+            if bank not in summary['banks']:
+                summary['banks'][bank] = {'count': 0, 'total_amount': 0}
+            
+            summary['banks'][bank]['count'] += 1
+            
+            if bill.get('bill_data') and bill['bill_data'].get('total_amount'):
+                try:
+                    amount = int(bill['bill_data']['total_amount'])
+                    summary['banks'][bank]['total_amount'] += amount
+                    summary['total_amount'] += amount
+                except:
+                    pass
+            
+            # 最近5份帳單
+            if len(summary['recent_bills']) < 5:
+                summary['recent_bills'].append({
+                    'bank': bank,
+                    'date': bill.get('processed_time', '未知'),
+                    'amount': bill.get('bill_data', {}).get('total_amount', '未知'),
+                    'status': bill.get('status', '未知')
+                })
+        
+        result = f"📊 帳單統計摘要\n"
+        result += f"📄 總帳單數: {summary['total_bills']}\n"
+        result += f"💰 總金額: NT$ {summary['total_amount']:,}\n\n"
+        
+        result += "🏦 各銀行統計:\n"
+        for bank, data in summary['banks'].items():
+            result += f"   {bank}: {data['count']}份, NT$ {data['total_amount']:,}\n"
+        
+        if summary['recent_bills']:
+            result += "\n📋 最近處理的帳單:\n"
+            for bill in summary['recent_bills']:
+                result += f"   {bill['bank']} - {bill['date'][:10]} - NT$ {bill['amount']} - {bill['status']}\n"
+        
+        return result
