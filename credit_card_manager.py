@@ -1081,3 +1081,57 @@ def stop_auto_monitoring():
     """停止自動監控的快捷函數"""
     manager = get_credit_card_manager()
     return manager.stop_monitoring()
+
+
+def is_credit_card_command(message):
+    """判斷是否為信用卡相關指令"""
+    if not message or not isinstance(message, str):
+        return False
+    
+    message_lower = message.strip().lower()
+    
+    # 信用卡相關關鍵字
+    credit_card_keywords = [
+        # 基本指令
+        'check', 'check_bills', '檢查帳單', '檢查', '帳單',
+        'status', '狀態', '系統狀態',
+        'summary', 'bills', '帳單摘要', '摘要',
+        'help', '幫助', '說明',
+        
+        # 監控指令
+        'start_monitor', 'monitor', '開始監控', '監控',
+        'stop_monitor', '停止監控',
+        
+        # 管理指令
+        'clear', 'clear_bills', '清空', '清空帳單',
+        'export', 'export_bills', '匯出', '匯出帳單',
+        
+        # 設定指令
+        'set_password', '設定密碼', 'process', '處理帳單',
+        
+        # 銀行名稱
+        '永豐銀行', '台新銀行', '星展銀行',
+        
+        # 信用卡相關詞彙
+        '信用卡', 'credit card', '帳單', 'bill', 'gmail',
+        'pdf', 'ocr', '解析', 'parse', '監控'
+    ]
+    
+    # 檢查是否包含信用卡相關關鍵字
+    for keyword in credit_card_keywords:
+        if keyword in message_lower:
+            return True
+    
+    # 檢查是否以特定格式開始
+    command_prefixes = [
+        'set_password ',
+        'process ',
+        '設定密碼 ',
+        '處理帳單 '
+    ]
+    
+    for prefix in command_prefixes:
+        if message_lower.startswith(prefix):
+            return True
+    
+    return False
