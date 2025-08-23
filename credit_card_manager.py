@@ -405,139 +405,6 @@ class CreditCardManager:
                     result += f"📅 {bill['date']}\n"
                     result += f"📄 {bill['status']}\n\n"
                 return result
-
-
-def handle_credit_card_command(command, manager=None):
-    """處理信用卡相關指令的主要函數"""
-    
-    # 如果沒有傳入管理器，創建一個新的
-    if manager is None:
-        manager = CreditCardManager()
-    
-    command = command.strip().lower()
-    
-    try:
-        if command in ['check', 'check_bills', '檢查帳單', '檢查']:
-            return manager.check_gmail_for_bills()
-        
-        elif command in ['status', '狀態', '系統狀態']:
-            status = manager.get_system_status()
-            result = "🖥️ 系統狀態\n"
-            result += f"Gmail API: {'✅ 已連接' if status['gmail_enabled'] else '❌ 未連接'}\n"
-            result += f"Vision OCR: {'✅ 可用' if status['vision_enabled'] else '❌ 不可用'}\n"
-            result += f"Groq LLM: {'✅ 可用' if status['groq_enabled'] else '❌ 不可用'}\n"
-            result += f"已處理帳單: {status['processed_bills_count']} 份\n"
-            result += f"銀行密碼數: {status['bank_passwords_count']} 個\n"
-            result += f"最後檢查: {status.get('last_check_time', '尚未檢查')}\n"
-            result += f"自動監控: {'🔄 運行中' if status['is_monitoring'] else '⏸️ 已停止'}"
-            return result
-        
-        elif command in ['summary', 'bills', '帳單摘要', '摘要']:
-            return manager.get_bills_summary()
-        
-        elif command in ['start_monitor', 'monitor', '開始監控', '監控']:
-            return manager.start_monitoring()
-        
-        elif command in ['stop_monitor', '停止監控']:
-            return manager.stop_monitoring()
-        
-        elif command in ['clear', 'clear_bills', '清空', '清空帳單']:
-            return manager.clear_processed_bills()
-        
-        elif command in ['export', 'export_bills', '匯出', '匯出帳單']:
-            return manager.export_bills_to_json()
-        
-        elif command.startswith('set_password '):
-            # 格式: set_password 永豐銀行 password123
-            parts = command.split(' ', 2)
-            if len(parts) >= 3:
-                bank_name = parts[1]
-                password = parts[2]
-                return manager.set_bank_password(bank_name, password)
-            else:
-                return "❌ 格式錯誤，請使用：set_password 銀行名稱 密碼"
-        
-        elif command.startswith('process '):
-            # 格式: process /path/to/file.pdf 永豐銀行
-            parts = command.split(' ', 2)
-            if len(parts) >= 3:
-                file_path = parts[1]
-                bank_name = parts[2]
-                return manager.manual_process_bill(file_path, bank_name)
-            else:
-                return "❌ 格式錯誤，請使用：process 檔案路徑 銀行名稱"
-        
-        elif command in ['help', '幫助', '說明']:
-            help_text = """
-📧 信用卡帳單管理器指令說明
-
-基本指令：
-• check, 檢查 - 檢查新帳單
-• status, 狀態 - 查看系統狀態
-• summary, 摘要 - 帳單統計摘要
-• help, 幫助 - 顯示此說明
-
-監控指令：
-• start_monitor, 監控 - 開始自動監控
-• stop_monitor, 停止監控 - 停止自動監控
-
-管理指令：
-• clear, 清空 - 清空已處理帳單
-• export, 匯出 - 匯出帳單資料
-
-設定指令：
-• set_password 銀行名稱 密碼 - 設定PDF密碼
-• process 檔案路徑 銀行名稱 - 手動處理帳單
-
-支援的銀行：永豐銀行、台新銀行、星展銀行
-            """.strip()
-            return help_text
-        
-        else:
-            return f"❌ 未知指令：{command}\n請使用 'help' 查看可用指令"
-    
-    except Exception as e:
-        return f"❌ 指令執行失敗：{str(e)}"
-
-
-# 全域管理器實例
-_global_manager = None
-
-def get_credit_card_manager():
-    """獲取全域信用卡管理器實例"""
-    global _global_manager
-    if _global_manager is None:
-        _global_manager = CreditCardManager()
-    return _global_manager
-
-
-def initialize_credit_card_manager():
-    """初始化信用卡管理器"""
-    return get_credit_card_manager()
-
-
-def check_new_bills():
-    """檢查新帳單的快捷函數"""
-    manager = get_credit_card_manager()
-    return manager.check_gmail_for_bills()
-
-
-def get_system_status():
-    """獲取系統狀態的快捷函數"""
-    manager = get_credit_card_manager()
-    return manager.get_system_status()
-
-
-def start_auto_monitoring():
-    """開始自動監控的快捷函數"""
-    manager = get_credit_card_manager()
-    return manager.start_monitoring()
-
-
-def stop_auto_monitoring():
-    """停止自動監控的快捷函數"""
-    manager = get_credit_card_manager()
-    return manager.stop_monitoring()
             else:
                 return f"📧 檢查完成，暫無新帳單\n🕒 檢查時間：{self.get_taiwan_time()}"
         
@@ -1080,3 +947,137 @@ def stop_auto_monitoring():
             
         except Exception as e:
             return f"❌ 統計摘要生成失敗: {e}"
+
+
+# 主要命令處理函數
+def handle_credit_card_command(command, manager=None):
+    """處理信用卡相關指令的主要函數"""
+    
+    # 如果沒有傳入管理器，創建一個新的
+    if manager is None:
+        manager = CreditCardManager()
+    
+    command = command.strip().lower()
+    
+    try:
+        if command in ['check', 'check_bills', '檢查帳單', '檢查']:
+            return manager.check_gmail_for_bills()
+        
+        elif command in ['status', '狀態', '系統狀態']:
+            status = manager.get_system_status()
+            result = "🖥️ 系統狀態\n"
+            result += f"Gmail API: {'✅ 已連接' if status['gmail_enabled'] else '❌ 未連接'}\n"
+            result += f"Vision OCR: {'✅ 可用' if status['vision_enabled'] else '❌ 不可用'}\n"
+            result += f"Groq LLM: {'✅ 可用' if status['groq_enabled'] else '❌ 不可用'}\n"
+            result += f"已處理帳單: {status['processed_bills_count']} 份\n"
+            result += f"銀行密碼數: {status['bank_passwords_count']} 個\n"
+            result += f"最後檢查: {status.get('last_check_time', '尚未檢查')}\n"
+            result += f"自動監控: {'🔄 運行中' if status['is_monitoring'] else '⏸️ 已停止'}"
+            return result
+        
+        elif command in ['summary', 'bills', '帳單摘要', '摘要']:
+            return manager.get_bills_summary()
+        
+        elif command in ['start_monitor', 'monitor', '開始監控', '監控']:
+            return manager.start_monitoring()
+        
+        elif command in ['stop_monitor', '停止監控']:
+            return manager.stop_monitoring()
+        
+        elif command in ['clear', 'clear_bills', '清空', '清空帳單']:
+            return manager.clear_processed_bills()
+        
+        elif command in ['export', 'export_bills', '匯出', '匯出帳單']:
+            return manager.export_bills_to_json()
+        
+        elif command.startswith('set_password '):
+            # 格式: set_password 永豐銀行 password123
+            parts = command.split(' ', 2)
+            if len(parts) >= 3:
+                bank_name = parts[1]
+                password = parts[2]
+                return manager.set_bank_password(bank_name, password)
+            else:
+                return "❌ 格式錯誤，請使用：set_password 銀行名稱 密碼"
+        
+        elif command.startswith('process '):
+            # 格式: process /path/to/file.pdf 永豐銀行
+            parts = command.split(' ', 2)
+            if len(parts) >= 3:
+                file_path = parts[1]
+                bank_name = parts[2]
+                return manager.manual_process_bill(file_path, bank_name)
+            else:
+                return "❌ 格式錯誤，請使用：process 檔案路徑 銀行名稱"
+        
+        elif command in ['help', '幫助', '說明']:
+            help_text = """
+📧 信用卡帳單管理器指令說明
+
+基本指令：
+• check, 檢查 - 檢查新帳單
+• status, 狀態 - 查看系統狀態
+• summary, 摘要 - 帳單統計摘要
+• help, 幫助 - 顯示此說明
+
+監控指令：
+• start_monitor, 監控 - 開始自動監控
+• stop_monitor, 停止監控 - 停止自動監控
+
+管理指令：
+• clear, 清空 - 清空已處理帳單
+• export, 匯出 - 匯出帳單資料
+
+設定指令：
+• set_password 銀行名稱 密碼 - 設定PDF密碼
+• process 檔案路徑 銀行名稱 - 手動處理帳單
+
+支援的銀行：永豐銀行、台新銀行、星展銀行
+            """.strip()
+            return help_text
+        
+        else:
+            return f"❌ 未知指令：{command}\n請使用 'help' 查看可用指令"
+    
+    except Exception as e:
+        return f"❌ 指令執行失敗：{str(e)}"
+
+
+# 全域管理器實例
+_global_manager = None
+
+def get_credit_card_manager():
+    """獲取全域信用卡管理器實例"""
+    global _global_manager
+    if _global_manager is None:
+        _global_manager = CreditCardManager()
+    return _global_manager
+
+
+def initialize_credit_card_manager():
+    """初始化信用卡管理器"""
+    return get_credit_card_manager()
+
+
+def check_new_bills():
+    """檢查新帳單的快捷函數"""
+    manager = get_credit_card_manager()
+    return manager.check_gmail_for_bills()
+
+
+def get_system_status():
+    """獲取系統狀態的快捷函數"""
+    manager = get_credit_card_manager()
+    return manager.get_system_status()
+
+
+def start_auto_monitoring():
+    """開始自動監控的快捷函數"""
+    manager = get_credit_card_manager()
+    return manager.start_monitoring()
+
+
+def stop_auto_monitoring():
+    """停止自動監控的快捷函數"""
+    manager = get_credit_card_manager()
+    return manager.stop_monitoring()
