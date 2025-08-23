@@ -1135,3 +1135,8 @@ def is_credit_card_command(message):
             return True
     
     return False
+
+
+def is_credit_card_query(message):
+    """判斷是否為信用卡相關查詢（is_credit_card_command 的別名）"""
+    return is_credit_card_command(message)
