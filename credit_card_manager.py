@@ -918,3 +918,148 @@ class CreditCardManager:
                 status += f"🕒 最後檢查：{self.bill_data['last_check_time']}\n"
         
         return status
+
+
+# 全域實例
+credit_card_manager = None
+
+def init_credit_card_manager():
+    """初始化全域信用卡管理器實例"""
+    global credit_card_manager
+    if credit_card_manager is None:
+        credit_card_manager = CreditCardManager()
+    return credit_card_manager
+
+def handle_credit_card_command(command):
+    """處理信用卡相關指令"""
+    try:
+        manager = init_credit_card_manager()
+        
+        # 正規化指令
+        command = command.strip().lower()
+        
+        # 檢查帳單指令
+        if any(keyword in command for keyword in ['檢查帳單', '查詢帳單', 'check bills', 'check gmail']):
+            return manager.check_gmail_for_bills()
+        
+        # 帳單摘要指令
+        elif any(keyword in command for keyword in ['帳單摘要', '摘要', 'summary', '統計']):
+            return manager.get_bill_summary()
+        
+        # 啟動監控指令
+        elif any(keyword in command for keyword in ['啟動監控', '開始監控', 'start monitoring']):
+            return manager.start_monitoring()
+        
+        # 停止監控指令
+        elif any(keyword in command for keyword in ['停止監控', '結束監控', 'stop monitoring']):
+            return manager.stop_monitoring()
+        
+        # 監控狀態指令
+        elif any(keyword in command for keyword in ['監控狀態', '狀態', 'monitoring status', 'status']):
+            return manager.get_monitoring_status()
+        
+        # 設定銀行密碼指令
+        elif '設定密碼' in command or 'set password' in command:
+            return handle_password_setting(command, manager)
+        
+        # 幫助指令
+        elif any(keyword in command for keyword in ['幫助', 'help', '指令']):
+            return get_help_message()
+        
+        # 預設回應
+        else:
+            return get_default_response()
+    
+    except Exception as e:
+        error_msg = f"❌ 指令處理失敗: {e}"
+        print(f"Error in handle_credit_card_command: {e}")
+        print(f"Command: {command}")
+        import traceback
+        traceback.print_exc()
+        return error_msg
+
+def handle_password_setting(command, manager):
+    """處理密碼設定指令"""
+    try:
+        # 簡單的密碼設定格式解析
+        # 格式: 設定密碼 銀行名稱 密碼
+        parts = command.split()
+        if len(parts) >= 3:
+            bank_name = parts[1]
+            password = parts[2]
+            
+            # 映射銀行名稱
+            bank_mapping = {
+                '永豐': '永豐銀行',
+                '台新': '台新銀行', 
+                '星展': '星展銀行',
+                'sinopac': '永豐銀行',
+                'taishin': '台新銀行',
+                'dbs': '星展銀行'
+            }
+            
+            actual_bank = bank_mapping.get(bank_name, bank_name)
+            return manager.set_bank_password(actual_bank, password)
+        else:
+            return "❌ 密碼設定格式錯誤\n正確格式：設定密碼 [銀行名稱] [密碼]\n例如：設定密碼 永豐 123456"
+    
+    except Exception as e:
+        return f"❌ 密碼設定失敗: {e}"
+
+def get_help_message():
+    """獲取幫助訊息"""
+    return """📖 信用卡帳單管理器 - 指令說明
+
+🔍 帳單相關指令：
+   • 檢查帳單 / check bills - 檢查Gmail新帳單
+   • 帳單摘要 / summary - 顯示處理摘要統計
+
+🔄 監控相關指令：  
+   • 啟動監控 / start monitoring - 開始自動監控
+   • 停止監控 / stop monitoring - 停止自動監控
+   • 監控狀態 / status - 查看目前狀態
+
+🔧 設定相關指令：
+   • 設定密碼 [銀行] [密碼] - 設定PDF解鎖密碼
+   • 例如：設定密碼 永豐 123456
+
+💡 支援的銀行：
+   • 永豐銀行 (永豐/sinopac)
+   • 台新銀行 (台新/taishin)  
+   • 星展銀行 (星展/dbs)
+
+ℹ️ 其他指令：
+   • 幫助 / help - 顯示此說明"""
+
+def get_default_response():
+    """預設回應"""
+    manager = init_credit_card_manager()
+    status_info = []
+    
+    # 系統狀態
+    status_info.append("📧 信用卡帳單管理器")
+    status_info.append(f"🕒 目前時間：{manager.get_taiwan_time()}")
+    
+    # 服務狀態
+    services = []
+    services.append(f"Gmail API：{'✅' if manager.gmail_enabled else '❌'}")
+    services.append(f"OCR服務：{'✅' if manager.vision_enabled else '⚠️'}")
+    services.append(f"LLM服務：{'✅' if manager.groq_enabled else '⚠️'}")
+    status_info.append("🔧 服務狀態：" + " | ".join(services))
+    
+    # 監控狀態
+    if manager.is_monitoring:
+        status_info.append("📊 狀態：✅ 自動監控運行中")
+    else:
+        status_info.append("📊 狀態：⏹️ 監控已停止")
+    
+    # 統計資訊
+    total_bills = len(manager.bill_data['processed_bills'])
+    status_info.append(f"📈 已處理帳單：{total_bills} 份")
+    
+    if manager.bill_data['last_check_time']:
+        status_info.append(f"🔍 最後檢查：{manager.bill_data['last_check_time']}")
+    
+    status_info.append("\n💡 輸入「幫助」查看可用指令")
+    
+    return "\n".join(status_info)
