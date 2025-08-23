@@ -720,16 +720,201 @@ class CreditCardManager:
             for line in lines:
                 line = line.strip()
                 
+                # 解析本期應繳金額
                 if '本期應繳' in line or '應繳金額' in line:
                     amounts = re.findall(r'[\d,]+', line)
                     if amounts:
                         bill_data['total_amount'] = amounts[-1].replace(',', '')
                 
+                # 解析最低應繳金額
                 elif '最低應繳' in line:
                     amounts = re.findall(r'[\d,]+', line)
                     if amounts:
                         bill_data['minimum_payment'] = amounts[-1].replace(',', '')
                 
+                # 解析繳款期限
                 elif '繳款期限' in line or '到期日' in line:
                     dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
                     if dates:
+                        bill_data['due_date'] = dates[0]
+                
+                # 解析帳單期間
+                elif '帳單期間' in line or '結帳期間' in line:
+                    dates = re.findall(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', line)
+                    if len(dates) >= 2:
+                        bill_data['statement_period'] = f"{dates[0]} ~ {dates[1]}"
+                
+                # 解析卡號
+                elif '卡號' in line or '信用卡號' in line:
+                    # 尋找卡號格式 (通常是 **** **** **** 1234)
+                    card_numbers = re.findall(r'[\*\d]{4}[\s\-]?[\*\d]{4}[\s\-]?[\*\d]{4}[\s\-]?\d{4}', line)
+                    if card_numbers:
+                        bill_data['card_number'] = card_numbers[0]
+            
+            # 嘗試解析交易明細
+            bill_data['transactions'] = self.extract_transactions(extracted_text)
+            bill_data['summary']['transaction_count'] = len(bill_data['transactions'])
+            
+            # 計算總消費金額
+            total_spending = 0
+            for transaction in bill_data['transactions']:
+                if transaction.get('amount'):
+                    try:
+                        amount = float(transaction['amount'].replace(',', ''))
+                        total_spending += amount
+                    except:
+                        pass
+            
+            bill_data['summary']['total_spending'] = total_spending
+            
+            print(f"   ✅ 基礎解析完成：應繳 {bill_data.get('total_amount', '未知')} 元")
+            return bill_data
+            
+        except Exception as e:
+            print(f"   ❌ 基礎解析失敗: {e}")
+            return None
+    
+    def extract_transactions(self, text):
+        """從文字中提取交易明細"""
+        try:
+            transactions = []
+            lines = text.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # 尋找包含日期和金額的行（可能是交易記錄）
+                # 格式範例：01/15 超商消費 150
+                date_match = re.search(r'(\d{1,2}/\d{1,2})', line)
+                amount_match = re.search(r'(\d{1,3}(?:,\d{3})*)', line)
+                
+                if date_match and amount_match:
+                    # 提取商家名稱（日期和金額之間的文字）
+                    date_pos = date_match.end()
+                    amount_pos = amount_match.start()
+                    
+                    if amount_pos > date_pos:
+                        merchant = line[date_pos:amount_pos].strip()
+                        # 過濾掉過短的商家名稱
+                        if len(merchant) >= 2:
+                            transaction = {
+                                'date': date_match.group(1),
+                                'merchant': merchant,
+                                'amount': amount_match.group(1)
+                            }
+                            transactions.append(transaction)
+            
+            return transactions[:20]  # 最多回傳20筆交易
+            
+        except Exception as e:
+            print(f"   ⚠️ 交易明細提取失敗: {e}")
+            return []
+    
+    def get_bill_summary(self):
+        """獲取帳單處理摘要"""
+        try:
+            total_bills = len(self.bill_data['processed_bills'])
+            
+            if total_bills == 0:
+                return "📊 帳單摘要：\n暫無已處理的帳單"
+            
+            summary = f"📊 帳單處理摘要 ({self.get_taiwan_time()})\n\n"
+            summary += f"📈 總計處理：{total_bills} 份帳單\n\n"
+            
+            # 按銀行統計
+            bank_stats = {}
+            for bill in self.bill_data['processed_bills']:
+                bank = bill['bank_name']
+                if bank not in bank_stats:
+                    bank_stats[bank] = {'count': 0, 'success': 0}
+                bank_stats[bank]['count'] += 1
+                if '成功' in bill['status']:
+                    bank_stats[bank]['success'] += 1
+            
+            summary += "🏦 各銀行統計：\n"
+            for bank, stats in bank_stats.items():
+                summary += f"   {bank}：{stats['success']}/{stats['count']} 成功\n"
+            
+            # 最近處理的帳單
+            summary += f"\n📋 最近處理：\n"
+            recent_bills = sorted(self.bill_data['processed_bills'], 
+                                key=lambda x: x['processed_time'], reverse=True)[:5]
+            
+            for bill in recent_bills:
+                summary += f"   {bill['bank_name']} - {bill['status']}\n"
+                summary += f"   {bill['processed_time']}\n\n"
+            
+            if self.bill_data['last_check_time']:
+                summary += f"🕒 最後檢查：{self.bill_data['last_check_time']}\n"
+            
+            return summary
+            
+        except Exception as e:
+            return f"❌ 摘要生成失敗: {e}"
+    
+    def start_monitoring(self):
+        """啟動自動監控"""
+        if self.is_monitoring:
+            return "⚠️ 監控已在運行中"
+        
+        if not self.gmail_enabled:
+            return "❌ Gmail API 未啟用，無法啟動監控"
+        
+        try:
+            self.is_monitoring = True
+            self.monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
+            self.monitoring_thread.start()
+            
+            return f"✅ 自動監控已啟動\n🕒 啟動時間：{self.get_taiwan_time()}"
+            
+        except Exception as e:
+            self.is_monitoring = False
+            return f"❌ 監控啟動失敗: {e}"
+    
+    def stop_monitoring(self):
+        """停止自動監控"""
+        if not self.is_monitoring:
+            return "⚠️ 監控未在運行"
+        
+        self.is_monitoring = False
+        return f"⏹️ 自動監控已停止\n🕒 停止時間：{self.get_taiwan_time()}"
+    
+    def _monitoring_loop(self):
+        """監控循環"""
+        print("🔄 自動監控線程已啟動")
+        
+        while self.is_monitoring:
+            try:
+                # 每30分鐘檢查一次
+                time.sleep(1800)  # 30 * 60 秒
+                
+                if not self.is_monitoring:
+                    break
+                
+                print(f"🔄 定時檢查開始 - {self.get_taiwan_time()}")
+                self.check_gmail_for_bills()
+                self.last_sync_time = self.get_taiwan_time()
+                
+            except Exception as e:
+                print(f"❌ 監控循環錯誤: {e}")
+                time.sleep(300)  # 錯誤時等待5分鐘再重試
+        
+        print("⏹️ 自動監控線程已結束")
+    
+    def get_monitoring_status(self):
+        """獲取監控狀態"""
+        if self.is_monitoring:
+            status = f"✅ 自動監控運行中\n"
+            if self.last_sync_time:
+                status += f"🕒 最後同步：{self.last_sync_time}\n"
+            status += f"📧 Gmail API：{'✅ 正常' if self.gmail_enabled else '❌ 未連接'}\n"
+            status += f"🔍 OCR服務：{'✅ 可用' if self.vision_enabled else '⚠️ 不可用'}\n"
+            status += f"🤖 LLM服務：{'✅ 可用' if self.groq_enabled else '⚠️ 使用基礎解析'}\n"
+        else:
+            status = f"⏹️ 自動監控已停止\n"
+            if self.bill_data['last_check_time']:
+                status += f"🕒 最後檢查：{self.bill_data['last_check_time']}\n"
+        
+        return status
