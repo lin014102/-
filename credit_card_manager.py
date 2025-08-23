@@ -100,6 +100,10 @@ class CreditCardManager:
         self.init_vision_ocr()
         self.load_bank_passwords()
         
+        # 🆕 初始化 Gmail 標籤
+        if self.gmail_enabled:
+            self.init_gmail_labels()
+        
         print("📧 信用卡帳單管理器初始化完成")
     
     def get_taiwan_time(self):
@@ -178,6 +182,91 @@ class CreditCardManager:
                         print("❌ 未找到任何有效的 Gmail 認證方式")
                         print("💡 請設定 GOOGLE_CREDENTIALS 或 GMAIL_TOKEN 環境變數")
                         return False
+    
+    def init_gmail_labels(self):
+        """初始化 Gmail 標籤系統"""
+        try:
+            # 檢查是否已有「信用卡帳單已處理」標籤
+            labels_result = self.gmail_service.users().labels().list(userId='me').execute()
+            labels = labels_result.get('labels', [])
+            
+            label_name = '信用卡帳單已處理'
+            existing_label = None
+            
+            for label in labels:
+                if label['name'] == label_name:
+                    existing_label = label
+                    break
+            
+            if existing_label:
+                self.processed_label_id = existing_label['id']
+                print(f"✅ 找到現有標籤：{label_name}")
+            else:
+                # 建立新標籤
+                label_object = {
+                    'name': label_name,
+                    'messageListVisibility': 'show',
+                    'labelListVisibility': 'labelShow',
+                    'color': {
+                        'textColor': '#ffffff',
+                        'backgroundColor': '#16a085'  # 綠色背景
+                    }
+                }
+                
+                created_label = self.gmail_service.users().labels().create(
+                    userId='me', body=label_object
+                ).execute()
+                
+                self.processed_label_id = created_label['id']
+                print(f"✅ 建立新標籤：{label_name}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Gmail 標籤初始化失敗: {e}")
+            return False
+    
+    def is_bill_already_processed(self, message_id):
+        """檢查帳單是否已處理（通過標籤和記憶體記錄）"""
+        try:
+            # 方法1: 檢查記憶體中的記錄
+            if any(bill['message_id'] == message_id for bill in self.bill_data['processed_bills']):
+                return True
+            
+            # 方法2: 檢查 Gmail 標籤
+            if self.processed_label_id:
+                message = self.gmail_service.users().messages().get(
+                    userId='me', id=message_id, format='minimal'
+                ).execute()
+                
+                label_ids = message.get('labelIds', [])
+                if self.processed_label_id in label_ids:
+                    print(f"   ⏭️ 郵件已有處理標籤，跳過")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"   ⚠️ 檢查處理狀態失敗: {e}")
+            return False
+    
+    def mark_bill_as_processed(self, message_id):
+        """標記帳單為已處理"""
+        try:
+            if self.processed_label_id:
+                # 在 Gmail 中加入標籤
+                self.gmail_service.users().messages().modify(
+                    userId='me',
+                    id=message_id,
+                    body={'addLabelIds': [self.processed_label_id]}
+                ).execute()
+                print(f"   🏷️ 已標記郵件為已處理")
+                return True
+            return False
+            
+        except Exception as e:
+            print(f"   ❌ 標記失敗: {e}")
+            return False
                 
                 # 儲存認證以供下次使用
                 with open('gmail_token.pickle', 'wb') as token:
@@ -294,17 +383,34 @@ class CreditCardManager:
             for bank_name, config in BANK_CONFIGS.items():
                 print(f"🏦 檢查 {bank_name}...")
                 
-                # 建立搜尋查詢
+                # 建立搜尋查詢 - 支援轉發郵件
                 query_parts = []
-                query_parts.append(f"from:{config['sender_domain']}")
+                
+                # 搜尋原始銀行寄件者 OR 轉發郵件
+                sender_queries = [
+                    f"from:{config['sender_domain']}",
+                    f"from:jiayu8227@gmail.com"  # 支援你轉發的郵件
+                ]
+                query_parts.append(f"({' OR '.join(sender_queries)})")
+                
                 query_parts.append(f"after:{yesterday}")
                 query_parts.append("has:attachment")
                 
-                # 加入主旨關鍵字
+                # 加入主旨關鍵字（包含轉發格式）
+                subject_keywords = []
                 for keyword in config['subject_keywords']:
-                    query_parts.append(f'subject:"{keyword}"')
+                    subject_keywords.append(f'subject:"{keyword}"')
+                    subject_keywords.append(f'subject:"Fwd: {keyword}"')  # 轉發格式
                 
-                query = " ".join(query_parts)
+                if subject_keywords:
+                    query_parts.append(f"({' OR '.join(subject_keywords)})")
+                
+                # 搜尋條件變成：排除已處理的郵件
+                exclude_processed = ""
+                if self.processed_label_id:
+                    exclude_processed = f" -label:{self.processed_label_id}"
+                
+                query = " ".join(query_parts) + exclude_processed
                 
                 try:
                     # 執行搜尋
@@ -469,6 +575,9 @@ class CreditCardManager:
             }
             
             self.bill_data['processed_bills'].append(bill_info)
+            
+            # 🆕 標記為已處理
+            self.mark_bill_as_processed(message_id)
             
             print(f"   ✅ 帳單處理完成")
             return bill_info
@@ -970,6 +1079,7 @@ class CreditCardManager:
 - 🤖 LLM智能解析(Groq + Llama)
 - 📊 結構化數據提取
 - 💾 帳單記錄保存
+- 🏷️ Gmail自動標籤管理(避免重複處理)
 
 🕒 監控時間：
 - 每天早上08:00自動檢查Gmail
