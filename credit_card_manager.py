@@ -40,7 +40,10 @@ load_dotenv()
 TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 
 # Gmail API 權限範圍
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.modify'  # 新增標籤管理權限
+]
 
 # 銀行監控設定
 BANK_CONFIGS = {
