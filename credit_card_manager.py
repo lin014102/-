@@ -242,42 +242,76 @@ class CreditCardManager:
             self.bank_configs = BANK_CONFIGS_DEFAULT
     
     def create_credit_card_labels(self):
-        """🆕 建立信用卡相關標籤"""
+        """🆕 建立信用卡相關標籤 - 改進版本"""
         try:
+            # 先測試 Gmail API 基本讀取功能
+            try:
+                test_labels = self.gmail_service.users().labels().list(userId='me').execute()
+                existing_labels = test_labels.get('labels', [])
+                print(f"✅ 成功讀取現有標籤，共 {len(existing_labels)} 個")
+            except Exception as e:
+                print(f"❌ 無法讀取 Gmail 標籤: {e}")
+                print("💡 可能是服務帳戶無法存取個人 Gmail")
+                return False
+            
+            # 要建立的標籤（簡化版本）
             labels_to_create = [
-                "信用卡/已處理",
-                "信用卡/處理失敗", 
-                "信用卡/處理中",
-                "信用卡/已跳過"
+                "CreditCard-Processed",    # 改用英文和短橫線
+                "CreditCard-Failed", 
+                "CreditCard-Processing",
+                "CreditCard-Skipped"
             ]
             
-            # 獲取現有標籤
-            existing_labels = self.gmail_service.users().labels().list(userId='me').execute()
-            existing_names = [label['name'] for label in existing_labels.get('labels', [])]
+            existing_names = [label['name'] for label in existing_labels]
+            print(f"📋 現有標籤示例: {existing_names[:5]}...")
             
             created_count = 0
             for label_name in labels_to_create:
                 if label_name not in existing_names:
-                    label_body = {
-                        'name': label_name,
-                        'labelListVisibility': 'labelShow',
-                        'messageListVisibility': 'show'
-                    }
-                    self.gmail_service.users().labels().create(userId='me', body=label_body).execute()
-                    print(f"✅ 建立標籤: {label_name}")
-                    created_count += 1
+                    try:
+                        label_body = {
+                            'name': label_name,
+                            'labelListVisibility': 'labelShow',
+                            'messageListVisibility': 'show',
+                            'type': 'user'  # 明確指定為用戶標籤
+                        }
+                        
+                        result = self.gmail_service.users().labels().create(
+                            userId='me', body=label_body
+                        ).execute()
+                        
+                        print(f"✅ 建立標籤成功: {label_name}")
+                        created_count += 1
+                        
+                    except Exception as label_error:
+                        print(f"❌ 建立標籤失敗 {label_name}: {label_error}")
+                        
+                        # 如果是權限問題，嘗試更簡單的格式
+                        if "failedPrecondition" in str(label_error):
+                            print(f"⚠️ 權限問題，可能是服務帳戶無法管理個人 Gmail 標籤")
+                            print(f"💡 建議：改用 OAuth 授權或手動在 Gmail 中建立標籤")
+                            return False
+                else:
+                    print(f"ℹ️ 標籤已存在: {label_name}")
             
-            if created_count == 0:
-                print("ℹ️ 信用卡標籤已存在")
-            else:
+            if created_count > 0:
                 print(f"✅ 成功建立 {created_count} 個新標籤")
+            else:
+                print("ℹ️ 所有標籤都已存在")
             
             return True
+            
         except Exception as e:
-            print(f"❌ 建立標籤失敗: {e}")
-            # 如果是權限問題，給出提示
-            if "403" in str(e):
-                print("💡 請確認 Gmail API 已啟用且有足夠權限")
+            print(f"❌ 標籤管理失敗: {e}")
+            
+            # 檢查是否是權限問題
+            if "403" in str(e) or "failedPrecondition" in str(e):
+                print("💡 這是預期的問題：服務帳戶無法完全管理個人 Gmail")
+                print("💡 解決方案：")
+                print("   1. 使用 OAuth 授權（讓用戶直接授權）")
+                print("   2. 或暫時跳過標籤功能，先測試基本郵件讀取")
+                print("   3. 或手動在 Gmail 中建立這些標籤")
+            
             return False
     
     def add_label_to_message(self, message_id, label_name):
