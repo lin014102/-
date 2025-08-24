@@ -375,11 +375,12 @@ class CreditCardManager:
                                 # 嘗試本地伺服器模式
                                 creds = flow.run_local_server(port=0, open_browser=False)
                                 print("✅ OAuth 本地伺服器授權成功")
-                            except:
-                                # 如果失敗，使用控制台模式
-                                print("💡 本地伺服器不可用，使用控制台模式...")
-                                creds = flow.run_console()
-                                print("✅ OAuth 控制台授權成功")
+                            except Exception as server_error:
+                                # 如果失敗，跳過 OAuth 繼續用服務帳戶
+                                print(f"💡 本地伺服器不可用: {server_error}")
+                                print("⏭️ 跳過 OAuth，繼續使用服務帳戶模式")
+                                # 不執行 run_console，直接跳到服務帳戶認證
+                                raise Exception("Skip OAuth in cloud environment")
                         
                         # 儲存 token 供下次使用
                         try:
