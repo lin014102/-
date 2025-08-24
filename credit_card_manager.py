@@ -1,6 +1,7 @@
 """
 credit_card_manager.py - 信用卡帳單管理模組
-自動監控 Gmail 帳單 + OCR + LLM 處理 v1.0
+自動監控 Gmail 帳單 + OCR + LLM 處理 v2.0
+新增：Google Sheets 動態設定 + Gmail 標籤管理
 """
 import re
 import os
@@ -18,6 +19,10 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
+# 🆕 Google Sheets API
+import gspread
+from google.oauth2.service_account import Credentials
+
 # LLM 和 OCR
 import PyPDF2
 from groq import Groq
@@ -26,7 +31,6 @@ from dotenv import load_dotenv
 # 🆕 Google Vision OCR
 try:
     from google.cloud import vision
-    from google.oauth2.service_account import Credentials
     from pdf2image import convert_from_bytes
     VISION_AVAILABLE = True
 except ImportError:
@@ -42,11 +46,11 @@ TAIWAN_TZ = pytz.timezone('Asia/Taipei')
 # Gmail API 權限範圍
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.modify'  # 新增標籤管理權限
+    'https://www.googleapis.com/auth/gmail.modify'  # 🆕 新增標籤管理權限
 ]
 
-# 銀行監控設定
-BANK_CONFIGS = {
+# 預設銀行監控設定（當 Sheets 載入失敗時使用）
+BANK_CONFIGS_DEFAULT = {
     "永豐銀行": {
         "sender_email": "ebillservice@newebill.banksinopac.com.tw",
         "sender_domain": "newebill.banksinopac.com.tw",
@@ -68,7 +72,7 @@ BANK_CONFIGS = {
 }
 
 class CreditCardManager:
-    """信用卡帳單管理器 - 整合 Gmail 監控 + OCR + LLM"""
+    """信用卡帳單管理器 - 整合 Gmail 監控 + OCR + LLM + Sheets 動態設定"""
     
     def __init__(self):
         """初始化信用卡帳單管理器"""
@@ -80,6 +84,13 @@ class CreditCardManager:
             'last_check_time': None
         }
         
+        # 🆕 Google Sheets 設定
+        self.spreadsheet_url = "https://docs.google.com/spreadsheets/d/1EACr2Zu7_regqp3Po7AlNE4ZcjazKbgyvz-yYNYtcCs/edit?usp=sharing"
+        self.gc = None
+        self.sheet = None
+        self.bank_configs = {}  # 🆕 動態載入的銀行設定
+        self.sheets_enabled = False
+        
         # Gmail API 設定
         self.gmail_service = None
         self.gmail_enabled = False
@@ -88,7 +99,7 @@ class CreditCardManager:
         self.groq_client = None
         self.groq_enabled = False
         
-        # 🆕 Google Vision OCR 設定
+        # Google Vision OCR 設定
         self.vision_client = None
         self.vision_enabled = False
         
@@ -101,6 +112,15 @@ class CreditCardManager:
         self.init_gmail_api()
         self.init_groq_api()
         self.init_vision_ocr()
+        
+        # 🆕 初始化 Google Sheets 和載入設定
+        self.init_google_sheets()
+        self.load_bank_configs_from_sheets()
+        
+        # 🆕 建立 Gmail 標籤
+        if self.gmail_enabled:
+            self.create_credit_card_labels()
+        
         self.load_bank_passwords()
         
         print("📧 信用卡帳單管理器初始化完成")
@@ -112,6 +132,187 @@ class CreditCardManager:
     def get_taiwan_datetime(self):
         """獲取台灣時間物件"""
         return datetime.now(TAIWAN_TZ)
+    
+    def init_google_sheets(self):
+        """🆕 初始化 Google Sheets 連接"""
+        try:
+            creds_json = os.getenv('GOOGLE_CREDENTIALS')
+            
+            if not creds_json:
+                print("⚠️ 未找到 GOOGLE_CREDENTIALS，將使用預設銀行設定")
+                return False
+            
+            creds_dict = json.loads(creds_json)
+            credentials = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=[
+                    'https://spreadsheets.google.com/feeds',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+            )
+            
+            self.gc = gspread.authorize(credentials)
+            self.sheet = self.gc.open_by_url(self.spreadsheet_url)
+            
+            print("✅ 信用卡 Google Sheets 連接成功")
+            self.sheets_enabled = True
+            return True
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 格式錯誤: {e}")
+            print("📝 將使用預設銀行設定")
+            return False
+        except Exception as e:
+            print(f"❌ 信用卡 Sheets 連接失敗: {e}")
+            print("📝 將使用預設銀行設定")
+            return False
+    
+    def load_bank_configs_from_sheets(self):
+        """🆕 從 Google Sheets BankConfigs 分頁載入銀行設定"""
+        try:
+            if not self.sheets_enabled or not self.gc or not self.sheet:
+                print("📝 使用預設銀行設定")
+                self.bank_configs = BANK_CONFIGS_DEFAULT
+                return
+            
+            # 檢查是否有 BankConfigs 工作表
+            worksheets = [ws.title for ws in self.sheet.worksheets()]
+            if "BankConfigs" not in worksheets:
+                print("⚠️ 找不到 BankConfigs 工作表，使用預設設定")
+                self.bank_configs = BANK_CONFIGS_DEFAULT
+                return
+            
+            configs_sheet = self.sheet.worksheet("BankConfigs")
+            configs_data = configs_sheet.get_all_records()
+            
+            self.bank_configs = {}
+            
+            for row in configs_data:
+                if not row.get('銀行名稱'):  # 跳過空行
+                    continue
+                
+                bank_name = row['銀行名稱'].strip()
+                enabled = row.get('啟用狀態', 'TRUE').strip().upper() == 'TRUE'
+                
+                if enabled:  # 只載入啟用的銀行
+                    # 處理主旨關鍵字
+                    keywords = row.get('主旨關鍵字', '').strip()
+                    keyword_list = [kw.strip() for kw in keywords.split(',')] if keywords else []
+                    
+                    self.bank_configs[bank_name] = {
+                        "sender_email": row.get('寄件者Email', '').strip(),
+                        "sender_domain": row.get('寄件者網域', '').strip(),
+                        "subject_keywords": keyword_list,
+                        "has_attachment": row.get('需要附件', 'TRUE').strip().upper() == 'TRUE',
+                        "password": row.get('PDF密碼', '').strip()
+                    }
+            
+            print(f"✅ 從 Sheets 載入 {len(self.bank_configs)} 個銀行設定:")
+            
+            for bank_name, config in self.bank_configs.items():
+                # 檢查備註欄判斷是否為測試
+                note = ""
+                for row in configs_data:
+                    if row.get('銀行名稱', '').strip() == bank_name:
+                        note = row.get('備註', '')
+                        break
+                
+                test_flag = '🧪' if '測試' in note else '🏦'
+                print(f"   {test_flag} {bank_name}: {config['sender_domain']}")
+            
+            # 如果沒有載入任何設定，使用預設
+            if not self.bank_configs:
+                print("⚠️ 未載入任何銀行設定，使用預設設定")
+                self.bank_configs = BANK_CONFIGS_DEFAULT
+            
+        except Exception as e:
+            print(f"❌ 載入 Sheets 銀行設定失敗: {e}")
+            print("📝 使用預設銀行設定作為後備")
+            self.bank_configs = BANK_CONFIGS_DEFAULT
+    
+    def create_credit_card_labels(self):
+        """🆕 建立信用卡相關標籤"""
+        try:
+            labels_to_create = [
+                "信用卡/已處理",
+                "信用卡/處理失敗", 
+                "信用卡/處理中",
+                "信用卡/已跳過"
+            ]
+            
+            # 獲取現有標籤
+            existing_labels = self.gmail_service.users().labels().list(userId='me').execute()
+            existing_names = [label['name'] for label in existing_labels.get('labels', [])]
+            
+            created_count = 0
+            for label_name in labels_to_create:
+                if label_name not in existing_names:
+                    label_body = {
+                        'name': label_name,
+                        'labelListVisibility': 'labelShow',
+                        'messageListVisibility': 'show'
+                    }
+                    self.gmail_service.users().labels().create(userId='me', body=label_body).execute()
+                    print(f"✅ 建立標籤: {label_name}")
+                    created_count += 1
+            
+            if created_count == 0:
+                print("ℹ️ 信用卡標籤已存在")
+            
+            return True
+        except Exception as e:
+            print(f"❌ 建立標籤失敗: {e}")
+            return False
+    
+    def add_label_to_message(self, message_id, label_name):
+        """🆕 為訊息加上標籤"""
+        try:
+            # 先獲取標籤ID
+            labels = self.gmail_service.users().labels().list(userId='me').execute()
+            label_id = None
+            for label in labels.get('labels', []):
+                if label['name'] == label_name:
+                    label_id = label['id']
+                    break
+            
+            if label_id:
+                body = {'addLabelIds': [label_id]}
+                self.gmail_service.users().messages().modify(
+                    userId='me', id=message_id, body=body
+                ).execute()
+                print(f"   ✅ 已加上標籤: {label_name}")
+                return True
+            else:
+                print(f"   ⚠️ 找不到標籤: {label_name}")
+                return False
+        except Exception as e:
+            print(f"   ❌ 加標籤失敗: {e}")
+            return False
+    
+    def remove_label_from_message(self, message_id, label_name):
+        """🆕 從訊息移除標籤"""
+        try:
+            # 先獲取標籤ID
+            labels = self.gmail_service.users().labels().list(userId='me').execute()
+            label_id = None
+            for label in labels.get('labels', []):
+                if label['name'] == label_name:
+                    label_id = label['id']
+                    break
+            
+            if label_id:
+                body = {'removeLabelIds': [label_id]}
+                self.gmail_service.users().messages().modify(
+                    userId='me', id=message_id, body=body
+                ).execute()
+                print(f"   ✅ 已移除標籤: {label_name}")
+                return True
+            else:
+                print(f"   ⚠️ 找不到標籤: {label_name}")
+                return False
+        except Exception as e:
+            print(f"   ❌ 移除標籤失敗: {e}")
+            return False
     
     def init_gmail_api(self):
         """初始化 Gmail API 連接(支援 Render 雲端環境)"""
@@ -242,34 +443,29 @@ class CreditCardManager:
         except Exception as e:
             print(f"❌ Google Vision OCR 初始化失敗: {e}")
             return False
-        """初始化 Groq API"""
-        try:
-            groq_key = os.getenv('GROQ_API_KEY')
-            if not groq_key:
-                print("⚠️ 未找到 GROQ_API_KEY 環境變數")
-                self.groq_enabled = False
-                return False
-            
-            print("💡 暫時跳過 Groq API，使用基礎解析方案")
-            print("🔧 這是為了避免 Render 環境的 proxies 參數衝突")
-            self.groq_enabled = False
-            return False
-            
-        except Exception as e:
-            print(f"❌ Groq API 連接失敗: {e}")
-            print("💡 將使用備用方案處理帳單")
-            self.groq_enabled = False
-            return False
     
     def load_bank_passwords(self):
-        """載入銀行密碼設定"""
+        """載入銀行密碼設定 - 🆕 優先從 Sheets 讀取"""
         try:
-            # 從環境變數載入密碼
+            # 優先從 Sheets 中的設定讀取密碼
+            if self.bank_configs:
+                for bank_name, config in self.bank_configs.items():
+                    if config.get('password'):
+                        self.bill_data['bank_passwords'][bank_name] = config['password']
+                
+                if self.bill_data['bank_passwords']:
+                    print(f"✅ 從 Sheets 載入 {len(self.bill_data['bank_passwords'])} 個銀行密碼")
+            
+            # 補充從環境變數載入的密碼
             passwords_json = os.getenv('BANK_PASSWORDS')
             if passwords_json:
-                self.bill_data['bank_passwords'] = json.loads(passwords_json)
-                print(f"✅ 載入 {len(self.bill_data['bank_passwords'])} 個銀行密碼")
-            else:
+                env_passwords = json.loads(passwords_json)
+                for bank_name, password in env_passwords.items():
+                    if bank_name not in self.bill_data['bank_passwords']:
+                        self.bill_data['bank_passwords'][bank_name] = password
+                print(f"✅ 從環境變數補充載入密碼")
+            
+            if not self.bill_data['bank_passwords']:
                 print("⚠️ 未設定銀行密碼，將無法自動解鎖PDF")
             
         except Exception as e:
@@ -281,7 +477,7 @@ class CreditCardManager:
         return f"✅ 已設定 {bank_name} 的PDF密碼"
     
     def check_gmail_for_bills(self):
-        """檢查 Gmail 中的信用卡帳單"""
+        """🆕 檢查 Gmail 中的信用卡帳單 - 排除已處理的標籤"""
         if not self.gmail_enabled:
             return "❌ Gmail API 未啟用"
         
@@ -293,21 +489,25 @@ class CreditCardManager:
             
             found_bills = []
             
-            # 檢查每家銀行
-            for bank_name, config in BANK_CONFIGS.items():
+            # 🆕 檢查每家銀行（使用動態設定）
+            for bank_name, config in self.bank_configs.items():
                 print(f"🏦 檢查 {bank_name}...")
                 
-                # 建立搜尋查詢
+                # 🆕 建立搜尋查詢 - 排除已處理的標籤
                 query_parts = []
                 query_parts.append(f"from:{config['sender_domain']}")
                 query_parts.append(f"after:{yesterday}")
                 query_parts.append("has:attachment")
+                query_parts.append("-label:信用卡/已處理")  # 🆕 排除已處理
+                query_parts.append("-label:信用卡/處理失敗")  # 🆕 排除失敗的
                 
                 # 加入主旨關鍵字
                 for keyword in config['subject_keywords']:
-                    query_parts.append(f'subject:"{keyword}"')
+                    if keyword.strip():
+                        query_parts.append(f'subject:"{keyword.strip()}"')
                 
                 query = " ".join(query_parts)
+                print(f"   🔍 搜尋條件: {query}")
                 
                 try:
                     # 執行搜尋
@@ -344,7 +544,7 @@ class CreditCardManager:
             return error_msg
     
     def process_gmail_message(self, message_id, bank_name):
-        """處理單封 Gmail 訊息"""
+        """🆕 處理單封 Gmail 訊息 - 加入標籤管理"""
         try:
             # 獲取郵件詳細資訊
             message = self.gmail_service.users().messages().get(
@@ -358,24 +558,41 @@ class CreditCardManager:
             
             print(f"   📧 處理郵件: {subject[:50]}...")
             
-            # 檢查是否已處理過
+            # 🆕 處理開始時加上「處理中」標籤
+            self.add_label_to_message(message_id, "信用卡/處理中")
+            
+            # 檢查是否已處理過（雙重保險）
             if self.is_bill_already_processed(message_id):
                 print(f"   ⏭️ 已處理過，跳過")
+                self.remove_label_from_message(message_id, "信用卡/處理中")
                 return None
             
             # 尋找PDF附件
             pdf_data = self.extract_pdf_attachment(message)
             if not pdf_data:
                 print(f"   ⚠️ 未找到PDF附件")
+                self.remove_label_from_message(message_id, "信用卡/處理中")
+                self.add_label_to_message(message_id, "信用卡/已跳過")
                 return None
             
             # 處理PDF
             bill_info = self.process_pdf_bill(pdf_data, bank_name, message_id, subject, date)
             
+            # 🆕 根據處理結果加上對應標籤
+            if bill_info and bill_info['status'] == '✅ 處理成功':
+                self.remove_label_from_message(message_id, "信用卡/處理中")
+                self.add_label_to_message(message_id, "信用卡/已處理")
+            else:
+                self.remove_label_from_message(message_id, "信用卡/處理中")
+                self.add_label_to_message(message_id, "信用卡/處理失敗")
+            
             return bill_info
             
         except Exception as e:
             print(f"   ❌ 處理郵件失敗: {e}")
+            # 🆕 錯誤時也要移除處理中標籤
+            self.remove_label_from_message(message_id, "信用卡/處理中")
+            self.add_label_to_message(message_id, "信用卡/處理失敗")
             return None
     
     def extract_pdf_attachment(self, message):
@@ -434,7 +651,7 @@ class CreditCardManager:
             
             print(f"   📄 提取PDF文字...")
             
-            # 🆕 使用智能 OCR 處理
+            # 使用智能 OCR 處理
             extracted_text = self.pdf_to_text_with_smart_ocr(unlocked_pdf)
             if not extracted_text:
                 return {
@@ -607,6 +824,8 @@ class CreditCardManager:
         except Exception as e:
             print(f"   ❌ Google Vision OCR 失敗: {e}")
             return None
+    
+    def pdf_to_text_backup(self, pdf_data):
         """PDF轉文字備用方案(直接提取文字)"""
         try:
             import io
@@ -879,14 +1098,15 @@ class CreditCardManager:
         return "⏹️ 信用卡帳單監控已停止"
     
     def get_monitoring_status(self):
-        """獲取監控狀態"""
+        """🆕 獲取監控狀態 - 顯示動態銀行設定"""
         if not self.is_monitoring:
             return {
                 'status': 'stopped',
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
                 'vision_ocr_enabled': self.vision_enabled,
-                'monitored_banks': list(BANK_CONFIGS.keys()),
+                'sheets_enabled': self.sheets_enabled,
+                'monitored_banks': list(self.bank_configs.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
             }
@@ -896,7 +1116,8 @@ class CreditCardManager:
                 'gmail_enabled': self.gmail_enabled,
                 'groq_enabled': self.groq_enabled,
                 'vision_ocr_enabled': self.vision_enabled,
-                'monitored_banks': list(BANK_CONFIGS.keys()),
+                'sheets_enabled': self.sheets_enabled,
+                'monitored_banks': list(self.bank_configs.keys()),
                 'last_check_time': self.bill_data.get('last_check_time'),
                 'processed_bills_count': len(self.bill_data['processed_bills'])
             }
@@ -925,7 +1146,8 @@ class CreditCardManager:
                 result += f"🔄 監控狀態：{'🟢 執行中' if status['status'] == 'running' else '🔴 已停止'}\n"
                 result += f"📧 Gmail API：{'✅ 已啟用' if status['gmail_enabled'] else '❌ 未啟用'}\n"
                 result += f"🤖 Groq LLM：{'✅ 已啟用' if status['groq_enabled'] else '❌ 未啟用'}\n"
-                result += f"👁️ Google Vision OCR：{'✅ 已啟用' if status['vision_ocr_enabled'] else '⚠️ 未啟用'}\n\n"
+                result += f"👁️ Google Vision OCR：{'✅ 已啟用' if status['vision_ocr_enabled'] else '⚠️ 未啟用'}\n"
+                result += f"📊 Google Sheets：{'✅ 已啟用' if status['sheets_enabled'] else '⚠️ 未啟用'}\n\n"
                 result += f"🏦 監控銀行：{', '.join(status['monitored_banks'])}\n"
                 result += f"📊 已處理帳單：{status['processed_bills_count']} 份\n"
                 if status['last_check_time']:
@@ -946,8 +1168,8 @@ class CreditCardManager:
             return f"❌ 處理失敗：{str(e)}\n💡 請檢查指令格式"
     
     def get_help_text(self):
-        """獲取幫助訊息"""
-        return """💳 信用卡帳單自動監控功能 v1.0：
+        """🆕 獲取幫助訊息 - 更新版本"""
+        return f"""💳 信用卡帳單自動監控功能 v2.0：
 
 📧 監控功能：
 - 檢查帳單 - 立即檢查Gmail新帳單
@@ -961,15 +1183,15 @@ class CreditCardManager:
 - 設定密碼 台新銀行 your_password - 設定PDF密碼
 - 設定密碼 星展銀行 your_password - 設定PDF密碼
 
-🏦 支援銀行：
-- 永豐銀行 (ebillservice@newebill.banksinopac.com.tw)
-- 台新銀行 (webmaster@bhurecv.taishinbank.com.tw)
-- 星展銀行 (eservicetw@dbs.com)
+🏦 目前監控銀行：
+{chr(10).join(f"- {bank} ({config['sender_domain']})" for bank, config in self.bank_configs.items())}
 
 ⚙️ 系統功能：
 - 📧 自動監控Gmail信用卡帳單
+- 🏷️ Gmail標籤管理（防重複處理）
+- 📊 Google Sheets動態銀行設定
 - 🔓 自動解鎖PDF密碼保護
-- 📄 PDF文字提取
+- 📄 PDF智能文字提取
 - 🤖 LLM智能解析(Groq + Llama)
 - 📊 結構化數據提取
 - 💾 帳單記錄保存
@@ -979,15 +1201,23 @@ class CreditCardManager:
 - 檢查過去24小時的新郵件
 - 自動處理符合條件的帳單
 
+🏷️ Gmail標籤系統：
+- 信用卡/已處理 - 成功處理的帳單
+- 信用卡/處理失敗 - 處理失敗的帳單
+- 信用卡/處理中 - 正在處理中
+- 信用卡/已跳過 - 跳過的郵件
+
 💡 使用提示：
+- 銀行設定可在 Google Sheets BankConfigs 分頁管理
 - 首次使用請先設定各銀行PDF密碼
-- 確保Gmail API和Groq API已正確設定
-- 系統會自動跳過已處理的帳單
+- 系統會自動跳過已處理的帳單（透過Gmail標籤）
 - 處理結果會保存在系統記憶中
 
 🔧 技術架構：
-- Gmail API：郵件監控和附件下載
+- Gmail API：郵件監控和標籤管理
+- Google Sheets：動態銀行設定管理
 - PyPDF2：PDF文字提取
+- Google Vision OCR：圖片文字識別
 - Groq LLM：智能內容解析
 - 背景執行緒：定時自動監控
 
@@ -995,7 +1225,12 @@ class CreditCardManager:
 - 帳單週期、繳款期限
 - 本期應繳、最低應繳金額
 - 交易明細(日期、商家、金額)
-- 消費統計和分析"""
+- 消費統計和分析
+
+🆕 v2.0 新功能：
+- Google Sheets 動態設定管理
+- Gmail 標籤系統防重複處理
+- 支援測試銀行設定"""
 
 
 # 建立全域實例
@@ -1053,7 +1288,7 @@ def is_credit_card_query(message_text):
 if __name__ == "__main__":
     # 測試功能
     ccm = CreditCardManager()
-    print("=== 測試信用卡帳單監控 ===")
+    print("=== 測試信用卡帳單監控 v2.0 ===")
     print(ccm.handle_command("帳單監控狀態"))
     print()
     print("=== 測試檢查帳單 ===")
