@@ -331,137 +331,86 @@ class CreditCardManager:
             return False
     
     def init_gmail_api(self):
-    """初始化 Gmail API 連接 - 完整 OAuth + 服務帳戶支援"""
+        """初始化 Gmail API 連接(支援 Render 雲端環境)"""
         try:
-        # 方法1: OAuth 2.0 用戶授權（優先方案）
-        oauth_credentials = os.getenv('GOOGLE_OAUTH_CREDENTIALS')
-        if oauth_credentials:
-            try:
-                print("🔐 嘗試 OAuth 認證...")
-                creds_dict = json.loads(oauth_credentials)
-                
-                creds = None
-                token_file = 'gmail_oauth_token.json'
-                
-                # 檢查是否有儲存的 token
-                if os.path.exists(token_file):
-                    try:
-                        with open(token_file, 'r') as token:
-                            token_info = json.load(token)
-                        
-                        from google.oauth2.credentials import Credentials as OAuthCredentials
-                        creds = OAuthCredentials.from_authorized_user_info(token_info, SCOPES)
-                        print("✅ 找到已儲存的認證")
-                    except Exception as e:
-                        print(f"⚠️ 讀取儲存認證失敗: {e}")
-                
-                # 如果沒有有效認證，進行 OAuth 流程
-                if not creds or not creds.valid:
-                    print("🔄 需要重新認證...")
+            # 方法1: 從環境變數載入服務帳戶憑證
+            google_credentials = os.getenv('GOOGLE_CREDENTIALS')
+            if google_credentials:
+                try:
+                    from google.oauth2.service_account import Credentials
+                    creds_dict = json.loads(google_credentials)
+                    credentials = Credentials.from_service_account_info(
+                        creds_dict, scopes=SCOPES
+                    )
                     
-                    if creds and creds.expired and creds.refresh_token:
-                        print("🔄 刷新 Token...")
+                    self.gmail_service = build('gmail', 'v1', credentials=credentials)
+                    self.gmail_enabled = True
+                    print("✅ Gmail API 連接成功(服務帳戶模式)")
+                    return True
+                    
+                except Exception as e:
+                    print(f"❌ 服務帳戶認證失敗: {e}")
+            
+            # 方法2: 從環境變數載入 OAuth Token
+            gmail_token_b64 = os.getenv('GMAIL_TOKEN')
+            if gmail_token_b64:
+                try:
+                    import base64
+                    token_data = base64.b64decode(gmail_token_b64)
+                    
+                    # 載入 pickle 格式的認證
+                    creds = pickle.loads(token_data)
+                    
+                    # 檢查是否需要刷新
+                    if creds.expired and creds.refresh_token:
                         creds.refresh(Request())
-                    else:
-                        print("🌐 開始 OAuth 授權流程...")
                         
-                        # 建立臨時憑證檔案
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                            json.dump(creds_dict, f)
-                            temp_creds_path = f.name
-                        
-                        try:
-                            flow = InstalledAppFlow.from_client_secrets_file(
-                                temp_creds_path, SCOPES)
-                            
-                            # Render 環境中使用 run_console 而不是 run_local_server
-                            print("📋 請手動完成授權流程...")
-                            creds = flow.run_console()
-                            
-                        except Exception as e:
-                            print(f"❌ OAuth 流程失敗: {e}")
-                            return False
-                        finally:
-                            # 清理臨時檔案
-                            try:
-                                os.unlink(temp_creds_path)
-                            except:
-                                pass
+                        # 更新環境變數中的 token(可選)
+                        updated_token = base64.b64encode(pickle.dumps(creds)).decode('utf-8')
+                        print("🔄 Token 已刷新")
                     
-                    # 儲存認證
-                    try:
-                        with open(token_file, 'w') as token:
-                            json.dump({
-                                'token': creds.token,
-                                'refresh_token': creds.refresh_token,
-                                'token_uri': creds.token_uri,
-                                'client_id': creds.client_id,
-                                'client_secret': creds.client_secret,
-                                'scopes': creds.scopes
-                            }, token)
-                        print("✅ 認證已儲存")
-                    except Exception as e:
-                        print(f"⚠️ 儲存認證失敗: {e}")
-                
-                self.gmail_service = build('gmail', 'v1', credentials=creds)
-                self.gmail_enabled = True
-                print("✅ Gmail API 連接成功(OAuth 模式)")
-                return True
-                
-            except Exception as e:
-                print(f"❌ OAuth 認證失敗: {e}")
-        
-        # 方法2: 服務帳戶認證（備用方案）
-        google_credentials = os.getenv('GOOGLE_CREDENTIALS')
-        if google_credentials:
-            try:
-                print("🔐 嘗試服務帳戶認證...")
-                creds_dict = json.loads(google_credentials)
-                
-                # 檢查是否是正確的專案
-                project_id = creds_dict.get('project_id')
-                print(f"📋 服務帳戶專案: {project_id}")
-                
-                credentials = Credentials.from_service_account_info(
-                    creds_dict, scopes=SCOPES
-                )
-                
-                self.gmail_service = build('gmail', 'v1', credentials=credentials)
-                self.gmail_enabled = True
-                print("✅ Gmail API 連接成功(服務帳戶模式)")
-                return True
-                
-            except Exception as e:
-                print(f"❌ 服務帳戶認證失敗: {e}")
-        
-        # 方法3: 環境變數 OAuth Token（如果有的話）
-        gmail_token_b64 = os.getenv('GMAIL_TOKEN')
-        if gmail_token_b64:
-            try:
-                print("🔐 嘗試環境變數 Token...")
-                token_data = base64.b64decode(gmail_token_b64)
-                creds = pickle.loads(token_data)
-                
-                if creds.expired and creds.refresh_token:
+                    self.gmail_service = build('gmail', 'v1', credentials=creds)
+                    self.gmail_enabled = True
+                    print("✅ Gmail API 連接成功(OAuth Token 模式)")
+                    return True
+                    
+                except Exception as e:
+                    print(f"❌ OAuth Token 認證失敗: {e}")
+            
+            # 方法3: 本地開發模式
+            creds = None
+            
+            # 檢查是否有儲存的認證
+            if os.path.exists('gmail_token.pickle'):
+                with open('gmail_token.pickle', 'rb') as token:
+                    creds = pickle.load(token)
+            
+            # 如果沒有有效認證，進行 OAuth 流程
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
-                    print("🔄 Token 已刷新")
+                else:
+                    if os.path.exists('credentials.json'):
+                        flow = InstalledAppFlow.from_client_secrets_file(
+                            'credentials.json', SCOPES)
+                        creds = flow.run_local_server(port=0)
+                    else:
+                        print("❌ 未找到任何有效的 Gmail 認證方式")
+                        print("💡 請設定 GOOGLE_CREDENTIALS 或 GMAIL_TOKEN 環境變數")
+                        return False
                 
-                self.gmail_service = build('gmail', 'v1', credentials=creds)
-                self.gmail_enabled = True
-                print("✅ Gmail API 連接成功(環境變數 Token 模式)")
-                return True
-                
-            except Exception as e:
-                print(f"❌ 環境變數 Token 認證失敗: {e}")
-        
-        print("❌ 未找到任何有效的 Gmail 認證方式")
-        print("💡 請設定 GOOGLE_OAUTH_CREDENTIALS 環境變數")
-        return False
-        
-    except Exception as e:
-        print(f"❌ Gmail API 連接失敗: {e}")
-        return False
+                # 儲存認證以供下次使用
+                with open('gmail_token.pickle', 'wb') as token:
+                    pickle.dump(creds, token)
+            
+            self.gmail_service = build('gmail', 'v1', credentials=creds)
+            self.gmail_enabled = True
+            print("✅ Gmail API 連接成功(本地 OAuth 模式)")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Gmail API 連接失敗: {e}")
+            return False
     
     def init_groq_api(self):
         """初始化 Groq API"""
