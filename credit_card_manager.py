@@ -258,56 +258,6 @@ class CreditCardManager:
         print(f"   ⏭️ 跳過標籤移除: {label_name}（服務帳戶限制）")
         return True
     
-    def add_label_to_message(self, message_id, label_name):
-        """🆕 為訊息加上標籤"""
-        try:
-            # 先獲取標籤ID
-            labels = self.gmail_service.users().labels().list(userId='me').execute()
-            label_id = None
-            for label in labels.get('labels', []):
-                if label['name'] == label_name:
-                    label_id = label['id']
-                    break
-            
-            if label_id:
-                body = {'addLabelIds': [label_id]}
-                self.gmail_service.users().messages().modify(
-                    userId='me', id=message_id, body=body
-                ).execute()
-                print(f"   ✅ 已加上標籤: {label_name}")
-                return True
-            else:
-                print(f"   ⚠️ 找不到標籤: {label_name}")
-                return False
-        except Exception as e:
-            print(f"   ❌ 加標籤失敗: {e}")
-            return False
-    
-    def remove_label_from_message(self, message_id, label_name):
-        """🆕 從訊息移除標籤"""
-        try:
-            # 先獲取標籤ID
-            labels = self.gmail_service.users().labels().list(userId='me').execute()
-            label_id = None
-            for label in labels.get('labels', []):
-                if label['name'] == label_name:
-                    label_id = label['id']
-                    break
-            
-            if label_id:
-                body = {'removeLabelIds': [label_id]}
-                self.gmail_service.users().messages().modify(
-                    userId='me', id=message_id, body=body
-                ).execute()
-                print(f"   ✅ 已移除標籤: {label_name}")
-                return True
-            else:
-                print(f"   ⚠️ 找不到標籤: {label_name}")
-                return False
-        except Exception as e:
-            print(f"   ❌ 移除標籤失敗: {e}")
-            return False
-    
     def init_gmail_api(self):
         """初始化 Gmail API 連接 - 完整支援 OAuth + 服務帳戶"""
         try:
@@ -613,45 +563,46 @@ class CreditCardManager:
                     ).execute()
                     
                     messages = results.get('messages', [])
-                print(f"   📬 找到 {len(messages)} 封符合條件的郵件")
-                
-                # 🆕 如果是測試銀行且沒找到，嘗試更寬鬆的搜尋
-                if bank_name == "測試銀行" and len(messages) == 0:
-                    print(f"   🔄 測試銀行無結果，嘗試寬鬆搜尋...")
-                    # 更寬鬆的搜尋條件
-                    loose_query_parts = []
-                    loose_query_parts.append(f"from:{config['sender_domain']}")
-                    loose_query_parts.append(f"after:{yesterday}")
-                    loose_query_parts.append("has:attachment")
-                    # 不加主旨限制，看看能找到什麼
+                    print(f"   📬 找到 {len(messages)} 封符合條件的郵件")
                     
-                    loose_query = " ".join(loose_query_parts)
-                    print(f"   🔍 寬鬆搜尋條件: {loose_query}")
+                    # 🆕 如果是測試銀行且沒找到，嘗試更寬鬆的搜尋
+                    if bank_name == "測試銀行" and len(messages) == 0:
+                        print(f"   🔄 測試銀行無結果，嘗試寬鬆搜尋...")
+                        # 更寬鬆的搜尋條件
+                        loose_query_parts = []
+                        loose_query_parts.append(f"from:{config['sender_domain']}")
+                        loose_query_parts.append(f"after:{yesterday}")
+                        loose_query_parts.append("has:attachment")
+                        # 不加主旨限制，看看能找到什麼
+                        
+                        loose_query = " ".join(loose_query_parts)
+                        print(f"   🔍 寬鬆搜尋條件: {loose_query}")
+                        
+                        loose_results = self.gmail_service.users().messages().list(
+                            userId='me', q=loose_query, maxResults=10
+                        ).execute()
+                        
+                        loose_messages = loose_results.get('messages', [])
+                        print(f"   📬 寬鬆搜尋找到 {len(loose_messages)} 封郵件")
+                        
+                        # 檢查這些郵件的主旨
+                        for msg in loose_messages[:3]:  # 只檢查前3封
+                            try:
+                                msg_detail = self.gmail_service.users().messages().get(
+                                    userId='me', id=msg['id'], format='metadata'
+                                ).execute()
+                                
+                                headers = msg_detail['payload'].get('headers', [])
+                                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '無主旨')
+                                sender = next((h['value'] for h in headers if h['name'] == 'From'), '無寄件者')
+                                
+                                print(f"     📧 郵件主旨: {subject}")
+                                print(f"     📧 寄件者: {sender}")
+                                
+                            except Exception as e:
+                                print(f"     ❌ 無法讀取郵件詳情: {e}")
                     
-                    loose_results = self.gmail_service.users().messages().list(
-                        userId='me', q=loose_query, maxResults=10
-                    ).execute()
-                    
-                    loose_messages = loose_results.get('messages', [])
-                    print(f"   📬 寬鬆搜尋找到 {len(loose_messages)} 封郵件")
-                    
-                    # 檢查這些郵件的主旨
-                    for msg in loose_messages[:3]:  # 只檢查前3封
-                        try:
-                            msg_detail = self.gmail_service.users().messages().get(
-                                userId='me', id=msg['id'], format='metadata'
-                            ).execute()
-                            
-                            headers = msg_detail['payload'].get('headers', [])
-                            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '無主旨')
-                            sender = next((h['value'] for h in headers if h['name'] == 'From'), '無寄件者')
-                            
-                            print(f"     📧 郵件主旨: {subject}")
-                            print(f"     📧 寄件者: {sender}")
-                            
-                        except Exception as e:
-                            print(f"     ❌ 無法讀取郵件詳情: {e}")
-                    
+                    # 處理找到的郵件
                     for message in messages:
                         bill_info = self.process_gmail_message(message['id'], bank_name)
                         if bill_info:
@@ -731,8 +682,6 @@ class CreditCardManager:
             except:
                 pass
             return None
-    
-    # ... 其他方法保持不變 ...
     
     def extract_pdf_attachment(self, message):
         """從郵件中提取PDF附件"""
@@ -1286,93 +1235,3 @@ class CreditCardManager:
 - 信用卡/處理失敗 - 處理失敗的帳單
 - 信用卡/處理中 - 正在處理中
 - 信用卡/已跳過 - 跳過的郵件
-
-💡 使用提示：
-- 銀行設定可在 Google Sheets BankConfigs 分頁管理
-- 首次使用請先設定各銀行PDF密碼
-- 系統會自動跳過已處理的帳單（透過Gmail標籤）
-- 處理結果會保存在系統記憶中
-
-🔧 技術架構：
-- Gmail API：郵件監控和標籤管理
-- Google Sheets：動態銀行設定管理
-- PyPDF2：PDF文字提取
-- Google Vision OCR：圖片文字識別
-- Groq LLM：智能內容解析
-- 背景執行緒：定時自動監控
-
-📊 資料格式：
-- 帳單週期、繳款期限
-- 本期應繳、最低應繳金額
-- 交易明細(日期、商家、金額)
-- 消費統計和分析
-
-🆕 v2.0 新功能：
-- Google Sheets 動態設定管理
-- Gmail 標籤系統防重複處理
-- 支援測試銀行設定"""
-
-
-# 建立全域實例
-credit_card_manager = CreditCardManager()
-
-
-# 對外接口函數，供 main.py 使用
-def handle_credit_card_command(message_text):
-    """處理信用卡帳單指令 - 對外接口"""
-    return credit_card_manager.handle_command(message_text)
-
-
-def get_credit_card_summary():
-    """獲取信用卡帳單摘要 - 對外接口"""
-    return credit_card_manager.get_bill_summary()
-
-
-def get_recent_bills(limit=5):
-    """獲取最近帳單 - 對外接口"""
-    return credit_card_manager.get_recent_bills(limit)
-
-
-def start_credit_card_monitor():
-    """啟動信用卡帳單監控 - 對外接口"""
-    return credit_card_manager.start_monitoring_thread()
-
-
-def stop_credit_card_monitor():
-    """停止信用卡帳單監控 - 對外接口"""
-    return credit_card_manager.stop_monitoring()
-
-
-def get_credit_card_status():
-    """獲取監控狀態 - 對外接口"""
-    return credit_card_manager.get_monitoring_status()
-
-
-def is_credit_card_command(message_text):
-    """判斷是否為信用卡帳單指令 - 對外接口"""
-    credit_card_keywords = [
-        '檢查帳單', '最近帳單', '帳單摘要', '帳單監控狀態', 
-        '設定密碼', '帳單幫助'
-    ]
-    return any(keyword in message_text for keyword in credit_card_keywords)
-
-
-def is_credit_card_query(message_text):
-    """判斷是否為信用卡查詢指令 - 對外接口"""
-    query_patterns = [
-        '最近帳單', '帳單摘要', '帳單監控狀態', '帳單幫助'
-    ]
-    return any(pattern in message_text for pattern in query_patterns)
-
-
-if __name__ == "__main__":
-    # 測試功能
-    ccm = CreditCardManager()
-    print("=== 測試信用卡帳單監控 v2.0 ===")
-    print(ccm.handle_command("帳單監控狀態"))
-    print()
-    print("=== 測試檢查帳單 ===")
-    print(ccm.handle_command("檢查帳單"))
-    print()
-    print("=== 測試幫助 ===")
-    print(ccm.handle_command("帳單幫助"))
