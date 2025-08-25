@@ -580,12 +580,15 @@ class CreditCardManager:
             
             # 計算檢查範圍(過去24小時)
             yesterday = (self.get_taiwan_datetime() - timedelta(days=1)).strftime('%Y/%m/%d')
+            print(f"📅 搜尋範圍：{yesterday} 之後的信件")
             
             found_bills = []
             
             # 🆕 檢查每家銀行（使用動態設定）
             for bank_name, config in self.bank_configs.items():
                 print(f"🏦 檢查 {bank_name}...")
+                print(f"   📧 寄件者網域: {config['sender_domain']}")
+                print(f"   🏷️ 主旨關鍵字: {config['subject_keywords']}")
                 
                 # 🆕 建立搜尋查詢 - 排除已處理的標籤
                 query_parts = []
@@ -610,7 +613,44 @@ class CreditCardManager:
                     ).execute()
                     
                     messages = results.get('messages', [])
-                    print(f"   找到 {len(messages)} 封可能的帳單郵件")
+                print(f"   📬 找到 {len(messages)} 封符合條件的郵件")
+                
+                # 🆕 如果是測試銀行且沒找到，嘗試更寬鬆的搜尋
+                if bank_name == "測試銀行" and len(messages) == 0:
+                    print(f"   🔄 測試銀行無結果，嘗試寬鬆搜尋...")
+                    # 更寬鬆的搜尋條件
+                    loose_query_parts = []
+                    loose_query_parts.append(f"from:{config['sender_domain']}")
+                    loose_query_parts.append(f"after:{yesterday}")
+                    loose_query_parts.append("has:attachment")
+                    # 不加主旨限制，看看能找到什麼
+                    
+                    loose_query = " ".join(loose_query_parts)
+                    print(f"   🔍 寬鬆搜尋條件: {loose_query}")
+                    
+                    loose_results = self.gmail_service.users().messages().list(
+                        userId='me', q=loose_query, maxResults=10
+                    ).execute()
+                    
+                    loose_messages = loose_results.get('messages', [])
+                    print(f"   📬 寬鬆搜尋找到 {len(loose_messages)} 封郵件")
+                    
+                    # 檢查這些郵件的主旨
+                    for msg in loose_messages[:3]:  # 只檢查前3封
+                        try:
+                            msg_detail = self.gmail_service.users().messages().get(
+                                userId='me', id=msg['id'], format='metadata'
+                            ).execute()
+                            
+                            headers = msg_detail['payload'].get('headers', [])
+                            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '無主旨')
+                            sender = next((h['value'] for h in headers if h['name'] == 'From'), '無寄件者')
+                            
+                            print(f"     📧 郵件主旨: {subject}")
+                            print(f"     📧 寄件者: {sender}")
+                            
+                        except Exception as e:
+                            print(f"     ❌ 無法讀取郵件詳情: {e}")
                     
                     for message in messages:
                         bill_info = self.process_gmail_message(message['id'], bank_name)
