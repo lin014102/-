@@ -644,8 +644,8 @@ class StockManager:
             result_msg += f"\n☁️ 已同步到 Google Sheets"
         else:
             result_msg += f"\n❌ Google Sheets 同步失敗"
-else:
-    result_msg += f"\n💾 已儲存到記憶體"
+        else:
+            result_msg += f"\n💾 已儲存到記憶體"
         
         return result_msg
     
