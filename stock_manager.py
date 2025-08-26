@@ -640,6 +640,8 @@ class StockManager:
         
         if self.sheets_enabled:
             result_msg += f"\n☁️ 已同步到 Google Sheets"
+        elif self.sheets_enabled:
+            result_msg += f"\n⚠️ Google Sheets 同步失敗，資料僅存在記憶體中
         else:
             result_msg += f"\n💾 已儲存到記憶體"
         
