@@ -240,6 +240,7 @@ class StockManager:
                 print("✅ 帳戶資訊同步成功")
             except Exception as e:
                 print(f"❌ 同步帳戶資訊失敗: {e}")
+                return False
             
             # 同步持股明細
             print("📈 同步持股明細...")
@@ -288,8 +289,10 @@ class StockManager:
                     print("✅ 持股明細同步成功")
                 else:
                     print("❌ 找不到持股明細工作表")
+                    return False
             except Exception as e:
                 print(f"❌ 同步持股明細失敗: {e}")
+                return False
             
             # 同步交易記錄
             print("📋 同步交易記錄...")
@@ -335,6 +338,7 @@ class StockManager:
                 print("✅ 交易記錄同步成功")
             except Exception as e:
                 print(f"❌ 同步交易記錄失敗: {e}")
+                return False
             
             print("✅ 安全同步完成")
             return True
@@ -627,9 +631,6 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        if self.sheets_enabled:
-            self.sync_to_sheets_safe()
-        
         result_msg = f"📊 {account_name} 持股設定成功！\n"
         if is_new:
             result_msg += f"🆕 已建立新帳戶\n"
@@ -640,12 +641,12 @@ class StockManager:
         
         if self.sheets_enabled:
             sync_success = self.sync_to_sheets_safe()
-        if sync_success:
-            result_msg += f"\n☁️ 已同步到 Google Sheets"
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
         else:
-            result_msg += f"\n❌ Google Sheets 同步失敗"
-        else:
-            result_msg += f"\n💾 已儲存到記憶體"
+            result_msg += "\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -668,9 +669,6 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        if self.sheets_enabled:
-            self.sync_to_sheets_safe()
-        
         result_msg = f"💰 {account_name} 入帳成功！\n"
         if is_new:
             result_msg += f"🆕 已建立新帳戶\n"
@@ -678,9 +676,13 @@ class StockManager:
         result_msg += f"💳 帳戶餘額：{self.stock_data['accounts'][account_name]['cash']:,}元"
         
         if self.sheets_enabled:
-            result_msg += f"\n☁️ 已同步到 Google Sheets"
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
         else:
-            result_msg += f"\n💾 已儲存到記憶體"
+            result_msg += "\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -709,15 +711,16 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        if self.sheets_enabled:
-            self.sync_to_sheets_safe()
-        
         result_msg = f"💸 {account_name} 提款成功！\n💵 提款金額：{amount:,}元\n💳 帳戶餘額：{account['cash']:,}元"
         
         if self.sheets_enabled:
-            result_msg += f"\n☁️ 已同步到 Google Sheets"
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
         else:
-            result_msg += f"\n💾 已儲存到記憶體"
+            result_msg += "\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -770,16 +773,17 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        if self.sheets_enabled:
-            self.sync_to_sheets_safe()
-        
         stock_info = account['stocks'][stock_name]
         result_msg = f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 買入：{quantity}股 @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{stock_info['quantity']}股\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元"
         
         if self.sheets_enabled:
-            result_msg += f"\n☁️ 已同步到 Google Sheets"
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
         else:
-            result_msg += f"\n💾 已儲存到記憶體"
+            result_msg += "\n💾 已儲存到記憶體"
         
         return result_msg
     
@@ -832,17 +836,18 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
-        if self.sheets_enabled:
-            self.sync_to_sheets_safe()
-        
         profit_text = f"💰 獲利：+{profit_loss:,}元" if profit_loss > 0 else f"💸 虧損：{profit_loss:,}元" if profit_loss < 0 else "💫 損益兩平"
         
         result = f"📉 {account_name} 賣出成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 賣出：{quantity}股 @ {price_per_share}元\n💰 實收：{amount:,}元\n📅 日期：{date}\n\n💹 本次交易：\n💵 成本：{sell_cost:,}元\n{profit_text}\n💳 現金餘額：{account['cash']:,}元"
         
         if self.sheets_enabled:
-            result += f"\n☁️ 已同步到 Google Sheets"
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result += "\n❌ Google Sheets 同步失敗"
         else:
-            result += f"\n💾 已儲存到記憶體"
+            result += "\n💾 已儲存到記憶體"
         
         if remaining_quantity > 0:
             result += f"\n\n📋 剩餘持股：{remaining_quantity}股"
@@ -856,10 +861,16 @@ class StockManager:
         is_new = self.get_or_create_account(account_name)
         if is_new:
             result_msg = f"🆕 已建立帳戶「{account_name}」\n💡 可以開始入帳和交易了！"
+            
             if self.sheets_enabled:
-                result_msg += f"\n☁️ 已同步到 Google Sheets"
+                sync_success = self.sync_to_sheets_safe()
+                if sync_success:
+                    result_msg += "\n☁️ 已同步到 Google Sheets"
+                else:
+                    result_msg += "\n❌ Google Sheets 同步失敗"
             else:
-                result_msg += f"\n💾 已儲存到記憶體"
+                result_msg += "\n💾 已儲存到記憶體"
+            
             return result_msg
         else:
             return f"ℹ️ 帳戶「{account_name}」已存在"
