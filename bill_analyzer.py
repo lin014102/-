@@ -7,8 +7,9 @@ import os
 import json
 import base64
 import requests
-# import fitz  # PyMuPDF - 暫時移除直到部署穩定
-# from PIL import Image  # 暫時移除直到部署穩定
+import PyPDF2
+import fitz  # PyMuPDF
+from PIL import Image
 import io
 import logging
 from datetime import datetime
@@ -60,7 +61,7 @@ class BillAnalyzer:
     
     def analyze_pdf(self, pdf_content, bank_config, filename):
         """
-        分析 PDF 帳單的完整流程
+        分析 PDF 帳單的完整流程 - 完整圖像處理版本
         
         Args:
             pdf_content: PDF 檔案內容 (bytes)
@@ -156,60 +157,54 @@ class BillAnalyzer:
             return None
     
     def pdf_to_images(self, pdf_path, password=""):
-        """將 PDF 轉換成圖片 - 暫時停用直到解決部署問題"""
-        # 暫時停用 PDF 轉圖片功能，因為 PyMuPDF 在 Render 上有套件衝突
-        # 可以先測試其他功能是否正常運作
-        self.logger.warning("PDF 轉圖片功能暫時停用，等待部署問題解決")
-        return []
-        
-        # 原本的程式碼留著，等部署穩定後再啟用
-        # try:
-        #     self.logger.info(f"開始轉換 PDF: {pdf_path}")
-        #     
-        #     # 開啟 PDF
-        #     pdf_document = fitz.open(pdf_path)
-        #     
-        #     # 如果有密碼保護，嘗試解鎖
-        #     if pdf_document.needs_pass:
-        #         if not pdf_document.authenticate(password):
-        #             raise Exception("PDF 密碼錯誤")
-        #         self.logger.info("PDF 解鎖成功")
-        #     
-        #     images = []
-        #     page_count = pdf_document.page_count
-        #     
-        #     # 決定要處理的頁面範圍
-        #     end_page = page_count - 1 if self.settings["remove_last_page"] and page_count > 1 else page_count
-        #     
-        #     self.logger.info(f"PDF 共 {page_count} 頁，處理前 {end_page} 頁")
-        #     
-        #     # 轉換每一頁
-        #     temp_dir = tempfile.gettempdir()
-        #     for page_num in range(end_page):
-        #         page = pdf_document[page_num]
-        #         
-        #         # 設定轉換參數
-        #         mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
-        #         pix = page.get_pixmap(matrix=mat)
-        #         
-        #         # 轉換成 PIL Image
-        #         img_data = pix.tobytes("png")
-        #         image = Image.open(io.BytesIO(img_data))
-        #         
-        #         # 儲存暫存圖片
-        #         temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
-        #         image.save(temp_path)
-        #         images.append(temp_path)
-        #         
-        #         self.logger.info(f"頁面 {page_num + 1} 轉換完成")
-        #     
-        #     pdf_document.close()
-        #     self.logger.info(f"PDF 轉圖片完成，共 {len(images)} 張")
-        #     return images
-        #     
-        # except Exception as e:
-        #     self.logger.error(f"PDF 轉圖片失敗: {e}")
-        #     return []
+        """將PDF轉換成圖片 - 完整功能版本"""
+        try:
+            self.logger.info(f"開始轉換 PDF: {pdf_path}")
+            
+            # 開啟 PDF
+            pdf_document = fitz.open(pdf_path)
+            
+            # 如果有密碼保護，嘗試解鎖
+            if pdf_document.needs_pass:
+                if not pdf_document.authenticate(password):
+                    raise Exception("PDF 密碼錯誤")
+                self.logger.info("PDF 解鎖成功")
+            
+            images = []
+            page_count = pdf_document.page_count
+            
+            # 決定要處理的頁面範圍
+            end_page = page_count - 1 if self.settings["remove_last_page"] and page_count > 1 else page_count
+            
+            self.logger.info(f"PDF 共 {page_count} 頁，處理前 {end_page} 頁")
+            
+            # 轉換每一頁
+            temp_dir = tempfile.gettempdir()
+            for page_num in range(end_page):
+                page = pdf_document[page_num]
+                
+                # 設定轉換參數
+                mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
+                pix = page.get_pixmap(matrix=mat)
+                
+                # 轉換成 PIL Image
+                img_data = pix.tobytes("png")
+                image = Image.open(io.BytesIO(img_data))
+                
+                # 儲存暫存圖片
+                temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
+                image.save(temp_path)
+                images.append(temp_path)
+                
+                self.logger.info(f"頁面 {page_num + 1} 轉換完成")
+            
+            pdf_document.close()
+            self.logger.info(f"PDF 轉圖片完成，共 {len(images)} 張")
+            return images
+            
+        except Exception as e:
+            self.logger.error(f"PDF 轉圖片失敗: {e}")
+            return []
     
     def image_to_base64(self, image_path):
         """將圖片轉換成 base64"""
@@ -264,6 +259,7 @@ class BillAnalyzer:
         self.logger.info("處理 OCR 結果")
         
         all_text = ""
+        structured_data = []
         
         try:
             for page_idx, result in enumerate(ocr_results):
@@ -276,15 +272,65 @@ class BillAnalyzer:
                 if 'fullTextAnnotation' in response:
                     page_text = response['fullTextAnnotation']['text']
                     all_text += f"\n=== 第 {page_idx + 1} 頁 ===\n{page_text}\n"
+                
+                # 取得結構化資料（包含座標）
+                if 'textAnnotations' in response:
+                    for annotation in response['textAnnotations'][1:]:  # 跳過第一個（全文）
+                        text_info = {
+                            'text': annotation['description'],
+                            'confidence': annotation.get('confidence', 0),
+                            'vertices': annotation['boundingPoly']['vertices'] if 'boundingPoly' in annotation else []
+                        }
+                        structured_data.append(text_info)
+            
+            # 根據座標重新排序（由上到下，由左到右）
+            if structured_data:
+                structured_data.sort(key=lambda x: (
+                    x['vertices'][0]['y'] if x['vertices'] else 0,  # Y座標
+                    x['vertices'][0]['x'] if x['vertices'] else 0   # X座標
+                ))
+                
+                # 重組為段落
+                reorganized_text = self.reorganize_by_coordinates(structured_data)
+                all_text += f"\n=== 座標重組文字 ===\n{reorganized_text}"
             
             self.logger.info("OCR 結果處理完成")
             return {
-                'raw_text': all_text
+                'raw_text': all_text,
+                'structured_data': structured_data
             }
             
         except Exception as e:
             self.logger.error(f"OCR 結果處理失敗: {e}")
-            return {'raw_text': ''}
+            return {'raw_text': all_text, 'structured_data': []}
+    
+    def reorganize_by_coordinates(self, structured_data):
+        """根據座標重組文字為段落"""
+        if not structured_data:
+            return ""
+        
+        # 按Y座標分組（同一行）
+        lines = {}
+        for item in structured_data:
+            if not item['vertices']:
+                continue
+                
+            y_coord = item['vertices'][0]['y']
+            # 容許一定的Y座標誤差，歸為同一行
+            line_key = round(y_coord / 10) * 10  # 每10像素為一個群組
+            
+            if line_key not in lines:
+                lines[line_key] = []
+            lines[line_key].append(item)
+        
+        # 組合每一行的文字
+        result_lines = []
+        for y_coord in sorted(lines.keys()):
+            line_items = sorted(lines[y_coord], key=lambda x: x['vertices'][0]['x'] if x['vertices'] else 0)
+            line_text = ' '.join([item['text'] for item in line_items])
+            result_lines.append(line_text)
+        
+        return '\n'.join(result_lines)
     
     def identify_document_type(self, text, filename):
         """識別文件類型"""
