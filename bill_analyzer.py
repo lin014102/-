@@ -8,7 +8,7 @@ import json
 import base64
 import requests
 # import fitz  # PyMuPDF - 暫時移除直到部署穩定
-from PIL import Image
+# from PIL import Image  # 暫時移除直到部署穩定
 import io
 import logging
 from datetime import datetime
