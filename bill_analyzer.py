@@ -7,7 +7,7 @@ import os
 import json
 import base64
 import requests
-import fitz  # PyMuPDF
+# import fitz  # PyMuPDF - 暫時移除直到部署穩定
 from PIL import Image
 import io
 import logging
@@ -156,54 +156,60 @@ class BillAnalyzer:
             return None
     
     def pdf_to_images(self, pdf_path, password=""):
-        """將 PDF 轉換成圖片"""
-        try:
-            self.logger.info(f"開始轉換 PDF: {pdf_path}")
-            
-            # 開啟 PDF
-            pdf_document = fitz.open(pdf_path)
-            
-            # 如果有密碼保護，嘗試解鎖
-            if pdf_document.needs_pass:
-                if not pdf_document.authenticate(password):
-                    raise Exception("PDF 密碼錯誤")
-                self.logger.info("PDF 解鎖成功")
-            
-            images = []
-            page_count = pdf_document.page_count
-            
-            # 決定要處理的頁面範圍
-            end_page = page_count - 1 if self.settings["remove_last_page"] and page_count > 1 else page_count
-            
-            self.logger.info(f"PDF 共 {page_count} 頁，處理前 {end_page} 頁")
-            
-            # 轉換每一頁
-            temp_dir = tempfile.gettempdir()
-            for page_num in range(end_page):
-                page = pdf_document[page_num]
-                
-                # 設定轉換參數
-                mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
-                pix = page.get_pixmap(matrix=mat)
-                
-                # 轉換成 PIL Image
-                img_data = pix.tobytes("png")
-                image = Image.open(io.BytesIO(img_data))
-                
-                # 儲存暫存圖片
-                temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
-                image.save(temp_path)
-                images.append(temp_path)
-                
-                self.logger.info(f"頁面 {page_num + 1} 轉換完成")
-            
-            pdf_document.close()
-            self.logger.info(f"PDF 轉圖片完成，共 {len(images)} 張")
-            return images
-            
-        except Exception as e:
-            self.logger.error(f"PDF 轉圖片失敗: {e}")
-            return []
+        """將 PDF 轉換成圖片 - 暫時停用直到解決部署問題"""
+        # 暫時停用 PDF 轉圖片功能，因為 PyMuPDF 在 Render 上有套件衝突
+        # 可以先測試其他功能是否正常運作
+        self.logger.warning("PDF 轉圖片功能暫時停用，等待部署問題解決")
+        return []
+        
+        # 原本的程式碼留著，等部署穩定後再啟用
+        # try:
+        #     self.logger.info(f"開始轉換 PDF: {pdf_path}")
+        #     
+        #     # 開啟 PDF
+        #     pdf_document = fitz.open(pdf_path)
+        #     
+        #     # 如果有密碼保護，嘗試解鎖
+        #     if pdf_document.needs_pass:
+        #         if not pdf_document.authenticate(password):
+        #             raise Exception("PDF 密碼錯誤")
+        #         self.logger.info("PDF 解鎖成功")
+        #     
+        #     images = []
+        #     page_count = pdf_document.page_count
+        #     
+        #     # 決定要處理的頁面範圍
+        #     end_page = page_count - 1 if self.settings["remove_last_page"] and page_count > 1 else page_count
+        #     
+        #     self.logger.info(f"PDF 共 {page_count} 頁，處理前 {end_page} 頁")
+        #     
+        #     # 轉換每一頁
+        #     temp_dir = tempfile.gettempdir()
+        #     for page_num in range(end_page):
+        #         page = pdf_document[page_num]
+        #         
+        #         # 設定轉換參數
+        #         mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
+        #         pix = page.get_pixmap(matrix=mat)
+        #         
+        #         # 轉換成 PIL Image
+        #         img_data = pix.tobytes("png")
+        #         image = Image.open(io.BytesIO(img_data))
+        #         
+        #         # 儲存暫存圖片
+        #         temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
+        #         image.save(temp_path)
+        #         images.append(temp_path)
+        #         
+        #         self.logger.info(f"頁面 {page_num + 1} 轉換完成")
+        #     
+        #     pdf_document.close()
+        #     self.logger.info(f"PDF 轉圖片完成，共 {len(images)} 張")
+        #     return images
+        #     
+        # except Exception as e:
+        #     self.logger.error(f"PDF 轉圖片失敗: {e}")
+        #     return []
     
     def image_to_base64(self, image_path):
         """將圖片轉換成 base64"""
