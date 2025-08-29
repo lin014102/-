@@ -119,6 +119,12 @@ def home():
     <p>💳 新增信用卡帳單自動監控！</p>
     <p>📊 新增帳單自動分析與推播！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
+    <h2>測試端點：</h2>
+    <ul>
+        <li><a href="/test/sheets-connection">測試 Google Sheets 連接</a></li>
+        <li><a href="/test/bill-analysis">手動執行帳單分析</a></li>
+        <li><a href="/test/notifications">手動執行推播</a></li>
+    </ul>
     """
 
 @app.route('/health')
@@ -221,6 +227,166 @@ def health():
             'background_services': bg_services.services
         }
     })
+
+# ===== 測試端點 =====
+@app.route('/test/bill-analysis')
+def test_bill_analysis():
+    """手動測試帳單分析功能"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        # 手動觸發分析任務
+        bg_services.bill_scheduler._run_daily_analysis()
+        
+        return jsonify({
+            'success': True,
+            'message': '手動分析任務已執行',
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/notifications')
+def test_notifications():
+    """手動測試推播功能"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        # 手動觸發推播任務
+        bg_services.bill_scheduler._run_daily_notifications()
+        
+        return jsonify({
+            'success': True,
+            'message': '手動推播任務已執行',
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/sheets-connection')
+def test_sheets_connection():
+    """測試 Google Sheets 連接"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        sheets_handler = bg_services.bill_scheduler.sheets_handler
+        
+        # 測試讀取待處理檔案
+        pending_files = sheets_handler.get_pending_files()
+        failed_files = sheets_handler.get_failed_files()
+        notification_files = sheets_handler.get_notification_pending_files()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'pending_files_count': len(pending_files),
+                'failed_files_count': len(failed_files),
+                'notification_pending_count': len(notification_files),
+                'pending_files': pending_files[:3] if pending_files else [],  # 顯示前3筆
+                'failed_files': failed_files[:3] if failed_files else [],
+                'notification_files': notification_files[:3] if notification_files else []
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/analyze-single/<file_id>')
+def test_analyze_single(file_id):
+    """測試分析單一檔案"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        sheets_handler = bg_services.bill_scheduler.sheets_handler
+        drive_handler = bg_services.bill_scheduler.drive_handler
+        bill_analyzer = bg_services.bill_scheduler.bill_analyzer
+        
+        # 從 sheets 中找到對應的檔案資訊
+        pending_files = sheets_handler.get_pending_files()
+        target_file = None
+        
+        for file_info in pending_files:
+            if file_info['file_id'] == file_id:
+                target_file = file_info
+                break
+        
+        if not target_file:
+            return jsonify({
+                'success': False,
+                'error': f'找不到檔案 ID: {file_id}',
+                'available_files': [f['file_id'] for f in pending_files[:5]]
+            })
+        
+        # 下載檔案
+        file_content = drive_handler.download_file(target_file['file_id'], target_file['filename'])
+        
+        if not file_content:
+            return jsonify({
+                'success': False,
+                'error': '檔案下載失敗'
+            })
+        
+        # 取得銀行設定
+        bank_config = sheets_handler.get_bank_config_by_filename(target_file['filename'])
+        
+        if not bank_config:
+            return jsonify({
+                'success': False,
+                'error': '找不到銀行設定'
+            })
+        
+        # 執行分析
+        analysis_result = bill_analyzer.analyze_pdf(
+            file_content, 
+            bank_config, 
+            target_file['filename']
+        )
+        
+        return jsonify({
+            'success': True,
+            'file_info': target_file,
+            'bank_config': bank_config,
+            'analysis_result': analysis_result,
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
