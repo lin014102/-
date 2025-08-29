@@ -1,6 +1,6 @@
 """
 bill_scheduler.py - 信用卡帳單自動分析定時任務
-負責每日 22:10 分析帳單，22:10 推播結果
+負責每日 03:30 分析帳單，15:15 推播結果
 """
 
 import os
@@ -36,8 +36,8 @@ class BillScheduler:
             raise
         
         # 定時任務設定
-        self.analysis_time = "22:10"  # 每日分析時間
-        self.notification_time = "22:10"  # 每日推播時間
+        self.analysis_time = "03:30"  # 每日分析時間
+        self.notification_time = "15:15"  # 每日推播時間
         
         # 防重複執行標記
         self.last_analysis_date = None
