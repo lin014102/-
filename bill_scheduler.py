@@ -1,4 +1,6 @@
-"""
+def get_notification_user_id(self):
+        """從現有提醒系統獲取用戶 ID"""
+        return self.reminder_bot.user_settings.get('user_id')"""
 bill_scheduler.py - 信用卡帳單自動分析定時任務
 負責每日 03:30 分析帳單，15:15 推播結果
 """
@@ -18,8 +20,11 @@ from utils.line_api import send_push_message
 class BillScheduler:
     """信用卡帳單分析定時任務管理器"""
     
-    def __init__(self):
+    def __init__(self, reminder_bot):
         self.logger = logging.getLogger(__name__)
+        
+        # 保存 reminder_bot 實例以獲取用戶 ID
+        self.reminder_bot = reminder_bot
         
         # 初始化各個處理器
         try:
@@ -38,9 +43,6 @@ class BillScheduler:
         # 防重複執行標記
         self.last_analysis_date = None
         self.last_notification_date = None
-        
-        # 獲取 LINE Bot 推播對象
-        self.notification_user_id = os.getenv('NOTIFICATION_USER_ID')
         
         self.scheduler_thread = None
     
@@ -175,26 +177,29 @@ class BillScheduler:
         try:
             self.logger.info("=== 開始每日推播任務 ===")
             
-            if not self.notification_user_id:
+            # 從現有系統獲取用戶 ID
+            notification_user_id = self.get_notification_user_id()
+            
+            if not notification_user_id:
                 self.logger.warning("未設定推播對象，跳過推播任務")
                 return
             
             # 1. 檢查解析失敗的檔案
             failed_files = self.sheets_handler.get_failed_files()
             if failed_files:
-                self._send_failed_notification(failed_files)
+                self._send_failed_notification(failed_files, notification_user_id)
             
             # 2. 檢查需要推播的成功檔案
             success_files = self.sheets_handler.get_notification_pending_files()
             if success_files:
-                self._send_success_notifications(success_files)
+                self._send_success_notifications(success_files, notification_user_id)
             
             self.logger.info("=== 每日推播任務完成 ===")
             
         except Exception as e:
             self.logger.error(f"每日推播任務執行失敗: {e}")
     
-    def _send_failed_notification(self, failed_files):
+    def _send_failed_notification(self, failed_files, notification_user_id):
         """發送解析失敗通知"""
         try:
             message = f"❌ 帳單解析失敗通知\n\n共 {len(failed_files)} 個檔案處理失敗：\n\n"
@@ -211,13 +216,13 @@ class BillScheduler:
             message += f"\n💡 系統將在明天再次嘗試處理"
             message += f"\n🕒 {get_taiwan_time_hhmm()}"
             
-            send_push_message(self.notification_user_id, message)
+            send_push_message(notification_user_id, message)
             self.logger.info(f"已發送失敗通知，共 {len(failed_files)} 個檔案")
             
         except Exception as e:
             self.logger.error(f"發送失敗通知錯誤: {e}")
     
-    def _send_success_notifications(self, success_files):
+    def _send_success_notifications(self, success_files, notification_user_id):
         """發送成功分析通知"""
         try:
             for file_info in success_files:
@@ -230,7 +235,7 @@ class BillScheduler:
                             analysis_data
                         )
                         
-                        send_push_message(self.notification_user_id, message)
+                        send_push_message(notification_user_id, message)
                         
                         # 更新推播狀態
                         self.sheets_handler.update_notification_status(
@@ -366,5 +371,5 @@ class BillScheduler:
             'notification_time': self.notification_time,
             'last_analysis_date': self.last_analysis_date,
             'last_notification_date': self.last_notification_date,
-            'notification_enabled': self.notification_user_id is not None
+            'notification_enabled': self.get_notification_user_id() is not None
         }
