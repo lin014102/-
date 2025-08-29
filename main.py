@@ -1,6 +1,6 @@
 """
 main.py - LINE Todo Reminder Bot 主程式
-v3.1 + Gemini AI + 信用卡帳單監控 完全模組化架構
+v3.1 + Gemini AI + 信用卡帳單監控 + 自動帳單分析 完全模組化架構
 """
 from flask import Flask, request, jsonify
 import os
@@ -30,6 +30,9 @@ from credit_card_manager import (
 # 🆕 匯入 Gemini AI 模組
 from gemini_analyzer import EnhancedMessageRouter
 
+# 🆕 匯入帳單分析定時任務
+from bill_scheduler import BillScheduler
+
 # 初始化 Flask 應用
 app = Flask(__name__)
 
@@ -45,6 +48,7 @@ class BackgroundServices:
     
     def __init__(self):
         self.services = []
+        self.bill_scheduler = None
     
     def start_keep_alive(self):
         """啟動防休眠服務"""
@@ -88,6 +92,16 @@ class BackgroundServices:
             print("✅ 信用卡帳單監控已啟動")
         except Exception as e:
             print(f"⚠️ 信用卡帳單監控啟動失敗: {e}")
+    
+    def start_bill_scheduler(self, bill_scheduler):
+        """啟動帳單分析定時任務"""
+        try:
+            bill_scheduler.start_scheduler()
+            self.services.append('bill_scheduler')
+            self.bill_scheduler = bill_scheduler
+            print("✅ 帳單分析定時任務已啟動")
+        except Exception as e:
+            print(f"⚠️ 帳單分析定時任務啟動失敗: {e}")
 
 # 建立背景服務管理器
 bg_services = BackgroundServices()
@@ -97,12 +111,13 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.1 + Gemini AI + 信用卡帳單監控</h1>
+    <h1>LINE Todo Reminder Bot v3.1 + Gemini AI + 自動帳單分析</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>🚀 模組化架構，完全重構！</p>
     <p>💹 新增即時損益功能！</p>
     <p>🤖 整合 Gemini AI 智能對話！</p>
     <p>💳 新增信用卡帳單自動監控！</p>
+    <p>📊 新增帳單自動分析與推播！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     """
 
@@ -149,12 +164,18 @@ def health():
     except:
         credit_card_status = {'status': 'error', 'gmail_enabled': False, 'groq_enabled': False}
     
+    # 🆕 獲取帳單分析定時任務狀態
+    try:
+        bill_scheduler_status = bg_services.bill_scheduler.get_status() if bg_services.bill_scheduler else {'scheduler_running': False}
+    except:
+        bill_scheduler_status = {'scheduler_running': False, 'error': 'not_initialized'}
+    
     return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.1_modular_architecture_with_credit_card_monitoring',
+        'version': 'v3.1_modular_architecture_with_auto_bill_analysis',
         
         # 模組狀態
         'modules': {
@@ -187,6 +208,15 @@ def health():
                 'processed_bills_count': credit_card_status.get('processed_bills_count', 0),
                 'last_check_time': credit_card_status.get('last_check_time'),
                 'features': ['gmail_monitoring', 'auto_pdf_unlock', 'ocr_processing', 'llm_analysis']
+            },
+            'bill_scheduler': {
+                'scheduler_running': bill_scheduler_status.get('scheduler_running', False),
+                'analysis_time': bill_scheduler_status.get('analysis_time', '03:30'),
+                'notification_time': bill_scheduler_status.get('notification_time', '15:15'),
+                'last_analysis_date': bill_scheduler_status.get('last_analysis_date'),
+                'last_notification_date': bill_scheduler_status.get('last_notification_date'),
+                'notification_enabled': bill_scheduler_status.get('notification_enabled', False),
+                'features': ['daily_pdf_analysis', 'google_vision_ocr', 'gemini_llm', 'line_notifications', 'google_sheets_sync']
             },
             'background_services': bg_services.services
         }
@@ -268,13 +298,20 @@ def enhanced_message_router(message_text, user_id):
 
 def initialize_app():
     """初始化應用程式"""
-    print("🚀 LINE Todo Reminder Bot v3.1 + Gemini AI + 信用卡帳單監控 啟動中...")
+    print("🚀 LINE Todo Reminder Bot v3.1 + Gemini AI + 自動帳單分析 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
     bg_services.start_keep_alive()
     bg_services.start_reminder_bot()
-    bg_services.start_credit_card_monitor()  # 🆕 啟動信用卡帳單監控
+    bg_services.start_credit_card_monitor()  # 現有的信用卡帳單監控
+    
+    # 🆕 新增：啟動帳單分析定時任務
+    try:
+        bill_scheduler = BillScheduler(reminder_bot)
+        bg_services.start_bill_scheduler(bill_scheduler)
+    except Exception as e:
+        print(f"⚠️ 帳單分析定時任務初始化失敗: {e}")
     
     print("=" * 60)
     print("📋 待辦事項管理：✅ 已載入")
@@ -282,7 +319,8 @@ def initialize_app():
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
     print("🤖 Gemini AI 模組：✅ 已整合")
-    print("💳 信用卡帳單監控：✅ 已啟動")  # 🆕
+    print("💳 信用卡帳單監控：✅ 已啟動")
+    print("📊 帳單分析定時任務：✅ 已啟動")  # 🆕 新增這行
     print("🔧 模組化架構：✅ 完全重構")
     print("=" * 60)
     print("🎉 系統初始化完成！")
