@@ -388,6 +388,24 @@ def test_analyze_single(file_id):
             'timestamp': get_taiwan_time()
         })
 
+@app.route('/test/vision-api')
+def test_vision_api():
+    """測試 Vision API 連接"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({'success': False, 'error': '帳單分析器未初始化'})
+        
+        # 檢查環境變數設定
+        vision_api_key = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
+        return jsonify({
+            'success': True,
+            'api_key_configured': vision_api_key is not None,
+            'api_key_prefix': vision_api_key[:10] if vision_api_key else None,
+            'timestamp': get_taiwan_time()
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """LINE Webhook 處理 - 統一入口"""
