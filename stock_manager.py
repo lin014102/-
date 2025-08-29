@@ -45,10 +45,10 @@ class StockManager:
     def init_google_sheets(self):
         """初始化 Google Sheets 連接"""
         try:
-            creds_json = os.getenv('GOOGLE_CREDENTIALS')
+            creds_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
             
             if not creds_json:
-                print("⚠️ 未找到 GOOGLE_CREDENTIALS 環境變數，使用記憶體模式")
+                print("⚠️ 未找到 GOOGLE_SERVICE_ACCOUNT_JSON 環境變數，使用記憶體模式")
                 return False
             
             creds_dict = json.loads(creds_json)
