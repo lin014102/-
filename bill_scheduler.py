@@ -1,6 +1,4 @@
-def get_notification_user_id(self):
-        """從現有提醒系統獲取用戶 ID"""
-        return self.reminder_bot.user_settings.get('user_id')"""
+"""
 bill_scheduler.py - 信用卡帳單自動分析定時任務
 負責每日 03:30 分析帳單，15:15 推播結果
 """
@@ -16,6 +14,7 @@ from google_drive_handler import GoogleDriveHandler
 from bill_analyzer import BillAnalyzer
 from utils.time_utils import get_taiwan_datetime, get_taiwan_time_hhmm, TAIWAN_TZ
 from utils.line_api import send_push_message
+
 
 class BillScheduler:
     """信用卡帳單分析定時任務管理器"""
@@ -45,6 +44,10 @@ class BillScheduler:
         self.last_notification_date = None
         
         self.scheduler_thread = None
+
+    def get_notification_user_id(self):
+        """從現有提醒系統獲取用戶 ID"""
+        return self.reminder_bot.user_settings.get('user_id')
     
     def start_scheduler(self):
         """啟動定時任務"""
@@ -206,7 +209,6 @@ class BillScheduler:
             
             for i, file_info in enumerate(failed_files[:5], 1):  # 最多顯示5個
                 filename = file_info['filename']
-                # 提取銀行代碼
                 bank_code = filename.split('_')[0] if '_' in filename else '未知'
                 message += f"{i}. {bank_code} - {filename}\n"
             
@@ -227,7 +229,6 @@ class BillScheduler:
         try:
             for file_info in success_files:
                 try:
-                    # 解析分析結果
                     if file_info.get('analysis_result'):
                         analysis_data = json.loads(file_info['analysis_result'])
                         message = self._format_analysis_message(
@@ -236,21 +237,16 @@ class BillScheduler:
                         )
                         
                         send_push_message(notification_user_id, message)
-                        
-                        # 更新推播狀態
                         self.sheets_handler.update_notification_status(
                             file_info['row_index'], 
                             '已推播'
                         )
                         
                         self.logger.info(f"已推播帳單分析結果: {file_info['filename']}")
-                        
-                        # 避免推播頻率過高
-                        time.sleep(1)
+                        time.sleep(1)  # 避免推播過快
                     
                 except Exception as e:
                     self.logger.error(f"推播單個檔案失敗 {file_info['filename']}: {e}")
-                    # 標記推播失敗
                     self.sheets_handler.update_notification_status(
                         file_info['row_index'], 
                         '推播失敗'
@@ -262,10 +258,7 @@ class BillScheduler:
     def _format_analysis_message(self, filename, analysis_data):
         """格式化分析結果訊息"""
         try:
-            # 提取檔案資訊
             bank_code = filename.split('_')[0] if '_' in filename else '未知銀行'
-            
-            # 取得分析結果
             result = analysis_data.get('analysis_result', {})
             document_type = analysis_data.get('document_type', '未知類型')
             bank_name = analysis_data.get('bank_name', bank_code)
@@ -283,10 +276,9 @@ class BillScheduler:
         """格式化交割憑單訊息"""
         message = f"📈 交割憑單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
-        # 處理單筆或多筆交易
         if isinstance(result, list):
             message += f"共 {len(result)} 筆交易:\n\n"
-            for i, trade in enumerate(result[:3], 1):  # 最多顯示3筆
+            for i, trade in enumerate(result[:3], 1):
                 message += self._format_single_trade(i, trade)
             
             if len(result) > 3:
@@ -324,7 +316,6 @@ class BillScheduler:
         """格式化信用卡帳單訊息"""
         message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
-        # 重要金額資訊
         total_due = result.get('total_amount_due', '')
         min_payment = result.get('minimum_payment', '')
         due_date = result.get('payment_due_date', '')
@@ -336,12 +327,9 @@ class BillScheduler:
         if due_date:
             message += f"⏰ 繳款期限: {due_date}\n"
         
-        # 消費筆數
         transactions = result.get('transactions', [])
         if transactions:
             message += f"🛍️ 消費筆數: {len(transactions)}筆\n"
-            
-            # 顯示前3筆消費
             message += f"\n最近消費:\n"
             for i, trans in enumerate(transactions[:3], 1):
                 date = trans.get('date', '')
