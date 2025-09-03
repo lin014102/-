@@ -1,6 +1,6 @@
 """
 main.py - LINE Todo Reminder Bot 主程式
-v3.1 + Gemini AI + 信用卡帳單監控 + 自動帳單分析 完全模組化架構
+v3.1 + Gemini AI + 自動帳單分析 完全模組化架構
 """
 from flask import Flask, request, jsonify
 import os
@@ -20,12 +20,12 @@ from stock_manager import (
     is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
 
-# 🆕 匯入信用卡帳單模組
-from credit_card_manager import (
-    handle_credit_card_command, is_credit_card_command, 
-    is_credit_card_query, get_credit_card_summary,
-    start_credit_card_monitor, get_credit_card_status
-)
+# 🆕 暫時註解信用卡帳單模組 - 檔案已刪除
+# from credit_card_manager import (
+#     handle_credit_card_command, is_credit_card_command, 
+#     is_credit_card_query, get_credit_card_summary,
+#     start_credit_card_monitor, get_credit_card_status
+# )
 
 # 🆕 匯入 Gemini AI 模組
 from gemini_analyzer import EnhancedMessageRouter
@@ -85,11 +85,11 @@ class BackgroundServices:
         print("✅ 提醒機器人已啟動")
     
     def start_credit_card_monitor(self):
-        """啟動信用卡帳單監控"""
+        """暫時停用信用卡帳單監控 - 模組已移除"""
         try:
-            result = start_credit_card_monitor()
-            self.services.append('credit_card_monitor')
-            print("✅ 信用卡帳單監控已啟動")
+            # result = start_credit_card_monitor()
+            # self.services.append('credit_card_monitor')
+            print("⚠️ 信用卡帳單監控已暫時停用 (模組不存在)")
         except Exception as e:
             print(f"⚠️ 信用卡帳單監控啟動失敗: {e}")
     
@@ -116,7 +116,6 @@ def home():
     <p>🚀 模組化架構，完全重構！</p>
     <p>💹 新增即時損益功能！</p>
     <p>🤖 整合 Gemini AI 智能對話！</p>
-    <p>💳 新增信用卡帳單自動監控！</p>
     <p>📊 新增帳單自動分析與推播！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     <h2>測試端點：</h2>
@@ -164,11 +163,17 @@ def health():
     # 🆕 獲取 Gemini AI 狀態
     gemini_status = message_router.gemini_analyzer.enabled
     
-    # 🆕 獲取信用卡帳單監控狀態
-    try:
-        credit_card_status = get_credit_card_status()
-    except:
-        credit_card_status = {'status': 'error', 'gmail_enabled': False, 'groq_enabled': False}
+    # 🆕 信用卡帳單監控狀態 - 提供預設值
+    credit_card_status = {
+        'status': 'disabled', 
+        'gmail_enabled': False, 
+        'groq_enabled': False,
+        'tesseract_enabled': False,
+        'monitored_banks': [],
+        'processed_bills_count': 0,
+        'last_check_time': None,
+        'note': '模組已暫時移除'
+    }
     
     # 🆕 獲取帳單分析定時任務狀態
     try:
@@ -205,16 +210,7 @@ def health():
                 'enabled': gemini_status,
                 'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification']
             },
-            'credit_card_manager': {
-                'status': credit_card_status.get('status', 'unknown'),
-                'gmail_enabled': credit_card_status.get('gmail_enabled', False),
-                'groq_enabled': credit_card_status.get('groq_enabled', False),
-                'tesseract_enabled': credit_card_status.get('tesseract_enabled', False),
-                'monitored_banks': credit_card_status.get('monitored_banks', []),
-                'processed_bills_count': credit_card_status.get('processed_bills_count', 0),
-                'last_check_time': credit_card_status.get('last_check_time'),
-                'features': ['gmail_monitoring', 'auto_pdf_unlock', 'ocr_processing', 'llm_analysis']
-            },
+            'credit_card_manager': credit_card_status,
             'bill_scheduler': {
                 'scheduler_running': bill_scheduler_status.get('scheduler_running', False),
                 'analysis_time': bill_scheduler_status.get('analysis_time', '03:30'),
@@ -420,7 +416,7 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 🆕 增強版訊息路由處理（包含信用卡帳單功能）
+                # 🆕 增強版訊息路由處理（信用卡功能暫時停用）
                 reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
@@ -433,15 +429,15 @@ def webhook():
         return 'OK', 200
 
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合所有功能模組"""
+    """增強版訊息路由器 - 整合所有功能模組（信用卡功能暫時停用）"""
     try:
-        # 🆕 優先檢查信用卡帳單指令
-        if is_credit_card_command(message_text) or is_credit_card_query(message_text):
-            print(f"🔀 路由到信用卡帳單模組: {message_text}")
-            return handle_credit_card_command(message_text)
+        # 🆕 信用卡帳單指令暫時停用
+        # if is_credit_card_command(message_text) or is_credit_card_query(message_text):
+        #     print(f"🔀 路由到信用卡帳單模組: {message_text}")
+        #     return handle_credit_card_command(message_text)
         
         # 檢查股票相關指令
-        elif is_stock_command(message_text):
+        if is_stock_command(message_text):
             print(f"🔀 路由到股票模組: {message_text}")
             return handle_stock_command(message_text)
         
@@ -488,7 +484,7 @@ def initialize_app():
     # 啟動背景服務
     bg_services.start_keep_alive()
     bg_services.start_reminder_bot()
-    bg_services.start_credit_card_monitor()  # 現有的信用卡帳單監控
+    bg_services.start_credit_card_monitor()  # 會顯示停用訊息
     
     # 🆕 新增：啟動帳單分析定時任務
     try:
@@ -503,8 +499,8 @@ def initialize_app():
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
     print("🤖 Gemini AI 模組：✅ 已整合")
-    print("💳 信用卡帳單監控：✅ 已啟動")
-    print("📊 帳單分析定時任務：✅ 已啟動")  # 🆕 新增這行
+    print("💳 信用卡帳單監控：⚠️ 暫時停用")  # 修改這行
+    print("📊 帳單分析定時任務：✅ 已啟動")
     print("🔧 模組化架構：✅ 完全重構")
     print("=" * 60)
     print("🎉 系統初始化完成！")
