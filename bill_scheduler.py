@@ -35,9 +35,9 @@ class BillScheduler:
             self.logger.error(f"帳單分析器初始化失敗: {e}")
             raise
         
-        # 定時任務設定 - 修改為測試用時間
-        self.analysis_time = "3:30"  # 測試用：改為當前時間後5分鐘
-        self.notification_time = "15:15"  # 測試用：改為當前時間後10分鐘
+        # 定時任務設定
+        self.analysis_time = "03:30"  # 每日分析時間
+        self.notification_time = "15:15"  # 每日推播時間
         
         # 防重複執行標記
         self.last_analysis_date = None
