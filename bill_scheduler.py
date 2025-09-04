@@ -313,7 +313,7 @@ class BillScheduler:
         return text + "\n\n"
     
     def _format_credit_card_message(self, filename, bank_name, result):
-        """格式化信用卡帳單訊息 - 改良版（顯示更多明細）"""
+        """格式化信用卡帳單訊息 - 改良版（顯示前30筆明細）"""
         message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
         total_due = result.get('total_amount_due', '')
@@ -331,11 +331,11 @@ class BillScheduler:
         if transactions:
             message += f"🛍️ 消費筆數: {len(transactions)}筆\n"
             
-            # 顯示前8筆交易（從原本的3筆增加）
-            display_count = min(8, len(transactions))
+            # 顯示前30筆交易（從原本的8筆增加）
+            display_count = min(30, len(transactions))
             message += f"\n消費明細 (前{display_count}筆):\n"
             
-            for i, trans in enumerate(transactions[:8], 1):
+            for i, trans in enumerate(transactions[:30], 1):
                 date = trans.get('date', '')
                 merchant = trans.get('merchant', '')
                 amount = trans.get('amount', '')
