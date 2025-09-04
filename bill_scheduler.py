@@ -353,8 +353,8 @@ class BillScheduler:
                     message += "\n"
             
             # 如果還有更多交易，顯示提示
-            if len(transactions) > 8:
-                remaining = len(transactions) - 8
+            if len(transactions) > 30:
+                remaining = len(transactions) - 30
                 message += f"\n📋 還有 {remaining} 筆交易未顯示"
                 message += f"\n💡 如需查看完整明細，請聯繫系統管理員"
         
