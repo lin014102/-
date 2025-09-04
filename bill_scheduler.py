@@ -313,7 +313,7 @@ class BillScheduler:
         return text + "\n\n"
     
     def _format_credit_card_message(self, filename, bank_name, result):
-        """格式化信用卡帳單訊息"""
+        """格式化信用卡帳單訊息 - 改良版（顯示更多明細）"""
         message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
         total_due = result.get('total_amount_due', '')
@@ -330,8 +330,12 @@ class BillScheduler:
         transactions = result.get('transactions', [])
         if transactions:
             message += f"🛍️ 消費筆數: {len(transactions)}筆\n"
-            message += f"\n最近消費:\n"
-            for i, trans in enumerate(transactions[:3], 1):
+            
+            # 顯示前8筆交易（從原本的3筆增加）
+            display_count = min(8, len(transactions))
+            message += f"\n消費明細 (前{display_count}筆):\n"
+            
+            for i, trans in enumerate(transactions[:8], 1):
                 date = trans.get('date', '')
                 merchant = trans.get('merchant', '')
                 amount = trans.get('amount', '')
@@ -341,13 +345,18 @@ class BillScheduler:
                     if date:
                         message += f"{date} "
                     if merchant:
-                        message += f"{merchant} "
+                        # 限制商家名稱長度避免訊息過長
+                        merchant_display = merchant[:25] + "..." if len(merchant) > 25 else merchant
+                        message += f"{merchant_display} "
                     if amount:
                         message += f"{amount}"
                     message += "\n"
             
-            if len(transactions) > 3:
-                message += f"...還有 {len(transactions) - 3} 筆消費\n"
+            # 如果還有更多交易，顯示提示
+            if len(transactions) > 8:
+                remaining = len(transactions) - 8
+                message += f"\n📋 還有 {remaining} 筆交易未顯示"
+                message += f"\n💡 如需查看完整明細，請聯繫系統管理員"
         
         return message
     
