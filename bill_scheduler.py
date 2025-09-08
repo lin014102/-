@@ -1,6 +1,6 @@
 """
-bill_scheduler.py - 信用卡帳單自動分析定時任務
-負責每日 03:30 分析帳單，15:15 推播結果
+bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步
+負責每日 03:30 分析帳單，15:15 推播結果，並同步金額到提醒系統
 """
 
 import os
@@ -17,12 +17,12 @@ from utils.line_api import send_push_message
 
 
 class BillScheduler:
-    """信用卡帳單分析定時任務管理器"""
+    """信用卡帳單分析定時任務管理器 + 帳單金額同步"""
     
     def __init__(self, reminder_bot):
         self.logger = logging.getLogger(__name__)
         
-        # 保存 reminder_bot 實例以獲取用戶 ID
+        # 保存 reminder_bot 實例以獲取用戶 ID 並同步帳單金額
         self.reminder_bot = reminder_bot
         
         # 初始化各個處理器
@@ -225,18 +225,25 @@ class BillScheduler:
             self.logger.error(f"發送失敗通知錯誤: {e}")
     
     def _send_success_notifications(self, success_files, notification_user_id):
-        """發送成功分析通知"""
+        """發送成功分析通知（修改版，包含帳單金額同步）"""
         try:
             for file_info in success_files:
                 try:
                     if file_info.get('analysis_result'):
                         analysis_data = json.loads(file_info['analysis_result'])
+                        
+                        # 原本的推播邏輯
                         message = self._format_analysis_message(
                             file_info['filename'], 
                             analysis_data
                         )
-                        
                         send_push_message(notification_user_id, message)
+                        
+                        # 🆕 新增：如果是信用卡帳單，同步金額到提醒系統
+                        if analysis_data.get('document_type') != "交割憑單":
+                            self._sync_bill_amount_to_reminder(analysis_data, file_info['filename'])
+                        
+                        # 原本的狀態更新
                         self.sheets_handler.update_notification_status(
                             file_info['row_index'], 
                             '已推播'
@@ -254,6 +261,42 @@ class BillScheduler:
                     
         except Exception as e:
             self.logger.error(f"發送成功通知錯誤: {e}")
+    
+    def _sync_bill_amount_to_reminder(self, analysis_data, filename):
+        """🆕 新增：將帳單金額同步到提醒系統"""
+        try:
+            result = analysis_data.get('analysis_result', {})
+            bank_name = analysis_data.get('bank_name', '')
+            total_due = result.get('total_amount_due', '')
+            due_date = result.get('payment_due_date', '')
+            statement_date = result.get('statement_date', '')
+            
+            if bank_name and total_due and due_date:
+                # 呼叫提醒系統的儲存函數
+                success = self.reminder_bot.update_bill_amount(
+                    bank_name, 
+                    total_due, 
+                    due_date,
+                    statement_date
+                )
+                
+                if success:
+                    self.logger.info(f"✅ 同步帳單金額成功: {bank_name} - {total_due}")
+                else:
+                    self.logger.error(f"❌ 同步帳單金額失敗: {bank_name}")
+            else:
+                missing_fields = []
+                if not bank_name:
+                    missing_fields.append('bank_name')
+                if not total_due:
+                    missing_fields.append('total_amount_due')
+                if not due_date:
+                    missing_fields.append('payment_due_date')
+                
+                self.logger.warning(f"⚠️ 同步帳單金額跳過，缺少欄位: {missing_fields} - 檔案: {filename}")
+                
+        except Exception as e:
+            self.logger.error(f"❌ 同步帳單金額異常: {e} - 檔案: {filename}")
     
     def _format_analysis_message(self, filename, analysis_data):
         """格式化分析結果訊息"""
@@ -313,7 +356,7 @@ class BillScheduler:
         return text + "\n\n"
     
     def _format_credit_card_message(self, filename, bank_name, result):
-        """格式化信用卡帳單訊息 - 改良版（顯示前30筆明細）"""
+        """格式化信用卡帳單訊息 - 改良版（顯示前30筆明細）+ 同步提示"""
         message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
         total_due = result.get('total_amount_due', '')
@@ -326,6 +369,10 @@ class BillScheduler:
             message += f"💳 最低應繳: {min_payment}\n"
         if due_date:
             message += f"⏰ 繳款期限: {due_date}\n"
+        
+        # 🆕 新增同步提示
+        if total_due and due_date:
+            message += f"📊 已同步到提醒系統，下次提醒會顯示具體金額\n"
         
         transactions = result.get('transactions', [])
         if transactions:
