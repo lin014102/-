@@ -1,6 +1,6 @@
 """
-reminder_bot.py - 提醒機器人模組 (MongoDB Atlas 版本)
-從 app.py 拆分出來
+reminder_bot.py - 提醒機器人模組 (MongoDB Atlas 版本) + 帳單金額整合
+從 app.py 拆分出來，新增帳單金額顯示功能
 """
 import re
 import os
@@ -12,7 +12,7 @@ from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_d
 from utils.line_api import send_push_message
 
 class ReminderBot:
-    """提醒機器人 (MongoDB Atlas 版本)"""
+    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合"""
     
     def __init__(self, todo_manager):
         """初始化提醒機器人"""
@@ -24,6 +24,7 @@ class ReminderBot:
             print("⚠️ 警告：ReminderBot 找不到 MONGODB_URI 環境變數，使用記憶體模式")
             self._short_reminders = []
             self._time_reminders = []
+            self._bill_amounts = {}  # 新增：帳單金額記憶體儲存
             self.use_mongodb = False
         else:
             try:
@@ -40,6 +41,7 @@ class ReminderBot:
                 self.short_reminders_collection = self.db.short_reminders
                 self.time_reminders_collection = self.db.time_reminders
                 self.user_settings_collection = self.db.user_settings
+                self.bill_amounts_collection = self.db.bill_amounts  # 新增：帳單金額集合
                 self.use_mongodb = True
                 print("✅ ReminderBot 成功連接到 MongoDB Atlas")
             except Exception as e:
@@ -47,6 +49,7 @@ class ReminderBot:
                 print("⚠️ ReminderBot 使用記憶體模式")
                 self._short_reminders = []
                 self._time_reminders = []
+                self._bill_amounts = {}  # 新增：帳單金額記憶體儲存
                 self.use_mongodb = False
         
         # 載入或初始化用戶設定
@@ -61,6 +64,173 @@ class ReminderBot:
             'dated_todo_evening_date': None
         }
         self.reminder_thread = None
+    
+    # ===== 新增：帳單金額管理功能 =====
+    
+    def update_bill_amount(self, bank_name, amount, due_date, statement_date=None):
+        """
+        更新銀行卡費金額 (由帳單分析模組呼叫)
+        
+        Args:
+            bank_name: 銀行名稱 (如 "永豐銀行")
+            amount: 應繳金額 (如 "NT$15,000")
+            due_date: 繳款截止日 (如 "2025/01/24")
+            statement_date: 帳單日期 (可選)
+        """
+        try:
+            # 標準化銀行名稱
+            normalized_bank = self._normalize_bank_name(bank_name)
+            
+            # 取得月份 (用繳款截止日)
+            due_datetime = datetime.strptime(due_date, '%Y/%m/%d')
+            month_key = due_datetime.strftime('%Y-%m')
+            
+            bill_data = {
+                'bank_name': normalized_bank,
+                'original_bank_name': bank_name,
+                'amount': amount,
+                'due_date': due_date,
+                'statement_date': statement_date,
+                'month': month_key,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            if self.use_mongodb:
+                # 更新或新增到 MongoDB
+                self.bill_amounts_collection.update_one(
+                    {
+                        'bank_name': normalized_bank,
+                        'month': month_key
+                    },
+                    {'$set': bill_data},
+                    upsert=True
+                )
+            else:
+                # 記憶體模式
+                if normalized_bank not in self._bill_amounts:
+                    self._bill_amounts[normalized_bank] = {}
+                self._bill_amounts[normalized_bank][month_key] = bill_data
+            
+            print(f"✅ 更新 {normalized_bank} {month_key} 卡費: {amount}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 更新卡費金額失敗: {e}")
+            return False
+    
+    def _normalize_bank_name(self, bank_name):
+        """簡化版銀行名稱標準化 - 使用關鍵字模糊匹配"""
+        name = bank_name.upper()
+        
+        if '永豐' in name or 'SINOPAC' in name:
+            return '永豐'
+        if '台新' in name or 'TAISHIN' in name:
+            return '台新'
+        if '國泰' in name or 'CATHAY' in name:
+            return '國泰'
+        if '星展' in name or 'DBS' in name:
+            return '星展'
+        if '匯豐' in name or 'HSBC' in name:
+            return '匯豐'
+        if '玉山' in name or 'ESUN' in name or 'E.SUN' in name:
+            return '玉山'
+        if '聯邦' in name or 'UNION' in name:
+            return '聯邦'
+        
+        return bank_name  # 找不到就回傳原名
+    
+    def get_bill_amount(self, bank_name, target_month=None):
+        """
+        取得指定銀行的最新卡費金額
+        
+        Args:
+            bank_name: 銀行名稱 (如 "永豐")
+            target_month: 目標月份 (可選，格式：2025-01)
+            
+        Returns:
+            dict: {amount: str, due_date: str} 或 None
+        """
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            
+            if self.use_mongodb:
+                query = {'bank_name': normalized_bank}
+                if target_month:
+                    query['month'] = target_month
+                
+                # 查詢最新資料
+                result = self.bill_amounts_collection.find(query).sort('updated_at', -1).limit(1)
+                
+                for bill_data in result:
+                    return {
+                        'amount': bill_data['amount'],
+                        'due_date': bill_data['due_date'],
+                        'statement_date': bill_data.get('statement_date'),
+                        'month': bill_data['month']
+                    }
+            else:
+                # 記憶體模式
+                if normalized_bank in self._bill_amounts:
+                    months = sorted(self._bill_amounts[normalized_bank].keys(), reverse=True)
+                    if months:
+                        latest_data = self._bill_amounts[normalized_bank][months[0]]
+                        return {
+                            'amount': latest_data['amount'],
+                            'due_date': latest_data['due_date'],
+                            'statement_date': latest_data.get('statement_date'),
+                            'month': latest_data['month']
+                        }
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ 取得卡費金額失敗: {e}")
+            return None
+    
+    def _enhance_todo_with_bill_amount(self, todo_content):
+        """簡化版待辦事項增強 - 使用關鍵字匹配"""
+        try:
+            # 檢查是否為卡費相關事項
+            if '卡費' in todo_content:
+                bill_info = None
+                
+                # 用簡單的關鍵字檢查
+                if '永豐' in todo_content:
+                    bill_info = self.get_bill_amount('永豐')
+                elif '台新' in todo_content:
+                    bill_info = self.get_bill_amount('台新')
+                elif '國泰' in todo_content:
+                    bill_info = self.get_bill_amount('國泰')
+                elif '星展' in todo_content:
+                    bill_info = self.get_bill_amount('星展')
+                elif '匯豐' in todo_content:
+                    bill_info = self.get_bill_amount('匯豐')
+                elif '玉山' in todo_content:
+                    bill_info = self.get_bill_amount('玉山')
+                elif '聯邦' in todo_content:
+                    bill_info = self.get_bill_amount('聯邦')
+                
+                if bill_info:
+                    # 簡化日期格式 (從 2025/01/24 轉為 1/24)
+                    try:
+                        due_date = bill_info['due_date']
+                        if '/' in due_date and len(due_date.split('/')) == 3:
+                            _, month, day = due_date.split('/')
+                            formatted_date = f"{int(month)}/{int(day)}"
+                        else:
+                            formatted_date = due_date
+                        
+                        return f"{todo_content} - {bill_info['amount']}（截止：{formatted_date}）"
+                    except:
+                        return f"{todo_content} - {bill_info['amount']}"
+            
+            return todo_content
+            
+        except Exception as e:
+            print(f"增強待辦事項顯示失敗: {e}")
+            return todo_content
+    
+    # ===== 以下為原有功能，略作修改 =====
     
     def _load_user_settings(self):
         """載入用戶設定"""
@@ -359,7 +529,7 @@ class ReminderBot:
                 time.sleep(60)
     
     def send_daily_reminder(self, user_id, current_time):
-        """發送每日提醒"""
+        """發送每日提醒（修改版，包含帳單金額）"""
         time_icon = '🌅' if current_time == self.user_settings['morning_time'] else '🌙'
         time_text = '早安' if current_time == self.user_settings['morning_time'] else '晚安'
         
@@ -373,7 +543,11 @@ class ReminderBot:
                 
                 for i, todo in enumerate(pending_todos[:5], 1):
                     date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
-                    message += f'{i}. ⭕ {todo["content"]}{date_info}\n'
+                    
+                    # 🆕 增強顯示：加入帳單金額
+                    enhanced_content = self._enhance_todo_with_bill_amount(todo["content"])
+                    
+                    message += f'{i}. ⭕ {enhanced_content}{date_info}\n'
                 
                 if len(pending_todos) > 5:
                     message += f'\n...還有 {len(pending_todos) - 5} 項未完成\n'
@@ -454,7 +628,7 @@ class ReminderBot:
             print(f"✅ 已發送每月正式提醒，加入 {len(added_items)} 項事項 - 台灣時間: {get_taiwan_time()}")
     
     def check_dated_todo_preview(self, taiwan_now, user_id):
-        """新增：檢查明天有日期的待辦事項預告"""
+        """檢查明天有日期的待辦事項預告"""
         if not user_id:
             return
         
@@ -479,7 +653,7 @@ class ReminderBot:
             print(f"✅ 已發送明日待辦預告，明天有 {len(tomorrow_todos)} 項有日期事項 - 台灣時間: {get_taiwan_time()}")
     
     def check_dated_todo_reminders(self, taiwan_now, user_id, time_type):
-        """新增：檢查有日期待辦事項的當天提醒"""
+        """檢查有日期待辦事項的當天提醒"""
         if not user_id:
             return
         
