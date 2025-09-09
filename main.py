@@ -676,13 +676,43 @@ def webhook():
         print(f"❌ Webhook 處理錯誤: {e} - {get_taiwan_time()}")
         return 'OK', 200
 
+def is_todo_query(message_text):
+    """檢查是否為待辦事項相關查詢"""
+    todo_keywords = [
+        '查詢', '清單', '列表', '待辦', '任務', 'todo', 
+        '提醒', '事項', '計畫', '安排'
+    ]
+    
+    # 單純的「查詢」應該是待辦事項查詢
+    if message_text.strip() == '查詢':
+        return True
+    
+    # 包含待辦相關關鍵字的查詢
+    if any(keyword in message_text for keyword in todo_keywords):
+        # 但排除明確的股票相關查詢
+        stock_exclusions = [
+            '股票', '股價', '損益', '帳戶', '交易', '成本',
+            '總覽', '即時', '代號'
+        ]
+        
+        # 如果同時包含股票關鍵字，則不視為待辦事項查詢
+        if not any(stock_word in message_text for stock_word in stock_exclusions):
+            return True
+    
+    return False
+
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合所有功能模組（包含生理期追蹤與下次預測）"""
+    """增強版訊息路由器 - 整合所有功能模組（修正優先順序）"""
     try:
         # 🆕 生理期追蹤指令檢查（包含下次預測）
         if is_period_command(message_text):
             print(f"🔀 路由到生理期追蹤模組: {message_text}")
             return handle_period_command(message_text, user_id)
+        
+        # ✅ 優先檢查待辦事項相關的查詢（避免被股票查詢攔截）
+        elif is_todo_query(message_text):
+            print(f"🔀 路由到待辦事項模組: {message_text}")
+            return message_router.route_message(message_text, user_id)
         
         # 檢查股票相關指令
         elif is_stock_command(message_text):
@@ -712,7 +742,7 @@ def enhanced_message_router(message_text, user_id):
                 parts = message_text.split()
                 account_name = parts[1] if len(parts) > 1 else None
                 return get_stock_realtime_pnl(account_name)
-            elif message_text.endswith('查詢'):
+            elif message_text.endswith('查詢') and len(message_text) > 2:
                 account_name = message_text[:-2]
                 return get_stock_summary(account_name)
         
