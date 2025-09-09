@@ -1,6 +1,6 @@
 """
-reminder_bot.py - 提醒機器人模組 (修正版生理期追蹤)
-修正 get_period_status 函數的錯誤處理
+reminder_bot.py - 提醒機器人模組 (修正版生理期追蹤 + 新增下次預測查詢)
+修正 get_period_status 函數的錯誤處理 + 新增 get_next_period_prediction 功能
 """
 import re
 import os
@@ -12,7 +12,7 @@ from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_d
 from utils.line_api import send_push_message
 
 class ReminderBot:
-    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤"""
+    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤 + 下次預測查詢"""
     
     def __init__(self, todo_manager):
         """初始化提醒機器人"""
@@ -216,6 +216,7 @@ class ReminderBot:
             message += "\n💡 指令：\n"
             message += "• 記錄生理期 YYYY/MM/DD\n"
             message += "• 生理期結束 YYYY/MM/DD\n"
+            message += "• 下次生理期\n"
             message += "• 生理期設定"
             
             print("✅ 狀態獲取成功")
@@ -226,6 +227,114 @@ class ReminderBot:
             import traceback
             traceback.print_exc()
             return "❌ 獲取狀態失敗，請稍後再試"
+    
+    def get_next_period_prediction(self, user_id):
+        """🆕 獲取下次生理期預測日期 - 專門的查詢功能"""
+        try:
+            print(f"🔍 開始預測下次生理期，用戶ID: {user_id}")
+            
+            records = self._get_period_records_safe(user_id)
+            print(f"📊 找到 {len(records)} 筆記錄")
+            
+            if not records:
+                return "📅 下次生理期預測\n\n❌ 尚未有任何記錄\n💡 請先使用「記錄生理期 YYYY/MM/DD」建立歷史資料，才能進行預測"
+            
+            if len(records) < 2:
+                # 如果只有一筆記錄，使用預設週期28天
+                latest_record = records[0]
+                last_start = datetime.strptime(latest_record['start_date'], '%Y-%m-%d')
+                
+                # 獲取用戶設定的預設週期
+                settings = self._get_period_settings(user_id)
+                default_cycle = settings.get('default_cycle_length', 28)
+                
+                predicted_date = last_start + timedelta(days=default_cycle)
+                today = datetime.now().date()
+                days_until = (predicted_date.date() - today).days
+                
+                message = "📅 下次生理期預測\n\n"
+                message += f"⚠️ 記錄不足，使用預設週期 {default_cycle} 天\n"
+                message += f"📅 預測日期：{predicted_date.strftime('%Y-%m-%d')} ({predicted_date.strftime('%A')})\n"
+                
+                if days_until > 0:
+                    message += f"⏳ 距離：{days_until} 天後\n"
+                elif days_until == 0:
+                    message += f"📍 就是今天！\n"
+                else:
+                    message += f"⚠️ 可能已過期 {abs(days_until)} 天\n"
+                
+                message += f"\n💡 記錄數：{len(records)} 筆\n"
+                message += "💡 至少需要 2 筆記錄才能計算準確週期"
+                
+                return message
+            
+            # 計算週期長度
+            cycles = self._calculate_simple_cycles(records)
+            
+            if not cycles:
+                return "📅 下次生理期預測\n\n⚠️ 週期資料異常，無法計算\n💡 請檢查記錄的日期是否正確"
+            
+            # 計算統計資料
+            avg_cycle = sum(cycles) // len(cycles)
+            min_cycle = min(cycles)
+            max_cycle = max(cycles)
+            
+            # 最近一次記錄
+            latest_record = records[0]
+            last_start = datetime.strptime(latest_record['start_date'], '%Y-%m-%d')
+            
+            # 預測下次日期
+            predicted_date = last_start + timedelta(days=avg_cycle)
+            
+            # 計算日期範圍（考慮週期變化）
+            earliest_date = last_start + timedelta(days=min_cycle)
+            latest_date = last_start + timedelta(days=max_cycle)
+            
+            # 計算距離今天的天數
+            today = datetime.now().date()
+            days_until_predicted = (predicted_date.date() - today).days
+            days_until_earliest = (earliest_date.date() - today).days
+            days_until_latest = (latest_date.date() - today).days
+            
+            message = "📅 下次生理期預測\n\n"
+            message += f"🎯 最可能日期：{predicted_date.strftime('%Y-%m-%d')} ({predicted_date.strftime('%A')})\n"
+            
+            if days_until_predicted > 0:
+                message += f"⏳ 距離：{days_until_predicted} 天後\n"
+            elif days_until_predicted == 0:
+                message += f"📍 就是今天！\n"
+            else:
+                message += f"⚠️ 可能已過期 {abs(days_until_predicted)} 天\n"
+            
+            message += f"\n📊 可能範圍：\n"
+            message += f"🟢 最早：{earliest_date.strftime('%Y-%m-%d')} ({days_until_earliest}天{"後" if days_until_earliest >= 0 else "前"})\n"
+            message += f"🔴 最晚：{latest_date.strftime('%Y-%m-%d')} ({days_until_latest}天{"後" if days_until_latest >= 0 else "前"})\n"
+            
+            message += f"\n📈 週期分析：\n"
+            message += f"📊 平均週期：{avg_cycle} 天\n"
+            message += f"📏 週期範圍：{min_cycle} - {max_cycle} 天\n"
+            message += f"📋 分析基礎：{len(cycles)} 個週期\n"
+            
+            # 新增貼心提醒
+            if days_until_earliest <= 7:
+                message += f"\n💡 貼心提醒：\n"
+                if days_until_earliest <= 3:
+                    message += f"🎒 建議準備生理用品！\n"
+                elif days_until_earliest <= 7:
+                    message += f"📝 可以開始準備相關用品\n"
+            
+            message += f"\n📍 基於最近記錄：{latest_record['start_date']}\n"
+            status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+            message += f"{status_msg}"
+            
+            print(f"✅ 下次生理期預測完成: {predicted_date.strftime('%Y-%m-%d')}")
+            return message
+            
+        except Exception as e:
+            print(f"❌ 獲取下次生理期預測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return "❌ 預測失敗，請稍後再試"
     
     def _get_period_records_safe(self, user_id):
         """安全的獲取生理期記錄"""
@@ -373,9 +482,11 @@ class ReminderBot:
             cycles = self._calculate_simple_cycles(records) if len(records) >= 2 else []
             
             if not cycles:
-                return None
+                # 如果沒有週期資料，使用預設週期
+                avg_cycle = settings.get('default_cycle_length', 28)
+            else:
+                avg_cycle = sum(cycles) // len(cycles)
             
-            avg_cycle = sum(cycles) // len(cycles)
             today = taiwan_now.date()
             
             last_start = datetime.strptime(records[0]['start_date'], '%Y-%m-%d').date()
