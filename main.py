@@ -1,6 +1,6 @@
 """
 main.py - LINE Todo Reminder Bot 主程式
-v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 完全模組化架構
+v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次生理期預測 完全模組化架構
 """
 from flask import Flask, request, jsonify
 import os
@@ -111,7 +111,7 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤</h1>
+    <h1>LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次預測</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>🚀 模組化架構，完全重構！</p>
     <p>💹 新增即時損益功能！</p>
@@ -119,6 +119,7 @@ def home():
     <p>📊 新增帳單自動分析與推播！</p>
     <p>💳 新增帳單金額智能提醒整合！</p>
     <p>🩸 新增生理期智能追蹤提醒！</p>
+    <p>📅 🆕 新增下次生理期預測查詢！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     <h2>測試端點：</h2>
     <ul>
@@ -131,6 +132,7 @@ def home():
         <li><a href="/test/bank-mapping">測試銀行名稱對應</a></li>
         <li><a href="/test/period-tracker">測試生理期追蹤</a></li>
         <li><a href="/test/add-test-period">新增測試生理期資料</a></li>
+        <li><a href="/test/next-period-prediction">🆕 測試下次生理期預測</a></li>
     </ul>
     """
 
@@ -194,7 +196,7 @@ def health():
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.2_modular_architecture_with_period_tracker',
+        'version': 'v3.2_modular_architecture_with_next_period_prediction',
         
         # 模組狀態
         'modules': {
@@ -237,7 +239,7 @@ def health():
             'period_tracker': {
                 'mongodb_enabled': reminder_bot.use_mongodb,
                 'collection_ready': hasattr(reminder_bot, 'period_records_collection') if reminder_bot.use_mongodb else True,
-                'features': ['cycle_calculation', 'prediction', 'smart_reminders', 'health_tracking']
+                'features': ['cycle_calculation', 'prediction', 'smart_reminders', 'health_tracking', 'next_period_prediction']
             },
             'background_services': bg_services.services
         }
@@ -549,7 +551,7 @@ def test_bank_mapping():
             'timestamp': get_taiwan_time()
         })
 
-# ===== 🆕 生理期追蹤測試端點 =====
+# ===== 生理期追蹤測試端點 =====
 
 @app.route('/test/period-tracker')
 def test_period_tracker():
@@ -615,6 +617,37 @@ def test_add_period():
             'timestamp': get_taiwan_time()
         })
 
+# ===== 🆕 下次生理期預測測試端點 =====
+
+@app.route('/test/next-period-prediction')
+def test_next_period_prediction():
+    """🆕 測試下次生理期預測功能"""
+    try:
+        test_user_id = "test_user_period"
+        
+        # 獲取下次生理期預測
+        prediction = reminder_bot.get_next_period_prediction(test_user_id)
+        
+        # 同時獲取一般狀態用於比較
+        status = reminder_bot.get_period_status(test_user_id)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'next_period_prediction': prediction,
+                'general_status': status,
+                'test_user_id': test_user_id
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
 # ===== Webhook 處理 =====
 
 @app.route('/webhook', methods=['POST'])
@@ -631,7 +664,7 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 🆕 增強版訊息路由處理（包含生理期追蹤）
+                # 🆕 增強版訊息路由處理（包含生理期追蹤與下次預測）
                 reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
@@ -644,9 +677,9 @@ def webhook():
         return 'OK', 200
 
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合所有功能模組（包含生理期追蹤）"""
+    """增強版訊息路由器 - 整合所有功能模組（包含生理期追蹤與下次預測）"""
     try:
-        # 🆕 生理期追蹤指令檢查
+        # 🆕 生理期追蹤指令檢查（包含下次預測）
         if is_period_command(message_text):
             print(f"🔀 路由到生理期追蹤模組: {message_text}")
             return handle_period_command(message_text, user_id)
@@ -691,24 +724,29 @@ def enhanced_message_router(message_text, user_id):
         print(f"❌ 訊息路由錯誤: {e}")
         return f"❌ 系統處理錯誤，請稍後再試\n🕒 {get_taiwan_time()}"
 
-# ===== 🆕 生理期追蹤訊息處理函數 =====
+# ===== 🆕 生理期追蹤訊息處理函數（新增下次預測功能） =====
 
 def is_period_command(message_text):
-    """檢查是否為生理期相關指令"""
+    """檢查是否為生理期相關指令（包含下次預測）"""
     period_keywords = [
         '記錄生理期', '生理期開始', '生理期記錄',
         '生理期結束', '結束生理期',
         '生理期查詢', '生理期狀態', '週期查詢',
-        '生理期設定', '週期設定'
+        '生理期設定', '週期設定',
+        '下次生理期', '下次月經', '生理期預測'  # 🆕 新增下次預測關鍵字
     ]
     
     return any(keyword in message_text for keyword in period_keywords)
 
 def handle_period_command(message_text, user_id):
-    """處理生理期相關指令"""
+    """處理生理期相關指令（包含下次預測）"""
     try:
+        # 🆕 下次生理期預測查詢
+        if any(keyword in message_text for keyword in ['下次生理期', '下次月經', '生理期預測']):
+            return reminder_bot.get_next_period_prediction(user_id)
+        
         # 記錄生理期開始
-        if any(keyword in message_text for keyword in ['記錄生理期', '生理期開始', '生理期記錄']):
+        elif any(keyword in message_text for keyword in ['記錄生理期', '生理期開始', '生理期記錄']):
             # 提取日期
             date_match = re.search(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})', message_text)
             if date_match:
@@ -751,7 +789,7 @@ def handle_period_command(message_text, user_id):
             return reminder_bot.set_period_settings(user_id, cycle_length, reminder_days)
         
         else:
-            return "❌ 生理期指令格式錯誤\n\n💡 可用指令：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n• 生理期查詢\n• 生理期設定 [週期天數] [提前天數]"
+            return "❌ 生理期指令格式錯誤\n\n💡 可用指令：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n• 生理期查詢\n• 下次生理期 🆕\n• 生理期設定 [週期天數] [提前天數]"
     
     except Exception as e:
         print(f"❌ 處理生理期指令失敗: {e}")
@@ -759,7 +797,7 @@ def handle_period_command(message_text, user_id):
 
 def initialize_app():
     """初始化應用程式"""
-    print("🚀 LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 啟動中...")
+    print("🚀 LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次預測 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
@@ -784,6 +822,7 @@ def initialize_app():
     print("📊 帳單分析定時任務：✅ 已啟動")
     print("💰 帳單金額智能提醒：✅ 已整合")
     print("🩸 生理期智能追蹤：✅ 已整合")
+    print("📅 下次生理期預測：✅ 新功能已加入")
     print("🔧 模組化架構：✅ 完全重構")
     print("=" * 60)
     print("🎉 系統初始化完成！")
