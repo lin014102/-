@@ -571,7 +571,7 @@ class StockManager:
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
         
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4}), message_text):
             account, stock_name, stock_code, quantity, amount, date = match.groups()
             try:
                 year = datetime.now().year
@@ -583,7 +583,7 @@ class StockManager:
             return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
         
-        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})$', message_text):
+        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4}), message_text):
             account, stock_name, stock_code, quantity, amount, date = match.groups()
             try:
                 year = datetime.now().year
@@ -1231,17 +1231,46 @@ def is_stock_command(message_text):
 
 
 def is_stock_query(message_text):
-    """判斷是否為股票查詢指令 - 對外接口"""
-    query_patterns = [
+    """判斷是否為股票查詢指令 - 對外接口 (修正版)"""
+    # 明確的股票查詢關鍵字
+    stock_specific_patterns = [
         '總覽', '帳戶列表', '股票幫助', '交易記錄', '成本查詢',
         '即時損益', '股價查詢', '股價', '檢查代號', '批量設定代號',
         '估價查詢', '即時股價查詢'
     ]
     
-    return any(pattern in message_text for pattern in query_patterns) or \
-           message_text.endswith('查詢') or \
-           message_text.startswith('即時損益') or \
-           message_text.startswith('估價查詢')
+    # 檢查是否包含明確的股票相關關鍵字
+    if any(pattern in message_text for pattern in stock_specific_patterns):
+        return True
+    
+    # 檢查是否以「即時損益」或「即時股價查詢」開頭
+    if message_text.startswith('即時損益') or message_text.startswith('估價查詢'):
+        return True
+    
+    # 檢查是否為明確的帳戶名稱查詢格式（避免誤判單純的「查詢」）
+    if message_text.endswith('查詢') and len(message_text) > 2:
+        account_part = message_text[:-2].strip()
+        
+        # 排除一些明顯不是帳戶名稱的查詢
+        non_account_queries = [
+            '待辦', '任務', 'todo', '提醒', '清單', 
+            '生理期', '帳單', '卡費', '股票', '股價',
+            '成本', '損益', '代號', '交易'
+        ]
+        
+        # 如果查詢內容包含非帳戶相關關鍵字，不視為股票查詢
+        if any(keyword in account_part for keyword in non_account_queries):
+            return False
+            
+        # 如果是純粹的「查詢」，不視為股票查詢
+        if account_part == '':
+            return False
+            
+        # 檢查是否可能是帳戶名稱（通常是中文姓名或簡短稱呼）
+        if len(account_part) <= 4 and account_part.replace(' ', ''):
+            return True
+    
+    return False
 
 
 if __name__ == "__main__":
