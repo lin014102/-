@@ -1,4 +1,25 @@
-# news_bot_main.py - 支援設定指令
+elif message_text in ['新聞分類', '分類設定', '選擇分類']:
+            return """📰 新聞分類選單
+
+請選擇您想要的新聞類型：
+
+💎 1. 重點公司
+💼 2. 產業趨勢  
+📊 3. 經濟指標
+🌍 4. 國際市場
+💰 5. 投資理財
+🏠 6. 房地產
+⚡ 7. 科技創新
+🎯 8. 自訂關鍵字
+🗑️ 9. 清空過濾
+
+請輸入數字選擇，例如：選擇 1"""
+        
+        elif message_text.startswith('選擇'):
+            # 處理分類選擇
+            match = re.search(r'選擇\s*(\d+)', message_text)
+            if match:
+                choice = int(match.group(1))# news_bot_main.py - 支援設定指令
 from flask import Flask, request, jsonify
 import os
 import threading
