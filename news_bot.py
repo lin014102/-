@@ -1,4 +1,4 @@
-# news_bot.py - 優化版本
+# news_bot.py - 完整版本支援新聞分類
 import os
 import requests
 import threading
@@ -17,7 +17,7 @@ class NewsBot:
         
         # 新增設定選項
         self.check_interval = 300  # 預設5分鐘(300秒)
-        self.keywords_filter = []  # 關鍵字過濾
+        self.news_category = 'headline'  # 預設綜合新聞
         self.start_time = dt_time(9, 0)   # 推播開始時間 9:00
         self.end_time = dt_time(21, 0)    # 推播結束時間 21:00
         self.weekend_enabled = False      # 週末是否推播
@@ -44,17 +44,39 @@ class NewsBot:
         except:
             return "時間格式錯誤"
     
-    def set_keywords_filter(self, keywords):
-        """設定關鍵字過濾"""
-        if isinstance(keywords, str):
-            self.keywords_filter = [k.strip() for k in keywords.split(',') if k.strip()]
-        elif isinstance(keywords, list):
-            self.keywords_filter = keywords
+    def set_news_category(self, category):
+        """設定新聞分類"""
+        valid_categories = {
+            'headline': '綜合頭條',
+            'tw_stock': '台股新聞', 
+            'us_stock': '美股新聞',
+            'forex': '外匯新聞',
+            'futures': '期貨新聞'
+        }
         
-        if self.keywords_filter:
-            return f"已設定關鍵字過濾：{', '.join(self.keywords_filter)}"
+        if category in valid_categories:
+            self.news_category = category
+            return f"已設定新聞分類為：{valid_categories[category]}"
         else:
-            return "已清空關鍵字過濾"
+            return f"❌ 無效的分類，可用分類：{', '.join(valid_categories.keys())}"
+    
+    def get_category_help(self):
+        """取得分類說明"""
+        return """📰 新聞分類說明
+
+🔢 可用分類：
+• headline - 綜合頭條新聞
+• tw_stock - 台股專區新聞  
+• us_stock - 美股專區新聞
+• forex - 外匯新聞
+• futures - 期貨新聞
+
+💡 使用方式：
+• 台股模式 - 切換到台股新聞
+• 美股模式 - 切換到美股新聞
+• 綜合模式 - 切換到綜合新聞
+
+📊 當前分類：""" + self.news_category
     
     def toggle_weekend(self):
         """切換週末推播設定"""
@@ -83,25 +105,6 @@ class NewsBot:
                 return False, f"不在推播時間內 ({self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')})"
         
         return True, "在推播時間內"
-    
-    def matches_keywords(self, news_data):
-        """檢查新聞是否符合關鍵字過濾"""
-        if not self.keywords_filter:
-            return True, "無關鍵字過濾"
-        
-        title = news_data.get('title', '').lower()
-        summary = news_data.get('summary', '').lower()
-        content = f"{title} {summary}"
-        
-        matched_keywords = []
-        for keyword in self.keywords_filter:
-            if keyword.lower() in content:
-                matched_keywords.append(keyword)
-        
-        if matched_keywords:
-            return True, f"符合關鍵字: {', '.join(matched_keywords)}"
-        else:
-            return False, "不符合關鍵字過濾"
         
     def fetch_cnyes_news(self):
         """抓取鉅亨網新聞"""
@@ -136,7 +139,7 @@ class NewsBot:
             return []
     
     def check_new_news(self):
-        """檢查是否有新新聞（加入過濾邏輯）"""
+        """檢查是否有新新聞"""
         news_list = self.fetch_cnyes_news()
         
         if not news_list:
@@ -163,14 +166,7 @@ class NewsBot:
                 self.last_news_id = latest_news_id  # 仍要更新ID避免重複檢查
                 return None
             
-            # 檢查關鍵字過濾
-            keyword_ok, keyword_msg = self.matches_keywords(latest_news)
-            if not keyword_ok:
-                print(f"跳過推播: {keyword_msg}")
-                self.last_news_id = latest_news_id  # 仍要更新ID避免重複檢查
-                return None
-            
-            print(f"通過所有檢查，準備推播: {keyword_msg}")
+            print(f"通過時間檢查，準備推播")
             self.last_news_id = latest_news_id
             return latest_news
         
@@ -255,14 +251,7 @@ class NewsBot:
                 message += f"📄 {content_summary}\n\n"
             
             message += f"🕐 {formatted_time}\n"
-            message += f"📰 來源：鉅亨網\n"
-            
-            # 如果有關鍵字過濾，顯示符合的關鍵字
-            if self.keywords_filter:
-                keyword_ok, keyword_msg = self.matches_keywords(news_data)
-                if keyword_ok and "符合關鍵字" in keyword_msg:
-                    message += f"🔍 {keyword_msg}\n"
-            
+            message += f"📰 來源：鉅亨網 ({self.news_category})\n"
             message += f"🔗 新聞ID：{news_id}"
             
             return message
@@ -317,10 +306,17 @@ class NewsBot:
         self.news_thread = threading.Thread(target=self.news_check_loop, daemon=True)
         self.news_thread.start()
         
-        settings_info = ""
-        if self.keywords_filter:
-            settings_info += f"\n🔍 關鍵字過濾：{', '.join(self.keywords_filter)}"
+        category_names = {
+            'headline': '綜合頭條',
+            'tw_stock': '台股新聞',
+            'us_stock': '美股新聞',
+            'forex': '外匯新聞',
+            'futures': '期貨新聞'
+        }
         
+        current_category = category_names.get(self.news_category, self.news_category)
+        
+        settings_info = f"\n📰 新聞分類：{current_category}"
         settings_info += f"\n⏰ 推播時間：{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
         settings_info += f"\n📅 週末推播：{'啟用' if self.weekend_enabled else '停用'}"
         settings_info += f"\n🔄 檢查間隔：{self.check_interval//60} 分鐘"
@@ -341,8 +337,17 @@ class NewsBot:
         time_ok, time_msg = self.is_in_push_time()
         time_status = f"推播狀態: {time_msg}"
         
-        settings = f"""
-📊 新聞監控狀態
+        category_names = {
+            'headline': '綜合頭條',
+            'tw_stock': '台股新聞',
+            'us_stock': '美股新聞',
+            'forex': '外匯新聞',
+            'futures': '期貨新聞'
+        }
+        
+        current_category = category_names.get(self.news_category, self.news_category)
+        
+        settings = f"""📊 新聞監控狀態
 
 🔄 監控狀態: {status}
 👤 {user_info}
@@ -350,7 +355,7 @@ class NewsBot:
 ⏰ {time_status}
 
 ⚙️ 設定資訊:
-🔍 關鍵字過濾: {', '.join(self.keywords_filter) if self.keywords_filter else '無'}
+📰 新聞分類: {current_category}
 ⏰ 推播時間: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}
 📅 週末推播: {'啟用' if self.weekend_enabled else '停用'}
 🔄 檢查間隔: {self.check_interval//60} 分鐘
@@ -358,30 +363,6 @@ class NewsBot:
 🕐 {get_taiwan_time()}"""
         
         return settings
-    
-    def get_settings_help(self):
-        """取得設定說明"""
-        return """⚙️ 新聞監控設定說明
-
-🔄 檢查間隔:
-• 設定間隔 [分鐘] - 例如: 設定間隔 10
-
-⏰ 推播時間:
-• 設定時間 [開始時] [開始分] [結束時] [結束分]
-• 例如: 設定時間 9 0 21 0 (9:00-21:00)
-
-🔍 關鍵字過濾:
-• 設定關鍵字 [關鍵字1,關鍵字2] - 例如: 設定關鍵字 台積電,聯發科
-• 清空關鍵字 - 移除所有關鍵字過濾
-
-📅 週末推播:
-• 切換週末 - 開啟/關閉週末推播
-
-💡 範例設定:
-設定間隔 10
-設定時間 9 0 18 0  
-設定關鍵字 台積電,鴻海,聯發科
-切換週末"""
     
     def send_test_message(self, user_id):
         """發送測試訊息"""
