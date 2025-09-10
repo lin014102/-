@@ -126,7 +126,7 @@ class NewsBot:
                     return all_news[:10]
                 return []
             else:
-                # 單一分類模式
+                # 單一分類模式 - 使用原始邏輯
                 return self._fetch_single_category(self.news_category)
                 
         except Exception as e:
@@ -138,7 +138,7 @@ class NewsBot:
         try:
             url = f"https://api.cnyes.com/media/api/v1/newslist/category/{category}"
             params = {
-                'limit': 5,  # 精選模式每個分類只取5則
+                'limit': 10,  # 改回10
                 'page': 1
             }
             
