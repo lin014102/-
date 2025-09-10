@@ -21,7 +21,7 @@ class BackgroundServices:
     def start_keep_alive(self):
         def keep_alive():
             import requests
-            base_url = os.getenv('NEWS_BOT_BASE_URL', 'https://your-news-bot.onrender.com')
+            base_url = os.getenv('NEWS_BOT_BASE_URL', 'https://financial-news-bot.onrender.com')
             
             while True:
                 try:
@@ -51,6 +51,13 @@ def home():
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
     <p>📰 專門推播鉅亨網即時新聞</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
+    <h2>支援指令：</h2>
+    <ul>
+        <li>開始新聞推播</li>
+        <li>停止新聞推播</li>
+        <li>新聞狀態</li>
+        <li>測試新聞</li>
+    </ul>
     """
 
 @app.route('/health')
@@ -59,8 +66,71 @@ def health():
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'version': 'news_bot_v1.0',
-        'services': bg_services.services
+        'services': bg_services.services,
+        'news_monitoring': {
+            'is_running': news_bot.is_running,
+            'user_id': news_bot.user_id,
+            'last_news_id': news_bot.last_news_id
+        }
     })
+
+def handle_news_command(message_text, user_id):
+    """處理新聞相關指令"""
+    try:
+        if message_text in ['開始新聞推播', '開始推播', '啟動新聞']:
+            return news_bot.start_news_monitoring(user_id)
+        
+        elif message_text in ['停止新聞推播', '停止推播', '關閉新聞']:
+            return news_bot.stop_news_monitoring()
+        
+        elif message_text in ['新聞狀態', '狀態查詢', '監控狀態']:
+            return news_bot.get_news_status()
+        
+        elif message_text in ['測試新聞', '新聞測試']:
+            # 手動抓取一則最新新聞
+            news_list = news_bot.fetch_cnyes_news()
+            if news_list:
+                latest_news = news_list[0]
+                formatted_message = news_bot.format_news_message(latest_news)
+                return f"📰 測試新聞推播\n\n{formatted_message}"
+            else:
+                return "❌ 無法抓取新聞進行測試"
+        
+        elif message_text in ['新聞幫助', '指令說明', '說明']:
+            return """📰 新聞機器人指令說明
+
+🔔 推播控制：
+• 開始新聞推播 - 啟動自動新聞監控
+• 停止新聞推播 - 停止自動新聞監控
+
+📊 狀態查詢：
+• 新聞狀態 - 查看監控狀態
+• 測試新聞 - 手動抓取最新新聞
+
+ℹ️ 其他：
+• 新聞幫助 - 顯示此說明
+
+📰 新聞來源：鉅亨網
+⏰ 檢查頻率：每5分鐘
+🕐 當前時間：""" + get_taiwan_time()
+        
+        else:
+            return f"""歡迎使用財經新聞機器人！
+
+📰 可用指令：
+• 開始新聞推播
+• 停止新聞推播  
+• 新聞狀態
+• 測試新聞
+• 新聞幫助
+
+🕐 當前時間：{get_taiwan_time()}
+
+💡 輸入「新聞幫助」查看詳細說明"""
+    
+    except Exception as e:
+        print(f"❌ 處理新聞指令失敗: {e}")
+        return f"❌ 指令處理失敗，請稍後再試\n🕐 {get_taiwan_time()}"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -75,8 +145,8 @@ def webhook():
                 
                 print(f"📨 新聞Bot收到訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 簡單測試回應
-                reply_text = f"新聞機器人收到：{message_text}\n時間：{get_taiwan_time()}"
+                # 處理新聞指令
+                reply_text = handle_news_command(message_text, user_id)
                 reply_message(reply_token, reply_text, bot_type='news')
         
         return 'OK', 200
@@ -84,6 +154,67 @@ def webhook():
     except Exception as e:
         print(f"❌ Webhook 處理錯誤: {e} - {get_taiwan_time()}")
         return 'OK', 200
+
+@app.route('/test/fetch-news')
+def test_fetch_news():
+    """測試新聞抓取功能"""
+    try:
+        news_list = news_bot.fetch_cnyes_news()
+        
+        if news_list:
+            return jsonify({
+                'success': True,
+                'news_count': len(news_list),
+                'latest_news': {
+                    'title': news_list[0].get('title', ''),
+                    'newsId': news_list[0].get('newsId', ''),
+                    'publishAt': news_list[0].get('publishAt', '')
+                } if news_list else None,
+                'timestamp': get_taiwan_time()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '無法抓取新聞',
+                'timestamp': get_taiwan_time()
+            })
+    
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/format-news')
+def test_format_news():
+    """測試新聞格式化功能"""
+    try:
+        news_list = news_bot.fetch_cnyes_news()
+        
+        if news_list:
+            latest_news = news_list[0]
+            formatted_message = news_bot.format_news_message(latest_news)
+            
+            return jsonify({
+                'success': True,
+                'raw_news': latest_news,
+                'formatted_message': formatted_message,
+                'timestamp': get_taiwan_time()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '無法抓取新聞進行格式化測試',
+                'timestamp': get_taiwan_time()
+            })
+    
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
 
 def initialize_app():
     print("🚀 財經新聞推播機器人啟動中...")
@@ -93,6 +224,8 @@ def initialize_app():
     
     print("=" * 40)
     print("📰 新聞推播機器人：✅ 已啟動")
+    print("🔄 支援指令：開始新聞推播、停止新聞推播、新聞狀態")
+    print("📊 測試端點：/test/fetch-news、/test/format-news")
     print("=" * 40)
     print("🎉 系統初始化完成！")
 
