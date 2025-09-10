@@ -181,19 +181,26 @@ class NewsBot:
         try:
             # 處理 Unicode 編碼的標題
             title = news_data.get('title', '無標題')
-            if isinstance(title, str) and '\\u' in title:
+            if isinstance(title, str):
                 try:
-                    title = title.encode().decode('unicode_escape')
+                    # 嘗試 JSON 解碼處理 Unicode
+                    import json
+                    title = json.loads(f'"{title}"')
                 except:
                     pass  # 如果解碼失敗，使用原始標題
             
-            # 處理摘要
-            summary = news_data.get('summary', '').strip()
-            if isinstance(summary, str) and '\\u' in summary:
-                try:
-                    summary = summary.encode().decode('unicode_escape')
-                except:
-                    pass
+            # 處理摘要 - 注意可能是 null
+            summary = news_data.get('summary')
+            if summary is None:
+                summary = ""
+            else:
+                summary = str(summary).strip()
+                if isinstance(summary, str):
+                    try:
+                        import json
+                        summary = json.loads(f'"{summary}"')
+                    except:
+                        pass
             
             news_id = news_data.get('newsId', '')
             publish_time = news_data.get('publishAt', '')
