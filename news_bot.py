@@ -106,7 +106,7 @@ class NewsBot:
     def fetch_cnyes_news(self):
         """抓取鉅亨網新聞"""
         try:
-            url = "https://api.cnyes.com/media/api/v1/newslist/category/headline"
+            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
             params = {
                 'limit': 10,
                 'page': 1
@@ -122,7 +122,7 @@ class NewsBot:
                 data = response.json()
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功抓取 {len(news_list)} 則新聞 - {get_taiwan_time()}")
+                    print(f"成功抓取 {len(news_list)} 則{self.news_category}新聞 - {get_taiwan_time()}")
                     return news_list
                 else:
                     print(f"新聞數據格式異常 - {get_taiwan_time()}")
@@ -226,10 +226,33 @@ class NewsBot:
             message = f"📰 財經即時新聞\n\n"
             message += f"📌 {title}\n\n"
             
+            # 處理內容摘要
+            content_summary = ""
             if summary:
-                if len(summary) > 100:
-                    summary = summary[:100] + "..."
-                message += f"📄 {summary}\n\n"
+                content_summary = summary
+            elif news_data.get('content'):
+                # 從content欄位提取內容
+                content = news_data.get('content', '')
+                if content:
+                    try:
+                        import re
+                        # 移除HTML標籤
+                        content = re.sub(r'&lt;[^&gt;]+&gt;', '', content)
+                        content = re.sub(r'&[a-zA-Z0-9]+;', '', content)  # 移除HTML實體
+                        # 處理Unicode
+                        import json
+                        try:
+                            content = json.loads(f'"{content}"')
+                        except:
+                            pass
+                        content_summary = content.strip()
+                    except:
+                        content_summary = ""
+            
+            if content_summary:
+                if len(content_summary) > 150:
+                    content_summary = content_summary[:150] + "..."
+                message += f"📄 {content_summary}\n\n"
             
             message += f"🕐 {formatted_time}\n"
             message += f"📰 來源：鉅亨網\n"
