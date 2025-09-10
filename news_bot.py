@@ -179,23 +179,41 @@ class NewsBot:
     def format_news_message(self, news_data):
         """格式化新聞訊息"""
         try:
+            # 處理 Unicode 編碼的標題
             title = news_data.get('title', '無標題')
+            if isinstance(title, str) and '\\u' in title:
+                try:
+                    title = title.encode().decode('unicode_escape')
+                except:
+                    pass  # 如果解碼失敗，使用原始標題
+            
+            # 處理摘要
             summary = news_data.get('summary', '').strip()
+            if isinstance(summary, str) and '\\u' in summary:
+                try:
+                    summary = summary.encode().decode('unicode_escape')
+                except:
+                    pass
+            
             news_id = news_data.get('newsId', '')
             publish_time = news_data.get('publishAt', '')
             
             # 格式化發布時間
+            formatted_time = "未知時間"
             if publish_time:
                 try:
                     if isinstance(publish_time, (int, float)):
-                        publish_dt = datetime.fromtimestamp(publish_time)
-                        formatted_time = publish_dt.strftime('%H:%M')
+                        # 檢查時間戳是否合理（2020-2030年之間）
+                        if 1577836800 <= publish_time <= 1893456000:  # 2020-01-01 到 2030-01-01
+                            publish_dt = datetime.fromtimestamp(publish_time)
+                            formatted_time = publish_dt.strftime('%H:%M')
+                        else:
+                            # 如果時間戳異常，顯示原始值
+                            formatted_time = f"時間戳:{publish_time}"
                     else:
-                        formatted_time = str(publish_time)[:5]
-                except:
-                    formatted_time = "未知時間"
-            else:
-                formatted_time = "未知時間"
+                        formatted_time = str(publish_time)[:10]  # 增加長度避免截斷
+                except Exception as e:
+                    formatted_time = f"時間解析錯誤:{str(e)[:20]}"
             
             # 構建訊息
             message = f"📰 財經即時新聞\n\n"
