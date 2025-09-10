@@ -77,7 +77,7 @@ def webhook():
                 
                 # 簡單測試回應
                 reply_text = f"新聞機器人收到：{message_text}\n時間：{get_taiwan_time()}"
-                reply_message(reply_token, reply_text)
+                reply_message(reply_token, reply_text, bot_type='news')
         
         return 'OK', 200
     
