@@ -1,4 +1,4 @@
-# news_bot.py - 完整版本支援新聞分類
+# news_bot.py - 完整正確版本
 import os
 import requests
 import threading
@@ -11,16 +11,17 @@ class NewsBot:
     def __init__(self):
         self.token = os.getenv('NEWS_BOT_TOKEN')
         self.last_news_id = None
+        self.last_check_time = None
         self.user_id = None
         self.news_thread = None
         self.is_running = False
         
-        # 新增設定選項
-        self.check_interval = 300  # 預設5分鐘(300秒)
-        self.news_category = 'headline'  # 預設綜合新聞
-        self.start_time = dt_time(9, 0)   # 推播開始時間 9:00
-        self.end_time = dt_time(21, 0)    # 推播結束時間 21:00
-        self.weekend_enabled = False      # 週末是否推播
+        # 設定選項
+        self.check_interval = 300
+        self.news_category = 'headline'
+        self.start_time = dt_time(9, 0)
+        self.end_time = dt_time(21, 0)
+        self.weekend_enabled = False
         
     def set_user_id(self, user_id):
         """設定要推播的用戶ID"""
@@ -50,6 +51,8 @@ class NewsBot:
             'headline': '綜合頭條',
             'tw_stock': '台股新聞', 
             'us_stock': '美股新聞',
+            'revenue': '台股營收',
+            'earnings': '財報資訊',
             'forex': '外匯新聞',
             'futures': '期貨新聞'
         }
@@ -88,115 +91,72 @@ class NewsBot:
         """檢查是否在推播時間範圍內"""
         taiwan_now = get_taiwan_datetime()
         current_time = taiwan_now.time()
-        current_weekday = taiwan_now.weekday()  # 0=Monday, 6=Sunday
+        current_weekday = taiwan_now.weekday()
         
-        # 檢查週末設定
-        if current_weekday >= 5 and not self.weekend_enabled:  # 5=Saturday, 6=Sunday
+        if current_weekday >= 5 and not self.weekend_enabled:
             return False, "週末推播已停用"
         
-        # 檢查時間範圍
         if self.start_time <= self.end_time:
-            # 正常時間範圍 (例如 9:00-21:00)
             if not (self.start_time <= current_time <= self.end_time):
                 return False, f"不在推播時間內 ({self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')})"
         else:
-            # 跨日時間範圍 (例如 21:00-09:00)
             if not (current_time >= self.start_time or current_time <= self.end_time):
                 return False, f"不在推播時間內 ({self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')})"
         
         return True, "在推播時間內"
         
     def fetch_cnyes_news(self):
-        """抓取鉅亨網新聞"""
+        """抓取鉅亨網新聞 - 除錯版本"""
         try:
-            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
-            params = {
-                'limit': 10,
-                'page': 1
-            }
+            print(f"開始抓取新聞 - {get_taiwan_time()}")
+            print(f"使用分類: {self.news_category}")
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
+            params = {'limit': 10, 'page': 1}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            
+            print(f"請求URL: {url}")
             
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
+            print(f"回應狀態碼: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
+                print(f"JSON 解析成功")
+                
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功抓取 {len(news_list)} 則{self.news_category}新聞 - {get_taiwan_time()}")
+                    print(f"成功取得 {len(news_list)} 則新聞")
                     return news_list
                 else:
-                    print(f"新聞數據格式異常 - {get_taiwan_time()}")
+                    print(f"資料結構異常")
                     return []
             else:
-                print(f"抓取新聞失敗，狀態碼: {response.status_code} - {get_taiwan_time()}")
+                print(f"HTTP 錯誤: {response.status_code}")
                 return []
                 
         except Exception as e:
-            print(f"抓取新聞發生錯誤: {e} - {get_taiwan_time()}")
+            print(f"抓取新聞例外錯誤: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
-    def check_new_news(self):
-        """檢查是否有新新聞"""
-        news_list = self.fetch_cnyes_news()
-        
-        if not news_list:
-            return None
-            
-        # 取得最新的新聞
-        latest_news = news_list[0]
-        latest_news_id = latest_news.get('newsId')
-        
-        # 如果是第一次執行，記錄當前最新新聞ID但不推播
-        if self.last_news_id is None:
-            self.last_news_id = latest_news_id
-            print(f"初始化完成，記錄最新新聞ID: {latest_news_id} - {get_taiwan_time()}")
-            return None
-        
-        # 檢查是否有新新聞
-        if latest_news_id != self.last_news_id:
-            print(f"發現新新聞: {latest_news_id} - {get_taiwan_time()}")
-            
-            # 檢查推播時間
-            time_ok, time_msg = self.is_in_push_time()
-            if not time_ok:
-                print(f"跳過推播: {time_msg}")
-                self.last_news_id = latest_news_id  # 仍要更新ID避免重複檢查
-                return None
-            
-            print(f"通過時間檢查，準備推播")
-            self.last_news_id = latest_news_id
-            return latest_news
-        
-        return None
-    
-    def format_news_message(self, news_data):
-        """格式化新聞訊息"""
+    def format_single_news(self, news_data):
+        """格式化單則新聞"""
         try:
-            # 處理 Unicode 編碼的標題
+            print(f"開始格式化新聞")
+            
+            # 處理標題
             title = news_data.get('title', '無標題')
             if isinstance(title, str):
                 try:
-                    # 嘗試 JSON 解碼處理 Unicode
                     import json
                     title = json.loads(f'"{title}"')
                 except:
-                    pass  # 如果解碼失敗，使用原始標題
+                    pass
             
-            # 處理摘要 - 注意可能是 null
-            summary = news_data.get('summary')
-            if summary is None:
-                summary = ""
-            else:
-                summary = str(summary).strip()
-                if isinstance(summary, str):
-                    try:
-                        import json
-                        summary = json.loads(f'"{summary}"')
-                    except:
-                        pass
+            print(f"處理標題完成: {title[:50]}")
             
             news_id = news_data.get('newsId', '')
             publish_time = news_data.get('publishAt', '')
@@ -206,67 +166,71 @@ class NewsBot:
             if publish_time:
                 try:
                     if isinstance(publish_time, (int, float)):
-                        # 檢查時間戳是否合理（2020-2030年之間）
-                        if 1577836800 <= publish_time <= 1893456000:  # 2020-01-01 到 2030-01-01
+                        if 1577836800 <= publish_time <= 1893456000:
                             publish_dt = datetime.fromtimestamp(publish_time)
                             formatted_time = publish_dt.strftime('%H:%M')
                         else:
-                            # 如果時間戳異常，顯示原始值
                             formatted_time = f"時間戳:{publish_time}"
                     else:
-                        formatted_time = str(publish_time)[:10]  # 增加長度避免截斷
+                        formatted_time = str(publish_time)[:10]
                 except Exception as e:
-                    formatted_time = f"時間解析錯誤:{str(e)[:20]}"
+                    formatted_time = f"時間解析錯誤"
+            
+            # 處理內容摘要
+            content_summary = ""
+            summary = news_data.get('summary')
+            if summary and str(summary).strip():
+                content_summary = str(summary).strip()
+            elif news_data.get('content'):
+                content = news_data.get('content', '')
+                if content:
+                    import re
+                    content = re.sub(r'&lt;[^&gt;]+&gt;', '', content)
+                    content = re.sub(r'&[a-zA-Z0-9]+;', '', content)
+                    content_summary = content.strip()
+            
+            # 處理Unicode編碼
+            if content_summary:
+                try:
+                    import json
+                    content_summary = json.loads(f'"{content_summary}"')
+                except:
+                    pass
+                
+                if len(content_summary) > 180:
+                    content_summary = content_summary[:180] + "..."
             
             # 構建訊息
             message = f"📰 財經即時新聞\n\n"
             message += f"📌 {title}\n\n"
             
-            # 處理內容摘要
-            content_summary = ""
-            if summary:
-                content_summary = summary
-            elif news_data.get('content'):
-                # 從content欄位提取內容
-                content = news_data.get('content', '')
-                if content:
-                    try:
-                        import re
-                        # 移除HTML標籤
-                        content = re.sub(r'&lt;[^&gt;]+&gt;', '', content)
-                        content = re.sub(r'&[a-zA-Z0-9]+;', '', content)  # 移除HTML實體
-                        # 處理Unicode
-                        import json
-                        try:
-                            content = json.loads(f'"{content}"')
-                        except:
-                            pass
-                        content_summary = content.strip()
-                    except:
-                        content_summary = ""
-            
             if content_summary:
-                if len(content_summary) > 150:
-                    content_summary = content_summary[:150] + "..."
                 message += f"📄 {content_summary}\n\n"
             
-            message += f"🕐 {formatted_time}\n"
-            message += f"📰 來源：鉅亨網 ({self.news_category})\n"
-            message += f"🔗 新聞ID：{news_id}"
+            # 生成新聞連結
+            if news_id:
+                news_link = f"https://news.cnyes.com/news/id/{news_id}"
+                message += f"🔗 {news_link}\n\n"
             
+            message += f"🕐 {formatted_time}\n"
+            message += f"📰 來源：鉅亨網 ({self.news_category})"
+            
+            print(f"格式化完成，訊息長度: {len(message)}")
             return message
             
         except Exception as e:
-            print(f"格式化新聞訊息失敗: {e}")
-            return "新聞格式化失敗"
+            print(f"格式化新聞失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return f"新聞格式化失敗: {e}"
     
     def send_news_notification(self, news_data):
         """發送新聞推播"""
         if not self.user_id:
             print("未設定推播用戶ID")
             return False
-            
-        message = self.format_news_message(news_data)
+        
+        message = self.format_single_news(news_data)
         success = send_push_message(self.user_id, message, bot_type='news')
         
         if success:
@@ -275,6 +239,27 @@ class NewsBot:
             print(f"新聞推播失敗 - {get_taiwan_time()}")
             
         return success
+    
+    def check_new_news(self):
+        """檢查是否有新新聞"""
+        news_list = self.fetch_cnyes_news()
+        
+        if not news_list:
+            return None
+        
+        # 簡化邏輯：總是返回最新新聞用於測試
+        latest_news = news_list[0]
+        latest_news_id = latest_news.get('newsId')
+        
+        if self.last_news_id is None:
+            self.last_news_id = latest_news_id
+            return latest_news
+        
+        if latest_news_id != self.last_news_id:
+            self.last_news_id = latest_news_id
+            return latest_news
+        
+        return None
     
     def news_check_loop(self):
         """新聞檢查循環"""
@@ -306,22 +291,7 @@ class NewsBot:
         self.news_thread = threading.Thread(target=self.news_check_loop, daemon=True)
         self.news_thread.start()
         
-        category_names = {
-            'headline': '綜合頭條',
-            'tw_stock': '台股新聞',
-            'us_stock': '美股新聞',
-            'forex': '外匯新聞',
-            'futures': '期貨新聞'
-        }
-        
-        current_category = category_names.get(self.news_category, self.news_category)
-        
-        settings_info = f"\n📰 新聞分類：{current_category}"
-        settings_info += f"\n⏰ 推播時間：{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
-        settings_info += f"\n📅 週末推播：{'啟用' if self.weekend_enabled else '停用'}"
-        settings_info += f"\n🔄 檢查間隔：{self.check_interval//60} 分鐘"
-        
-        return f"✅ 新聞監控已啟動\n📰 鉅亨網財經新聞自動推播{settings_info}\n🕐 {get_taiwan_time()}"
+        return f"✅ 新聞監控已啟動\n📰 {self.news_category} 新聞自動推播\n🕐 {get_taiwan_time()}"
     
     def stop_news_monitoring(self):
         """停止新聞監控"""
@@ -332,37 +302,16 @@ class NewsBot:
         """獲取新聞監控狀態"""
         status = "運行中" if self.is_running else "已停止"
         user_info = f"推播對象: {self.user_id}" if self.user_id else "未設定推播對象"
-        last_news_info = f"最後新聞ID: {self.last_news_id}" if self.last_news_id else "尚未抓取過新聞"
         
-        time_ok, time_msg = self.is_in_push_time()
-        time_status = f"推播狀態: {time_msg}"
-        
-        category_names = {
-            'headline': '綜合頭條',
-            'tw_stock': '台股新聞',
-            'us_stock': '美股新聞',
-            'forex': '外匯新聞',
-            'futures': '期貨新聞'
-        }
-        
-        current_category = category_names.get(self.news_category, self.news_category)
-        
-        settings = f"""📊 新聞監控狀態
+        return f"""📊 新聞監控狀態
 
 🔄 監控狀態: {status}
 👤 {user_info}
-📰 {last_news_info}
-⏰ {time_status}
-
-⚙️ 設定資訊:
-📰 新聞分類: {current_category}
+📰 新聞分類: {self.news_category}
 ⏰ 推播時間: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}
-📅 週末推播: {'啟用' if self.weekend_enabled else '停用'}
 🔄 檢查間隔: {self.check_interval//60} 分鐘
 
 🕐 {get_taiwan_time()}"""
-        
-        return settings
     
     def send_test_message(self, user_id):
         """發送測試訊息"""
