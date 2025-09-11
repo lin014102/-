@@ -107,28 +107,39 @@ class NewsBot:
         return True, "在推播時間內"
         
     def fetch_cnyes_news(self):
-        """抓取鉅亨網新聞 - 除錯版本"""
+        """抓取鉅亨網新聞 - 簡化除錯版本"""
         try:
             print(f"開始抓取新聞 - {get_taiwan_time()}")
+            print(f"使用分類: {self.news_category}")
             
-            if self.multi_categories:
-                print(f"使用多分類模式: {self.multi_categories}")
-                # 暫時跳過多分類除錯
-                all_news = []
-                for category in self.multi_categories:
-                    news_list = self._fetch_single_category_debug(category)
-                    if news_list:
-                        for news in news_list:
-                            news['_category'] = category
-                        all_news.extend(news_list)
+            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
+            params = {'limit': 10, 'page': 1}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            
+            print(f"請求URL: {url}")
+            print(f"請求參數: {params}")
+            
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            
+            print(f"回應狀態碼: {response.status_code}")
+            print(f"回應內容長度: {len(response.text)}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"JSON 解析成功")
                 
-                if all_news:
-                    all_news.sort(key=lambda x: x.get('publishAt', 0), reverse=True)
-                    return all_news[:10]
-                return []
+                if 'items' in data and 'data' in data['items']:
+                    news_list = data['items']['data']
+                    print(f"成功取得 {len(news_list)} 則新聞")
+                    if news_list:
+                        print(f"第一則新聞標題: {news_list[0].get('title', 'No title')[:50]}")
+                    return news_list
+                else:
+                    print(f"資料結構異常: {data}")
+                    return []
             else:
-                print(f"使用單一分類模式: {self.news_category}")
-                return self._fetch_single_category_debug(self.news_category)
+                print(f"HTTP 錯誤: {response.status_code}")
+                return []
                 
         except Exception as e:
             print(f"抓取新聞例外錯誤: {e}")
