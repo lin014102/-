@@ -109,36 +109,9 @@ class NewsBot:
     def fetch_cnyes_news(self):
         """抓取鉅亨網新聞"""
         try:
-            if self.multi_categories:
-                # 精選模式：抓取多個分類
-                all_news = []
-                for category in self.multi_categories:
-                    news_list = self._fetch_single_category(category)
-                    if news_list:
-                        # 為每則新聞標記分類
-                        for news in news_list:
-                            news['_category'] = category
-                        all_news.extend(news_list)
-                
-                # 按時間排序，取最新的10則
-                if all_news:
-                    all_news.sort(key=lambda x: x.get('publishAt', 0), reverse=True)
-                    return all_news[:10]
-                return []
-            else:
-                # 單一分類模式
-                return self._fetch_single_category(self.news_category)
-                
-        except Exception as e:
-            print(f"抓取新聞發生錯誤: {e} - {get_taiwan_time()}")
-            return []
-    
-    def _fetch_single_category(self, category):
-        """抓取單一分類新聞"""
-        try:
-            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{category}"
+            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
             params = {
-                'limit': 5,  # 精選模式每個分類只取5則
+                'limit': 10,
                 'page': 1
             }
             
@@ -152,17 +125,17 @@ class NewsBot:
                 data = response.json()
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功抓取 {len(news_list)} 則{category}新聞 - {get_taiwan_time()}")
+                    print(f"成功抓取 {len(news_list)} 則{self.news_category}新聞 - {get_taiwan_time()}")
                     return news_list
                 else:
-                    print(f"{category}新聞數據格式異常 - {get_taiwan_time()}")
+                    print(f"新聞數據格式異常 - {get_taiwan_time()}")
                     return []
             else:
-                print(f"抓取{category}新聞失敗，狀態碼: {response.status_code} - {get_taiwan_time()}")
+                print(f"抓取新聞失敗，狀態碼: {response.status_code} - {get_taiwan_time()}")
                 return []
                 
         except Exception as e:
-            print(f"抓取{category}新聞發生錯誤: {e} - {get_taiwan_time()}")
+            print(f"抓取新聞發生錯誤: {e} - {get_taiwan_time()}")
             return []
     
     def check_new_news(self):
