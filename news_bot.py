@@ -107,84 +107,62 @@ class NewsBot:
         return True, "在推播時間內"
         
     def fetch_cnyes_news(self):
-        """抓取鉅亨網新聞 - 簡化除錯版本"""
+        """抓取鉅亨網新聞"""
         try:
-            print(f"開始抓取新聞 - {get_taiwan_time()}")
-            print(f"使用分類: {self.news_category}")
-            
-            url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
-            params = {'limit': 10, 'page': 1}
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            
-            print(f"請求URL: {url}")
-            print(f"請求參數: {params}")
-            
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-            
-            print(f"回應狀態碼: {response.status_code}")
-            print(f"回應內容長度: {len(response.text)}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"JSON 解析成功")
-                
-                if 'items' in data and 'data' in data['items']:
-                    news_list = data['items']['data']
-                    print(f"成功取得 {len(news_list)} 則新聞")
+            if self.multi_categories:
+                # 精選模式：抓取多個分類
+                all_news = []
+                for category in self.multi_categories:
+                    news_list = self._fetch_single_category(category)
                     if news_list:
-                        print(f"第一則新聞標題: {news_list[0].get('title', 'No title')[:50]}")
-                    return news_list
-                else:
-                    print(f"資料結構異常: {data}")
-                    return []
-            else:
-                print(f"HTTP 錯誤: {response.status_code}")
+                        # 為每則新聞標記分類
+                        for news in news_list:
+                            news['_category'] = category
+                        all_news.extend(news_list)
+                
+                # 按時間排序，取最新的10則
+                if all_news:
+                    all_news.sort(key=lambda x: x.get('publishAt', 0), reverse=True)
+                    return all_news[:10]
                 return []
+            else:
+                # 單一分類模式
+                return self._fetch_single_category(self.news_category)
                 
         except Exception as e:
-            print(f"抓取新聞例外錯誤: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"抓取新聞發生錯誤: {e} - {get_taiwan_time()}")
             return []
     
-    def _fetch_single_category_debug(self, category):
-        """抓取單一分類新聞 - 除錯版本"""
+    def _fetch_single_category(self, category):
+        """抓取單一分類新聞"""
         try:
             url = f"https://api.cnyes.com/media/api/v1/newslist/category/{category}"
-            params = {'limit': 10, 'page': 1}
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            params = {
+                'limit': 5,  # 精選模式每個分類只取5則
+                'page': 1
+            }
             
-            print(f"請求URL: {url}")
-            print(f"請求參數: {params}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
             
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
-            print(f"回應狀態碼: {response.status_code}")
-            print(f"回應內容長度: {len(response.text)}")
-            print(f"回應內容前200字: {response.text[:200]}")
-            
             if response.status_code == 200:
                 data = response.json()
-                print(f"JSON 解析成功")
-                print(f"資料結構: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
-                
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功取得 {len(news_list)} 則{category}新聞")
-                    if news_list:
-                        print(f"第一則新聞標題: {news_list[0].get('title', 'No title')[:50]}")
+                    print(f"成功抓取 {len(news_list)} 則{category}新聞 - {get_taiwan_time()}")
                     return news_list
                 else:
-                    print(f"{category}資料結構異常: {data}")
+                    print(f"{category}新聞數據格式異常 - {get_taiwan_time()}")
                     return []
             else:
-                print(f"{category} HTTP 錯誤: {response.status_code}")
+                print(f"抓取{category}新聞失敗，狀態碼: {response.status_code} - {get_taiwan_time()}")
                 return []
                 
         except Exception as e:
-            print(f"抓取{category}新聞例外錯誤: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"抓取{category}新聞發生錯誤: {e} - {get_taiwan_time()}")
             return []
     
     def check_new_news(self):
@@ -334,14 +312,8 @@ class NewsBot:
                 new_news = self.check_new_news()
                 
                 if new_news:
-                    if isinstance(new_news, list):
-                        count = len(new_news)
-                        titles = [news.get('title', '無標題')[:30] for news in new_news]
-                        print(f"發現 {count} 則新新聞並推播: {', '.join(titles)} - {get_taiwan_time()}")
-                    else:
-                        title = new_news.get('title', '無標題')
-                        print(f"發現新新聞並推播: {title} - {get_taiwan_time()}")
-                    
+                    title = new_news.get('title', '無標題')
+                    print(f"發現新新聞並推播: {title} - {get_taiwan_time()}")
                     self.send_news_notification(new_news)
                 
                 time.sleep(self.check_interval)
