@@ -88,25 +88,47 @@ def health():
 def handle_news_command(message_text, user_id):
     """處理新聞相關指令（包含分類模式）"""
     try:
+        print(f"收到指令: {message_text}, 用戶: {user_id}")
+        
         # 基本控制指令
         if message_text in ['開始新聞推播', '開始推播', '啟動新聞']:
+            print("執行開始新聞推播")
             return news_bot.start_news_monitoring(user_id)
         
         elif message_text in ['停止新聞推播', '停止推播', '關閉新聞']:
+            print("執行停止新聞推播")
             return news_bot.stop_news_monitoring()
         
         elif message_text in ['新聞狀態', '狀態查詢', '監控狀態']:
+            print("執行新聞狀態查詢")
             return news_bot.get_news_status()
         
         elif message_text in ['測試新聞', '新聞測試']:
+            print("執行測試新聞功能")
             # 手動抓取一則最新新聞
-            news_list = news_bot.fetch_cnyes_news()
-            if news_list:
-                latest_news = news_list[0]
-                formatted_message = news_bot.format_single_news(latest_news)  # 修正函數名稱
-                return f"📰 測試新聞推播\n\n{formatted_message}"
-            else:
-                return "❌ 無法抓取新聞進行測試"
+            try:
+                print("開始調用 fetch_cnyes_news")
+                news_list = news_bot.fetch_cnyes_news()
+                print(f"fetch_cnyes_news 返回: {len(news_list) if news_list else 0} 則新聞")
+                
+                if news_list:
+                    latest_news = news_list[0]
+                    print(f"選取第一則新聞，標題: {latest_news.get('title', 'No title')[:50]}")
+                    
+                    print("開始調用 format_single_news")
+                    formatted_message = news_bot.format_single_news(latest_news)
+                    print(f"format_single_news 返回長度: {len(formatted_message)}")
+                    
+                    return f"📰 測試新聞推播\n\n{formatted_message}"
+                else:
+                    print("news_list 為空")
+                    return "❌ 無法抓取新聞進行測試"
+                    
+            except Exception as e:
+                print(f"測試新聞內部錯誤: {e}")
+                import traceback
+                traceback.print_exc()
+                return f"❌ 測試新聞失敗: {str(e)}"
         
         # 新聞分類切換指令
         elif message_text in ['台股模式', '台股新聞', '切換台股']:
