@@ -107,62 +107,73 @@ class NewsBot:
         return True, "在推播時間內"
         
     def fetch_cnyes_news(self):
-        """抓取鉅亨網新聞"""
+        """抓取鉅亨網新聞 - 除錯版本"""
         try:
+            print(f"開始抓取新聞 - {get_taiwan_time()}")
+            
             if self.multi_categories:
-                # 精選模式：抓取多個分類
+                print(f"使用多分類模式: {self.multi_categories}")
+                # 暫時跳過多分類除錯
                 all_news = []
                 for category in self.multi_categories:
-                    news_list = self._fetch_single_category(category)
+                    news_list = self._fetch_single_category_debug(category)
                     if news_list:
-                        # 為每則新聞標記分類
                         for news in news_list:
                             news['_category'] = category
                         all_news.extend(news_list)
                 
-                # 按時間排序，取最新的10則
                 if all_news:
                     all_news.sort(key=lambda x: x.get('publishAt', 0), reverse=True)
                     return all_news[:10]
                 return []
             else:
-                # 單一分類模式 - 使用原始邏輯
-                return self._fetch_single_category(self.news_category)
+                print(f"使用單一分類模式: {self.news_category}")
+                return self._fetch_single_category_debug(self.news_category)
                 
         except Exception as e:
-            print(f"抓取新聞發生錯誤: {e} - {get_taiwan_time()}")
+            print(f"抓取新聞例外錯誤: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
-    def _fetch_single_category(self, category):
-        """抓取單一分類新聞"""
+    def _fetch_single_category_debug(self, category):
+        """抓取單一分類新聞 - 除錯版本"""
         try:
             url = f"https://api.cnyes.com/media/api/v1/newslist/category/{category}"
-            params = {
-                'limit': 10,  # 改回10
-                'page': 1
-            }
+            params = {'limit': 10, 'page': 1}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            print(f"請求URL: {url}")
+            print(f"請求參數: {params}")
             
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
+            print(f"回應狀態碼: {response.status_code}")
+            print(f"回應內容長度: {len(response.text)}")
+            print(f"回應內容前200字: {response.text[:200]}")
+            
             if response.status_code == 200:
                 data = response.json()
+                print(f"JSON 解析成功")
+                print(f"資料結構: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+                
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功抓取 {len(news_list)} 則{category}新聞 - {get_taiwan_time()}")
+                    print(f"成功取得 {len(news_list)} 則{category}新聞")
+                    if news_list:
+                        print(f"第一則新聞標題: {news_list[0].get('title', 'No title')[:50]}")
                     return news_list
                 else:
-                    print(f"{category}新聞數據格式異常 - {get_taiwan_time()}")
+                    print(f"{category}資料結構異常: {data}")
                     return []
             else:
-                print(f"抓取{category}新聞失敗，狀態碼: {response.status_code} - {get_taiwan_time()}")
+                print(f"{category} HTTP 錯誤: {response.status_code}")
                 return []
                 
         except Exception as e:
-            print(f"抓取{category}新聞發生錯誤: {e} - {get_taiwan_time()}")
+            print(f"抓取{category}新聞例外錯誤: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def check_new_news(self):
