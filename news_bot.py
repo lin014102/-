@@ -1,4 +1,4 @@
-# news_bot.py - 改進版本支援多則新聞推播和完整連結
+# news_bot.py - 僅台股美股版本
 import os
 import requests
 import threading
@@ -17,7 +17,7 @@ class NewsBot:
         
         # 新增設定選項
         self.check_interval = 300  # 預設5分鐘(300秒)
-        self.news_category = 'headline'  # 預設綜合新聞
+        self.news_category = 'tw_stock'  # 預設台股新聞
         self.start_time = dt_time(9, 0)   # 推播開始時間 9:00
         self.end_time = dt_time(21, 0)    # 推播結束時間 21:00
         self.weekend_enabled = False      # 週末是否推播
@@ -47,20 +47,17 @@ class NewsBot:
             return "時間格式錯誤"
     
     def set_news_category(self, category):
-        """設定新聞分類"""
+        """設定新聞分類 - 僅限台股和美股"""
         valid_categories = {
-            'headline': '綜合頭條',
             'tw_stock': '台股新聞', 
-            'us_stock': '美股新聞',
-            'forex': '外匯新聞',
-            'futures': '期貨新聞'
+            'us_stock': '美股新聞'
         }
         
         if category in valid_categories:
             self.news_category = category
             return f"已設定新聞分類為：{valid_categories[category]}"
         else:
-            return f"❌ 無效的分類，可用分類：{', '.join(valid_categories.keys())}"
+            return f"❌ 僅支援台股和美股新聞\n📊 可用分類：台股模式、美股模式"
     
     def set_max_news_per_check(self, max_count):
         """設定單次檢查最大推播數量"""
@@ -72,21 +69,21 @@ class NewsBot:
     
     def get_category_help(self):
         """取得分類說明"""
-        return """📰 新聞分類說明
+        return """📰 股市新聞分類說明
 
-🔢 可用分類：
-• headline - 綜合頭條新聞
+📊 專注投資新聞：
 • tw_stock - 台股專區新聞  
 • us_stock - 美股專區新聞
-• forex - 外匯新聞
-• futures - 期貨新聞
 
 💡 使用方式：
 • 台股模式 - 切換到台股新聞
 • 美股模式 - 切換到美股新聞
-• 綜合模式 - 切換到綜合新聞
 
-📊 當前分類：""" + self.news_category
+📈 推薦時間設定：
+• 台股模式：9:00-13:30 (台股交易時間)
+• 美股模式：21:30-04:00 (美股交易時間)
+
+📊 當前分類：""" + ('台股新聞' if self.news_category == 'tw_stock' else '美股新聞')
     
     def toggle_weekend(self):
         """切換週末推播設定"""
@@ -135,7 +132,8 @@ class NewsBot:
                 data = response.json()
                 if 'items' in data and 'data' in data['items']:
                     news_list = data['items']['data']
-                    print(f"成功抓取 {len(news_list)} 則{self.news_category}新聞 - {get_taiwan_time()}")
+                    category_name = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+                    print(f"成功抓取 {len(news_list)} 則{category_name} - {get_taiwan_time()}")
                     return news_list
                 else:
                     print(f"新聞數據格式異常 - {get_taiwan_time()}")
@@ -191,7 +189,8 @@ class NewsBot:
                 print(f"發現 {len(new_news_list)} 則新新聞，限制推播前 {self.max_news_per_check} 則")
                 new_news_list = new_news_list[:self.max_news_per_check]
             
-            print(f"發現 {len(new_news_list)} 則新新聞待推播 - {get_taiwan_time()}")
+            category_name = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+            print(f"發現 {len(new_news_list)} 則新{category_name}待推播 - {get_taiwan_time()}")
             
             # 檢查推播時間
             time_ok, time_msg = self.is_in_push_time()
@@ -254,8 +253,16 @@ class NewsBot:
                 except Exception as e:
                     formatted_time = f"時間解析錯誤:{str(e)[:20]}"
             
+            # 根據分類設定圖示和來源
+            if self.news_category == 'tw_stock':
+                news_icon = "📈"
+                source_text = "台股專區"
+            else:  # us_stock
+                news_icon = "🇺🇸"
+                source_text = "美股專區"
+            
             # 構建訊息
-            message = f"📰 財經即時新聞\n\n"
+            message = f"{news_icon} 股市即時新聞\n\n"
             message += f"📌 {title}\n\n"
             
             # 處理內容摘要
@@ -287,7 +294,7 @@ class NewsBot:
                 message += f"📄 {content_summary}\n\n"
             
             message += f"🕐 {formatted_time}\n"
-            message += f"📰 來源：鉅亨網 ({self.news_category})\n\n"
+            message += f"📰 來源：鉅亨網 ({source_text})\n\n"
             
             # 新增：完整新聞連結
             if news_id:
@@ -341,18 +348,19 @@ class NewsBot:
     
     def news_check_loop(self):
         """新聞檢查循環 - 改進版本支援多則新聞"""
-        print(f"新聞檢查循環開始，間隔{self.check_interval//60}分鐘 - {get_taiwan_time()}")
+        category_name = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+        print(f"{category_name}檢查循環開始，間隔{self.check_interval//60}分鐘 - {get_taiwan_time()}")
         
         while self.is_running:
             try:
                 new_news_list = self.check_new_news()
                 
                 if new_news_list:
-                    print(f"準備推播 {len(new_news_list)} 則新新聞")
+                    print(f"準備推播 {len(new_news_list)} 則新{category_name}")
                     success_count = self.send_multiple_news_notifications(new_news_list)
                     
                     if success_count > 0:
-                        print(f"成功推播 {success_count} 則新聞 - {get_taiwan_time()}")
+                        print(f"成功推播 {success_count} 則{category_name} - {get_taiwan_time()}")
                 
                 time.sleep(self.check_interval)
                 
@@ -371,28 +379,21 @@ class NewsBot:
         self.news_thread = threading.Thread(target=self.news_check_loop, daemon=True)
         self.news_thread.start()
         
-        category_names = {
-            'headline': '綜合頭條',
-            'tw_stock': '台股新聞',
-            'us_stock': '美股新聞',
-            'forex': '外匯新聞',
-            'futures': '期貨新聞'
-        }
+        current_category = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+        category_icon = '📈' if self.news_category == 'tw_stock' else '🇺🇸'
         
-        current_category = category_names.get(self.news_category, self.news_category)
-        
-        settings_info = f"\n📰 新聞分類：{current_category}"
+        settings_info = f"\n{category_icon} 新聞分類：{current_category}"
         settings_info += f"\n⏰ 推播時間：{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
         settings_info += f"\n📅 週末推播：{'啟用' if self.weekend_enabled else '停用'}"
         settings_info += f"\n🔄 檢查間隔：{self.check_interval//60} 分鐘"
         settings_info += f"\n📊 單次最大推播：{self.max_news_per_check} 則"
         
-        return f"✅ 新聞監控已啟動\n📰 鉅亨網財經新聞自動推播{settings_info}\n🕐 {get_taiwan_time()}"
+        return f"✅ 股市新聞監控已啟動\n{category_icon} 鉅亨網{current_category}自動推播{settings_info}\n🕐 {get_taiwan_time()}"
     
     def stop_news_monitoring(self):
         """停止新聞監控"""
         self.is_running = False
-        return f"⏹️ 新聞監控已停止\n🕐 {get_taiwan_time()}"
+        return f"⏹️ 股市新聞監控已停止\n🕐 {get_taiwan_time()}"
     
     def get_news_status(self):
         """獲取新聞監控狀態"""
@@ -403,17 +404,10 @@ class NewsBot:
         time_ok, time_msg = self.is_in_push_time()
         time_status = f"推播狀態: {time_msg}"
         
-        category_names = {
-            'headline': '綜合頭條',
-            'tw_stock': '台股新聞',
-            'us_stock': '美股新聞',
-            'forex': '外匯新聞',
-            'futures': '期貨新聞'
-        }
+        current_category = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+        category_icon = '📈' if self.news_category == 'tw_stock' else '🇺🇸'
         
-        current_category = category_names.get(self.news_category, self.news_category)
-        
-        settings = f"""📊 新聞監控狀態
+        settings = f"""📊 股市新聞監控狀態
 
 🔄 監控狀態: {status}
 👤 {user_info}
@@ -421,7 +415,7 @@ class NewsBot:
 📊 {time_status}
 
 ⚙️ 設定資訊:
-📰 新聞分類: {current_category}
+{category_icon} 新聞分類: {current_category}
 ⏰ 推播時間: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}
 📅 週末推播: {'啟用' if self.weekend_enabled else '停用'}
 🔄 檢查間隔: {self.check_interval//60} 分鐘
@@ -440,11 +434,13 @@ class NewsBot:
             'Content-Type': 'application/json'
         }
         
+        category_name = '台股新聞' if self.news_category == 'tw_stock' else '美股新聞'
+        
         data = {
             'to': user_id,
             'messages': [{
                 'type': 'text',
-                'text': f'新聞機器人測試 - {datetime.now().strftime("%Y-%m-%d %H:%M")}'
+                'text': f'股市新聞機器人測試 ({category_name}) - {datetime.now().strftime("%Y-%m-%d %H:%M")}'
             }]
         }
         
