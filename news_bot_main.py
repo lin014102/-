@@ -1,4 +1,4 @@
-# news_bot_main.py - 改進版本支援多則新聞推播
+# news_bot_main.py - 僅台股美股版本
 from flask import Flask, request, jsonify
 import os
 import threading
@@ -48,32 +48,39 @@ bg_services = BackgroundServices()
 @app.route('/')
 def home():
     return f"""
-    <h1>財經新聞推播機器人 v2.1 (改進版)</h1>
+    <h1>📈 台股美股新聞推播機器人 v3.0</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
-    <p>📰 專門推播鉅亨網即時新聞</p>
+    <p>📰 專注台股和美股投資新聞推播</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     
-    <h2>🆕 新功能：</h2>
+    <h2>🎯 專注功能：</h2>
     <ul>
-        <li>✅ 支援多則新聞推播 - 不再漏掉任何新聞</li>
-        <li>✅ 完整新聞連結 - 可直接點擊閱讀全文</li>
-        <li>✅ 推播數量控制 - 避免洗版</li>
+        <li>📈 台股專區 - 台灣股市投資新聞</li>
+        <li>🇺🇸 美股專區 - 美國股市投資新聞</li>
     </ul>
     
-    <h2>新聞分類：</h2>
+    <h2>🆕 功能特色：</h2>
     <ul>
-        <li>台股模式 - 專注台股新聞</li>
-        <li>美股模式 - 專注美股新聞</li>
-        <li>綜合模式 - 全部財經新聞</li>
+        <li>✅ 多則新聞推播 - 不漏掉任何重要新聞</li>
+        <li>✅ 完整新聞連結 - 直接點擊閱讀全文</li>
+        <li>✅ 專業投資新聞 - 僅專注股市相關新聞</li>
+        <li>✅ 時間範圍控制 - 可設定台股/美股交易時間推播</li>
     </ul>
     
-    <h2>基本指令：</h2>
+    <h2>📝 基本指令：</h2>
     <ul>
-        <li>開始新聞推播</li>
-        <li>停止新聞推播</li>
-        <li>新聞狀態</li>
-        <li>測試新聞</li>
-        <li>設定推播數量 [數量] - 設定單次最大推播則數</li>
+        <li><strong>台股模式</strong> - 切換到台股新聞</li>
+        <li><strong>美股模式</strong> - 切換到美股新聞</li>
+        <li><strong>開始新聞推播</strong> - 啟動監控</li>
+        <li><strong>停止新聞推播</strong> - 停止監控</li>
+        <li><strong>新聞狀態</strong> - 查看當前設定</li>
+        <li><strong>測試新聞</strong> - 測試推播功能</li>
+    </ul>
+    
+    <h2>💡 推薦設定：</h2>
+    <ul>
+        <li>台股模式 + 設定時間 9 0 13 30 (台股交易時間)</li>
+        <li>美股模式 + 設定時間 21 30 4 0 (美股交易時間)</li>
     </ul>
     """
 
@@ -82,14 +89,16 @@ def health():
     return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
-        'version': 'news_bot_v2.1_improved_multi_news',
+        'version': 'taiwan_us_stock_news_bot_v3.0',
         'services': bg_services.services,
+        'focus': 'Taiwan and US Stock News Only',
         'news_monitoring': {
             'is_running': news_bot.is_running,
             'user_id': news_bot.user_id,
             'last_check_time': news_bot.last_check_time.isoformat() if news_bot.last_check_time else None,
             'check_interval_minutes': news_bot.check_interval // 60,
             'news_category': news_bot.news_category,
+            'category_display': '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞',
             'push_time_range': f"{news_bot.start_time.strftime('%H:%M')}-{news_bot.end_time.strftime('%H:%M')}",
             'weekend_enabled': news_bot.weekend_enabled,
             'max_news_per_check': news_bot.max_news_per_check,
@@ -98,13 +107,13 @@ def health():
     })
 
 def handle_news_command(message_text, user_id):
-    """處理新聞相關指令（包含改進功能）"""
+    """處理新聞相關指令（僅台股美股）"""
     try:
         # 基本控制指令
-        if message_text in ['開始新聞推播', '開始推播', '啟動新聞']:
+        if message_text in ['開始新聞推播', '開始推播', '啟動新聞', '開始監控']:
             return news_bot.start_news_monitoring(user_id)
         
-        elif message_text in ['停止新聞推播', '停止推播', '關閉新聞']:
+        elif message_text in ['停止新聞推播', '停止推播', '關閉新聞', '停止監控']:
             return news_bot.stop_news_monitoring()
         
         elif message_text in ['新聞狀態', '狀態查詢', '監控狀態']:
@@ -116,7 +125,8 @@ def handle_news_command(message_text, user_id):
             if news_list:
                 latest_news = news_list[0]
                 formatted_message = news_bot.format_news_message(latest_news)
-                return f"📰 測試新聞推播\n\n{formatted_message}"
+                category_name = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
+                return f"📰 測試{category_name}推播\n\n{formatted_message}"
             else:
                 return "❌ 無法抓取新聞進行測試"
         
@@ -126,30 +136,19 @@ def handle_news_command(message_text, user_id):
             if news_list and len(news_list) >= 2:
                 test_news = news_list[:2]  # 取前兩則進行測試
                 success_count = news_bot.send_multiple_news_notifications(test_news)
-                return f"📰 多則新聞測試完成\n✅ 成功推播 {success_count}/{len(test_news)} 則新聞"
+                category_name = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
+                return f"📰 多則{category_name}測試完成\n✅ 成功推播 {success_count}/{len(test_news)} 則新聞"
             else:
                 return "❌ 無法抓取足夠新聞進行多則測試"
         
-        # 新聞分類切換指令
-        elif message_text in ['台股模式', '台股新聞', '切換台股']:
+        # 新聞分類切換指令（僅台股和美股）
+        elif message_text in ['台股模式', '台股新聞', '切換台股', '台股']:
             result = news_bot.set_news_category('tw_stock')
-            return f"✅ {result}\n📈 現在將推播台股相關新聞"
+            return f"✅ {result}\n📈 專注台灣股市投資新聞\n💡 建議設定時間：9:00-13:30 (台股交易時間)"
         
-        elif message_text in ['美股模式', '美股新聞', '切換美股']:
+        elif message_text in ['美股模式', '美股新聞', '切換美股', '美股']:
             result = news_bot.set_news_category('us_stock')
-            return f"✅ {result}\n🇺🇸 現在將推播美股相關新聞"
-        
-        elif message_text in ['綜合模式', '綜合新聞', '全部新聞']:
-            result = news_bot.set_news_category('headline')
-            return f"✅ {result}\n📰 現在將推播綜合財經新聞"
-        
-        elif message_text in ['外匯模式', '外匯新聞']:
-            result = news_bot.set_news_category('forex')
-            return f"✅ {result}\n💱 現在將推播外匯相關新聞"
-        
-        elif message_text in ['期貨模式', '期貨新聞']:
-            result = news_bot.set_news_category('futures')
-            return f"✅ {result}\n📊 現在將推播期貨相關新聞"
+            return f"✅ {result}\n🇺🇸 專注美國股市投資新聞\n💡 建議設定時間：21:30-04:00 (美股交易時間)"
         
         elif message_text in ['新聞分類', '分類說明', '分類幫助']:
             return news_bot.get_category_help()
@@ -189,40 +188,48 @@ def handle_news_command(message_text, user_id):
                 
                 return news_bot.set_time_range(start_hour, start_minute, end_hour, end_minute)
             else:
-                return "❌ 格式錯誤\n💡 正確格式：設定時間 [開始時] [開始分] [結束時] [結束分]\n例如：設定時間 9 0 21 0"
+                return "❌ 格式錯誤\n💡 正確格式：設定時間 [開始時] [開始分] [結束時] [結束分]\n例如：設定時間 9 0 13 30"
         
         elif message_text in ['切換週末', '週末設定', '週末推播']:
             return news_bot.toggle_weekend()
         
+        # 快速設定指令
+        elif message_text in ['台股時間', '台股交易時間']:
+            result = news_bot.set_time_range(9, 0, 13, 30)
+            return f"✅ {result}\n📈 已設定為台股交易時間"
+        
+        elif message_text in ['美股時間', '美股交易時間']:
+            result = news_bot.set_time_range(21, 30, 4, 0)
+            return f"✅ {result}\n🇺🇸 已設定為美股交易時間"
+        
         elif message_text in ['新聞設定', '設定說明', '設定幫助']:
-            return """⚙️ 新聞機器人設定說明 (改進版)
+            return """⚙️ 股市新聞機器人設定說明
 
-📰 新聞分類：
-• 台股模式 - 專注台股新聞
-• 美股模式 - 專注美股新聞  
-• 綜合模式 - 全部財經新聞
-• 外匯模式 - 外匯相關新聞
-• 期貨模式 - 期貨相關新聞
+📈 新聞分類（僅兩種）：
+• 台股模式 - 專注台灣股市新聞
+• 美股模式 - 專注美國股市新聞
 
 ⏰ 時間設定：
 • 設定間隔 [分鐘] - 調整檢查頻率(1-60分鐘)
 • 設定時間 [開始時] [開始分] [結束時] [結束分] - 推播時間範圍
+• 台股時間 - 快速設定台股交易時間(9:00-13:30)
+• 美股時間 - 快速設定美股交易時間(21:30-04:00)
 • 切換週末 - 開啟/關閉週末推播
 
-📊 推播控制 (新功能)：
+📊 推播控制：
 • 設定推播數量 [數量] - 單次最大推播則數(1-10則)
 • 系統會自動間隔2秒推播多則新聞，避免洗版
 
-🔗 完整連結 (新功能)：
+🔗 完整連結：
 • 每則新聞都包含完整閱讀連結
 • 可直接點擊查看鉅亨網原文
 
 💡 推薦設定：
-台股模式 + 設定時間 9 0 13 30 + 設定推播數量 3
-美股模式 + 設定時間 21 30 4 0 + 設定推播數量 5"""
+台股模式 + 台股時間 + 設定推播數量 3
+美股模式 + 美股時間 + 設定推播數量 5"""
         
-        elif message_text in ['新聞幫助', '指令說明', '說明']:
-            return """📰 新聞機器人指令說明 (v2.1改進版)
+        elif message_text in ['新聞幫助', '指令說明', '說明', '幫助']:
+            return """📈 股市新聞機器人指令說明 (v3.0專業版)
 
 🔔 基本控制：
 • 開始新聞推播 - 啟動自動新聞監控
@@ -231,58 +238,65 @@ def handle_news_command(message_text, user_id):
 • 測試新聞 - 手動抓取最新新聞
 • 測試多則 - 測試多則新聞推播功能
 
-📈 新聞分類：
-• 台股模式 - 專注台股新聞
-• 美股模式 - 專注美股新聞
-• 綜合模式 - 全部財經新聞
+📈 新聞分類（專注投資）：
+• 台股模式 - 專注台灣股市新聞
+• 美股模式 - 專注美國股市新聞
 
 ⚙️ 時間設定：
 • 設定間隔 [分鐘] - 調整檢查頻率
 • 設定時間 [開始時] [開始分] [結束時] [結束分] - 推播時間
+• 台股時間 - 快速設定台股交易時間
+• 美股時間 - 快速設定美股交易時間
 • 切換週末 - 週末推播開關
 
-📊 推播控制 (🆕新功能)：
+📊 推播控制：
 • 設定推播數量 [數量] - 控制單次最大推播則數
 
 ℹ️ 說明文檔：
 • 新聞設定 - 詳細設定說明
 • 新聞分類 - 分類功能說明
 
-🆕 改進功能：
-✅ 多則新聞推播 - 5分鐘內所有新聞都不會漏掉
+🎯 專業特色：
+✅ 專注投資新聞 - 僅台股和美股專區
+✅ 多則新聞推播 - 不漏掉任何重要新聞
 ✅ 完整新聞連結 - 每則新聞都有閱讀全文連結
-✅ 推播數量控制 - 避免一次推播太多新聞
-✅ 智能時間間隔 - 多則新聞間隔推播避免洗版
+✅ 智能時間控制 - 可設定交易時間推播
+✅ 推播數量控制 - 避免訊息洗版
 
-💡 建議使用：
-1. 選擇 台股模式 或 美股模式
-2. 設定推播數量 3 (推薦)
-3. 開始新聞推播
+💡 快速上手：
+1. 台股模式 或 美股模式
+2. 台股時間 或 美股時間
+3. 設定推播數量 3
+4. 開始新聞推播
 
-📰 新聞來源：鉅亨網
+📰 新聞來源：鉅亨網 (台股/美股專區)
 🕐 當前時間：""" + get_taiwan_time()
         
         else:
-            return f"""歡迎使用財經新聞機器人！(v2.1改進版)
+            current_category = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
+            category_icon = '📈' if news_bot.news_category == 'tw_stock' else '🇺🇸'
+            
+            return f"""歡迎使用股市新聞機器人！(v3.0專業版)
 
-🆕 新功能亮點：
-✅ 多則新聞推播 - 再也不會漏掉任何新聞
-✅ 完整新聞連結 - 直接點擊閱讀全文
-✅ 推播數量控制 - 避免訊息洗版
+🎯 專注投資新聞：
+✅ 台股專區 - 台灣股市投資新聞
+✅ 美股專區 - 美國股市投資新聞
 
 📰 快速開始：
 • 台股模式 - 專注台股投資新聞
 • 美股模式 - 專注美股投資新聞
-• 設定推播數量 3 - 控制推播則數
+• 台股時間 / 美股時間 - 快速設定交易時間
 • 開始新聞推播 - 立即啟動監控
 
-📊 功能特色：
-✅ 智能分類 - 台股/美股專區
-✅ 時間控制 - 設定推播時間範圍
-✅ 週末開關 - 控制週末是否推播
-✅ 頻率調整 - 自訂檢查間隔
-✅ 多則推播 - 不漏掉任何新新聞
-✅ 完整連結 - 直接閱讀原文
+📊 當前設定：
+{category_icon} 目前分類：{current_category}
+⏰ 推播時間：{news_bot.start_time.strftime('%H:%M')}-{news_bot.end_time.strftime('%H:%M')}
+
+🎯 功能特色：
+✅ 專業投資新聞 - 僅股市相關新聞
+✅ 智能時間控制 - 可設定交易時間推播
+✅ 多則新聞推播 - 不漏掉重要新聞
+✅ 完整新聞連結 - 直接閱讀原文
 
 🕐 當前時間：{get_taiwan_time()}
 
@@ -303,7 +317,7 @@ def webhook():
                 message_text = event['message']['text']
                 user_id = event['source']['userId']
                 
-                print(f"📨 新聞Bot收到訊息: {message_text} - {get_taiwan_time()}")
+                print(f"📨 股市新聞Bot收到訊息: {message_text} - {get_taiwan_time()}")
                 
                 # 處理新聞指令
                 reply_text = handle_news_command(message_text, user_id)
@@ -322,10 +336,12 @@ def test_fetch_news():
         news_list = news_bot.fetch_cnyes_news()
         
         if news_list:
+            category_display = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
             return jsonify({
                 'success': True,
                 'news_count': len(news_list),
                 'current_category': news_bot.news_category,
+                'category_display': category_display,
                 'latest_news': {
                     'title': news_list[0].get('title', ''),
                     'newsId': news_list[0].get('newsId', ''),
@@ -358,10 +374,12 @@ def test_format_news():
         if news_list:
             latest_news = news_list[0]
             formatted_message = news_bot.format_news_message(latest_news)
+            category_display = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
             
             return jsonify({
                 'success': True,
                 'current_category': news_bot.news_category,
+                'category_display': category_display,
                 'raw_news': latest_news,
                 'formatted_message': formatted_message,
                 'news_url': f"https://news.cnyes.com/news/id/{latest_news.get('newsId', '')}",
@@ -388,10 +406,12 @@ def test_multi_news():
     try:
         # 模擬檢查新新聞
         new_news_list = news_bot.check_new_news()
+        category_display = '台股新聞' if news_bot.news_category == 'tw_stock' else '美股新聞'
         
         return jsonify({
             'success': True,
             'current_category': news_bot.news_category,
+            'category_display': category_display,
             'new_news_count': len(new_news_list),
             'max_news_per_check': news_bot.max_news_per_check,
             'news_interval_seconds': news_bot.news_interval,
@@ -414,21 +434,32 @@ def test_multi_news():
             'timestamp': get_taiwan_time()
         })
 
-@app.route('/test/category/<category>')
-def test_category(category):
-    """測試不同分類的新聞"""
+@app.route('/test/switch-category/<category>')
+def test_switch_category(category):
+    """測試分類切換功能"""
     try:
-        old_category = news_bot.news_category
-        news_bot.news_category = category
+        if category not in ['tw_stock', 'us_stock']:
+            return jsonify({
+                'success': False,
+                'error': '僅支援 tw_stock 和 us_stock 分類',
+                'valid_categories': ['tw_stock', 'us_stock'],
+                'timestamp': get_taiwan_time()
+            })
         
+        old_category = news_bot.news_category
+        result = news_bot.set_news_category(category)
+        
+        # 測試新分類的新聞抓取
         news_list = news_bot.fetch_cnyes_news()
         
-        # 恢復原分類
-        news_bot.news_category = old_category
+        category_display = '台股新聞' if category == 'tw_stock' else '美股新聞'
         
         return jsonify({
             'success': True,
-            'test_category': category,
+            'old_category': old_category,
+            'new_category': category,
+            'category_display': category_display,
+            'set_result': result,
             'news_count': len(news_list) if news_list else 0,
             'sample_titles': [news.get('title', '') for news in news_list[:3]] if news_list else [],
             'sample_urls': [f"https://news.cnyes.com/news/id/{news.get('newsId', '')}" for news in news_list[:3]] if news_list else [],
@@ -443,22 +474,23 @@ def test_category(category):
         })
 
 def initialize_app():
-    print("🚀 財經新聞推播機器人 v2.1 (改進版) 啟動中...")
+    print("🚀 台股美股新聞推播機器人 v3.0 (專業版) 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     bg_services.start_keep_alive()
     
-    print("=" * 60)
-    print("📰 新聞推播機器人：✅ 已啟動")
-    print("🔄 基本功能：開始推播、停止推播、狀態查詢、測試新聞")
-    print("📈 分類模式：台股模式、美股模式、綜合模式")
-    print("🆕 改進功能：")
-    print("   ✅ 多則新聞推播 - 5分鐘內所有新聞都不漏掉")
+    print("=" * 70)
+    print("📈 股市新聞推播機器人：✅ 已啟動")
+    print("🎯 專注功能：僅台股和美股投資新聞")
+    print("🔄 基本功能：台股模式、美股模式、開始推播、停止推播")
+    print("⏰ 快速設定：台股時間、美股時間")
+    print("🆕 專業功能：")
+    print("   ✅ 多則新聞推播 - 不漏掉任何重要投資新聞")
     print("   ✅ 完整新聞連結 - 每則新聞都有閱讀全文連結")
-    print("   ✅ 推播數量控制 - 可設定單次最大推播則數")
-    print("   ✅ 智能推播間隔 - 多則新聞間自動間隔避免洗版")
-    print("📊 測試端點：/test/fetch-news、/test/format-news、/test/multi-news")
-    print("=" * 60)
+    print("   ✅ 專業投資新聞 - 僅專注股市相關新聞")
+    print("   ✅ 智能時間控制 - 可設定台股/美股交易時間推播")
+    print("📊 測試端點：/test/fetch-news、/test/format-news、/test/multi-news、/test/switch-category/<category>")
+    print("=" * 70)
     print("🎉 系統初始化完成！")
 
 if __name__ == '__main__':
