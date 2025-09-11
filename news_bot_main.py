@@ -103,7 +103,7 @@ def handle_news_command(message_text, user_id):
             news_list = news_bot.fetch_cnyes_news()
             if news_list:
                 latest_news = news_list[0]
-                formatted_message = news_bot.format_news_message(latest_news)
+                formatted_message = news_bot.format_single_news(latest_news)  # 修正函數名稱
                 return f"📰 測試新聞推播\n\n{formatted_message}"
             else:
                 return "❌ 無法抓取新聞進行測試"
