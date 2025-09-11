@@ -1,4 +1,4 @@
-# news_bot.py - 完整版本支援新聞分類
+# news_bot.py - 改進版本支援多則新聞推播和完整連結
 import os
 import requests
 import threading
@@ -10,7 +10,7 @@ from utils.line_api import send_push_message
 class NewsBot:
     def __init__(self):
         self.token = os.getenv('NEWS_BOT_TOKEN')
-        self.last_news_id = None
+        self.last_check_time = None  # 改用時間戳記錄
         self.user_id = None
         self.news_thread = None
         self.is_running = False
@@ -21,6 +21,8 @@ class NewsBot:
         self.start_time = dt_time(9, 0)   # 推播開始時間 9:00
         self.end_time = dt_time(21, 0)    # 推播結束時間 21:00
         self.weekend_enabled = False      # 週末是否推播
+        self.max_news_per_check = 5       # 單次檢查最大推播數量
+        self.news_interval = 2            # 多則新聞間推播間隔(秒)
         
     def set_user_id(self, user_id):
         """設定要推播的用戶ID"""
@@ -59,6 +61,14 @@ class NewsBot:
             return f"已設定新聞分類為：{valid_categories[category]}"
         else:
             return f"❌ 無效的分類，可用分類：{', '.join(valid_categories.keys())}"
+    
+    def set_max_news_per_check(self, max_count):
+        """設定單次檢查最大推播數量"""
+        if 1 <= max_count <= 10:
+            self.max_news_per_check = max_count
+            return f"已設定單次最大推播數量為 {max_count} 則"
+        else:
+            return "推播數量請設定在 1-10 則之間"
     
     def get_category_help(self):
         """取得分類說明"""
@@ -111,7 +121,7 @@ class NewsBot:
         try:
             url = f"https://api.cnyes.com/media/api/v1/newslist/category/{self.news_category}"
             params = {
-                'limit': 10,
+                'limit': 20,  # 增加抓取數量以確保能獲得足夠的新新聞
                 'page': 1
             }
             
@@ -139,41 +149,67 @@ class NewsBot:
             return []
     
     def check_new_news(self):
-        """檢查是否有新新聞"""
+        """檢查是否有新新聞 - 改進版本支援多則新聞"""
         news_list = self.fetch_cnyes_news()
         
         if not news_list:
-            return None
+            return []
             
-        # 取得最新的新聞
-        latest_news = news_list[0]
-        latest_news_id = latest_news.get('newsId')
+        current_time = get_taiwan_datetime()
         
-        # 如果是第一次執行，記錄當前最新新聞ID但不推播
-        if self.last_news_id is None:
-            self.last_news_id = latest_news_id
-            print(f"初始化完成，記錄最新新聞ID: {latest_news_id} - {get_taiwan_time()}")
-            return None
+        # 如果是第一次執行，記錄當前時間但不推播
+        if self.last_check_time is None:
+            self.last_check_time = current_time
+            print(f"初始化完成，記錄檢查時間: {current_time} - {get_taiwan_time()}")
+            return []
         
-        # 檢查是否有新新聞
-        if latest_news_id != self.last_news_id:
-            print(f"發現新新聞: {latest_news_id} - {get_taiwan_time()}")
+        # 找出所有新新聞
+        new_news_list = []
+        for news in news_list:
+            news_timestamp = news.get('publishAt', 0)
+            
+            # 處理時間戳
+            if isinstance(news_timestamp, (int, float)) and news_timestamp > 0:
+                try:
+                    # 檢查時間戳是否合理（避免異常時間戳）
+                    if 1577836800 <= news_timestamp <= 1893456000:  # 2020-2030年
+                        news_time = datetime.fromtimestamp(news_timestamp)
+                        
+                        # 如果新聞時間晚於上次檢查時間，則為新新聞
+                        if news_time > self.last_check_time:
+                            new_news_list.append(news)
+                except Exception as e:
+                    print(f"處理新聞時間戳錯誤: {e}")
+                    continue
+        
+        if new_news_list:
+            # 按時間排序，先推播較早的新聞
+            new_news_list.sort(key=lambda x: x.get('publishAt', 0))
+            
+            # 限制推播數量
+            if len(new_news_list) > self.max_news_per_check:
+                print(f"發現 {len(new_news_list)} 則新新聞，限制推播前 {self.max_news_per_check} 則")
+                new_news_list = new_news_list[:self.max_news_per_check]
+            
+            print(f"發現 {len(new_news_list)} 則新新聞待推播 - {get_taiwan_time()}")
             
             # 檢查推播時間
             time_ok, time_msg = self.is_in_push_time()
             if not time_ok:
                 print(f"跳過推播: {time_msg}")
-                self.last_news_id = latest_news_id  # 仍要更新ID避免重複檢查
-                return None
+                # 仍要更新檢查時間避免重複檢查
+                self.last_check_time = current_time
+                return []
             
-            print(f"通過時間檢查，準備推播")
-            self.last_news_id = latest_news_id
-            return latest_news
+            print(f"通過時間檢查，準備推播 {len(new_news_list)} 則新聞")
+            # 更新檢查時間
+            self.last_check_time = current_time
+            return new_news_list
         
-        return None
+        return []
     
     def format_news_message(self, news_data):
-        """格式化新聞訊息"""
+        """格式化新聞訊息 - 加入完整連結"""
         try:
             # 處理 Unicode 編碼的標題
             title = news_data.get('title', '無標題')
@@ -251,8 +287,14 @@ class NewsBot:
                 message += f"📄 {content_summary}\n\n"
             
             message += f"🕐 {formatted_time}\n"
-            message += f"📰 來源：鉅亨網 ({self.news_category})\n"
-            message += f"🔗 新聞ID：{news_id}"
+            message += f"📰 來源：鉅亨網 ({self.news_category})\n\n"
+            
+            # 新增：完整新聞連結
+            if news_id:
+                news_url = f"https://news.cnyes.com/news/id/{news_id}"
+                message += f"📖 閱讀完整新聞\n🔗 {news_url}"
+            else:
+                message += f"🔗 新聞ID：{news_id}"
             
             return message
             
@@ -270,24 +312,47 @@ class NewsBot:
         success = send_push_message(self.user_id, message, bot_type='news')
         
         if success:
-            print(f"新聞推播成功 - {get_taiwan_time()}")
+            title = news_data.get('title', '無標題')[:30] + "..." if len(news_data.get('title', '')) > 30 else news_data.get('title', '無標題')
+            print(f"新聞推播成功: {title} - {get_taiwan_time()}")
         else:
             print(f"新聞推播失敗 - {get_taiwan_time()}")
             
         return success
     
+    def send_multiple_news_notifications(self, news_list):
+        """發送多則新聞推播"""
+        if not news_list:
+            return 0
+        
+        success_count = 0
+        
+        for i, news in enumerate(news_list):
+            # 推播新聞
+            if self.send_news_notification(news):
+                success_count += 1
+            
+            # 如果不是最後一則新聞，等待間隔時間
+            if i < len(news_list) - 1:
+                print(f"等待 {self.news_interval} 秒後推播下一則新聞...")
+                time.sleep(self.news_interval)
+        
+        print(f"批次推播完成: {success_count}/{len(news_list)} 成功 - {get_taiwan_time()}")
+        return success_count
+    
     def news_check_loop(self):
-        """新聞檢查循環"""
+        """新聞檢查循環 - 改進版本支援多則新聞"""
         print(f"新聞檢查循環開始，間隔{self.check_interval//60}分鐘 - {get_taiwan_time()}")
         
         while self.is_running:
             try:
-                new_news = self.check_new_news()
+                new_news_list = self.check_new_news()
                 
-                if new_news:
-                    title = new_news.get('title', '無標題')
-                    print(f"發現新新聞並推播: {title} - {get_taiwan_time()}")
-                    self.send_news_notification(new_news)
+                if new_news_list:
+                    print(f"準備推播 {len(new_news_list)} 則新新聞")
+                    success_count = self.send_multiple_news_notifications(new_news_list)
+                    
+                    if success_count > 0:
+                        print(f"成功推播 {success_count} 則新聞 - {get_taiwan_time()}")
                 
                 time.sleep(self.check_interval)
                 
@@ -320,6 +385,7 @@ class NewsBot:
         settings_info += f"\n⏰ 推播時間：{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
         settings_info += f"\n📅 週末推播：{'啟用' if self.weekend_enabled else '停用'}"
         settings_info += f"\n🔄 檢查間隔：{self.check_interval//60} 分鐘"
+        settings_info += f"\n📊 單次最大推播：{self.max_news_per_check} 則"
         
         return f"✅ 新聞監控已啟動\n📰 鉅亨網財經新聞自動推播{settings_info}\n🕐 {get_taiwan_time()}"
     
@@ -332,7 +398,7 @@ class NewsBot:
         """獲取新聞監控狀態"""
         status = "運行中" if self.is_running else "已停止"
         user_info = f"推播對象: {self.user_id}" if self.user_id else "未設定推播對象"
-        last_news_info = f"最後新聞ID: {self.last_news_id}" if self.last_news_id else "尚未抓取過新聞"
+        last_check_info = f"最後檢查: {self.last_check_time.strftime('%H:%M:%S')}" if self.last_check_time else "尚未開始檢查"
         
         time_ok, time_msg = self.is_in_push_time()
         time_status = f"推播狀態: {time_msg}"
@@ -351,14 +417,16 @@ class NewsBot:
 
 🔄 監控狀態: {status}
 👤 {user_info}
-📰 {last_news_info}
-⏰ {time_status}
+⏰ {last_check_info}
+📊 {time_status}
 
 ⚙️ 設定資訊:
 📰 新聞分類: {current_category}
 ⏰ 推播時間: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}
 📅 週末推播: {'啟用' if self.weekend_enabled else '停用'}
 🔄 檢查間隔: {self.check_interval//60} 分鐘
+📊 單次最大推播: {self.max_news_per_check} 則
+⏱️ 推播間隔: {self.news_interval} 秒
 
 🕐 {get_taiwan_time()}"""
         
