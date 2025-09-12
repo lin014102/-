@@ -1,5 +1,5 @@
 """
-bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步
+bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步 (完整整合版)
 負責每日 03:30 分析帳單，15:15 推播結果，並同步金額到提醒系統
 """
 
@@ -8,6 +8,7 @@ import json
 import threading
 import time
 import logging
+import re
 from datetime import datetime, timedelta
 from google_sheets_handler import GoogleSheetsHandler
 from google_drive_handler import GoogleDriveHandler
@@ -17,7 +18,7 @@ from utils.line_api import send_push_message
 
 
 class BillScheduler:
-    """信用卡帳單分析定時任務管理器 + 帳單金額同步"""
+    """信用卡帳單分析定時任務管理器 + 帳單金額同步 (完整整合版)"""
     
     def __init__(self, reminder_bot):
         self.logger = logging.getLogger(__name__)
@@ -68,14 +69,14 @@ class BillScheduler:
                 
                 self.logger.debug(f"定時任務檢查 - 台灣時間: {taiwan_now.strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                # 檢查是否需要執行帳單分析 (03:30 測試時間)
+                # 檢查是否需要執行帳單分析 (03:30)
                 if (current_time == self.analysis_time and 
                     self.last_analysis_date != today_date):
                     self.logger.info("開始執行每日帳單分析任務")
                     self._run_daily_analysis()
                     self.last_analysis_date = today_date
                 
-                # 檢查是否需要執行推播任務 (15:15 測試時間)
+                # 檢查是否需要執行推播任務 (15:15)
                 elif (current_time == self.notification_time and 
                       self.last_notification_date != today_date):
                     self.logger.info("開始執行每日推播任務")
@@ -225,25 +226,35 @@ class BillScheduler:
             self.logger.error(f"發送失敗通知錯誤: {e}")
     
     def _send_success_notifications(self, success_files, notification_user_id):
-        """發送成功分析通知（修改版，包含帳單金額同步）"""
+        """發送成功分析通知（完整整合版 - 包含帳單金額同步到提醒系統）"""
         try:
+            sync_success_count = 0
+            sync_failed_count = 0
+            
             for file_info in success_files:
                 try:
                     if file_info.get('analysis_result'):
                         analysis_data = json.loads(file_info['analysis_result'])
                         
-                        # 原本的推播邏輯
+                        # 1. 原本的推播邏輯
                         message = self._format_analysis_message(
                             file_info['filename'], 
                             analysis_data
                         )
                         send_push_message(notification_user_id, message)
                         
-                        # 🆕 新增：如果是信用卡帳單，同步金額到提醒系統
+                        # 2. 🆕 完整版：如果是信用卡帳單，同步金額到提醒系統
                         if analysis_data.get('document_type') != "交割憑單":
-                            self._sync_bill_amount_to_reminder(analysis_data, file_info['filename'])
+                            sync_result = self._sync_bill_amount_to_reminder(
+                                analysis_data, 
+                                file_info['filename']
+                            )
+                            if sync_result['success']:
+                                sync_success_count += 1
+                            else:
+                                sync_failed_count += 1
                         
-                        # 原本的狀態更新
+                        # 3. 原本的狀態更新
                         self.sheets_handler.update_notification_status(
                             file_info['row_index'], 
                             '已推播'
@@ -258,48 +269,188 @@ class BillScheduler:
                         file_info['row_index'], 
                         '推播失敗'
                     )
+                    sync_failed_count += 1
+            
+            # 統計同步結果
+            if sync_success_count > 0 or sync_failed_count > 0:
+                self.logger.info(f"📊 帳單金額同步統計 - 成功: {sync_success_count}, 失敗: {sync_failed_count}")
                     
         except Exception as e:
             self.logger.error(f"發送成功通知錯誤: {e}")
     
     def _sync_bill_amount_to_reminder(self, analysis_data, filename):
-        """🆕 新增：將帳單金額同步到提醒系統"""
+        """🆕 完整版：將帳單金額同步到提醒系統"""
         try:
+            self.logger.info(f"🔄 開始同步帳單金額: {filename}")
+            
+            # 1. 提取分析結果
             result = analysis_data.get('analysis_result', {})
             bank_name = analysis_data.get('bank_name', '')
             total_due = result.get('total_amount_due', '')
             due_date = result.get('payment_due_date', '')
             statement_date = result.get('statement_date', '')
             
-            if bank_name and total_due and due_date:
-                # 呼叫提醒系統的儲存函數
-                success = self.reminder_bot.update_bill_amount(
-                    bank_name, 
-                    total_due, 
-                    due_date,
-                    statement_date
-                )
-                
-                if success:
-                    self.logger.info(f"✅ 同步帳單金額成功: {bank_name} - {total_due}")
-                else:
-                    self.logger.error(f"❌ 同步帳單金額失敗: {bank_name}")
+            # 2. 資料完整性檢查
+            missing_fields = []
+            if not bank_name:
+                missing_fields.append('bank_name')
+            if not total_due:
+                missing_fields.append('total_amount_due')
+            if not due_date:
+                missing_fields.append('payment_due_date')
+            
+            if missing_fields:
+                error_msg = f"缺少必要欄位: {missing_fields}"
+                self.logger.warning(f"⚠️ 同步帳單金額跳過 - {error_msg} - 檔案: {filename}")
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'missing_fields': missing_fields
+                }
+            
+            # 3. 資料格式標準化
+            normalized_data = self._normalize_bill_data(bank_name, total_due, due_date, statement_date)
+            
+            if not normalized_data['success']:
+                self.logger.error(f"❌ 資料格式化失敗: {normalized_data['error']} - 檔案: {filename}")
+                return normalized_data
+            
+            # 4. 呼叫提醒系統的儲存函數
+            success = self.reminder_bot.update_bill_amount(
+                normalized_data['bank_name'], 
+                normalized_data['amount'], 
+                normalized_data['due_date'],
+                normalized_data['statement_date']
+            )
+            
+            if success:
+                self.logger.info(f"✅ 同步帳單金額成功: {normalized_data['bank_name']} - {normalized_data['amount']} - 截止: {normalized_data['due_date']}")
+                return {
+                    'success': True,
+                    'bank_name': normalized_data['bank_name'],
+                    'amount': normalized_data['amount'],
+                    'due_date': normalized_data['due_date']
+                }
             else:
-                missing_fields = []
-                if not bank_name:
-                    missing_fields.append('bank_name')
-                if not total_due:
-                    missing_fields.append('total_amount_due')
-                if not due_date:
-                    missing_fields.append('payment_due_date')
-                
-                self.logger.warning(f"⚠️ 同步帳單金額跳過，缺少欄位: {missing_fields} - 檔案: {filename}")
+                error_msg = f"MongoDB 寫入失敗"
+                self.logger.error(f"❌ 同步帳單金額失敗: {error_msg} - {normalized_data['bank_name']}")
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
                 
         except Exception as e:
-            self.logger.error(f"❌ 同步帳單金額異常: {e} - 檔案: {filename}")
+            error_msg = f"同步異常: {str(e)}"
+            self.logger.error(f"❌ 同步帳單金額異常: {error_msg} - 檔案: {filename}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'success': False,
+                'error': error_msg
+            }
+    
+    def _normalize_bill_data(self, bank_name, total_due, due_date, statement_date=None):
+        """標準化帳單資料格式"""
+        try:
+            # 1. 銀行名稱標準化 (使用 ReminderBot 的方法)
+            normalized_bank = self.reminder_bot._normalize_bank_name(bank_name)
+            
+            # 2. 金額格式標準化
+            # 保持原始格式，確保包含貨幣符號和千分位逗號
+            if isinstance(total_due, (int, float)):
+                # 如果是數字，轉換為標準格式
+                formatted_amount = f"NT${int(total_due):,}"
+            else:
+                # 如果是字串，清理並標準化
+                amount_str = str(total_due).strip()
+                
+                # 移除可能的空格和特殊字符
+                amount_str = re.sub(r'\s+', '', amount_str)
+                
+                # 如果沒有貨幣符號，加上 NT$
+                if not any(currency in amount_str.upper() for currency in ['NT$', 'TWD', '$']):
+                    # 提取數字部分
+                    numbers = re.findall(r'[\d,]+', amount_str)
+                    if numbers:
+                        clean_number = numbers[0].replace(',', '')
+                        if clean_number.isdigit():
+                            formatted_amount = f"NT${int(clean_number):,}"
+                        else:
+                            formatted_amount = amount_str
+                    else:
+                        formatted_amount = amount_str
+                else:
+                    # 已有貨幣符號，保持原樣但確保千分位逗號
+                    if 'NT$' in amount_str.upper():
+                        number_part = re.sub(r'[^\d]', '', amount_str)
+                        if number_part.isdigit():
+                            formatted_amount = f"NT${int(number_part):,}"
+                        else:
+                            formatted_amount = amount_str
+                    else:
+                        formatted_amount = amount_str
+            
+            # 3. 日期格式標準化 (統一為 YYYY/MM/DD)
+            normalized_due_date = self._normalize_date_format(due_date)
+            if not normalized_due_date:
+                return {
+                    'success': False,
+                    'error': f"無效的到期日格式: {due_date}"
+                }
+            
+            normalized_statement_date = None
+            if statement_date:
+                normalized_statement_date = self._normalize_date_format(statement_date)
+            
+            return {
+                'success': True,
+                'bank_name': normalized_bank,
+                'amount': formatted_amount,
+                'due_date': normalized_due_date,
+                'statement_date': normalized_statement_date
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f"資料標準化失敗: {str(e)}"
+            }
+    
+    def _normalize_date_format(self, date_str):
+        """統一日期格式為 YYYY/MM/DD"""
+        if not date_str:
+            return None
+        
+        try:
+            # 嘗試各種日期格式
+            date_formats = [
+                '%Y/%m/%d',
+                '%Y-%m-%d', 
+                '%Y/%m/%d',
+                '%m/%d/%Y',
+                '%d/%m/%Y'
+            ]
+            
+            parsed_date = None
+            for fmt in date_formats:
+                try:
+                    parsed_date = datetime.strptime(str(date_str).strip(), fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if parsed_date:
+                return parsed_date.strftime('%Y/%m/%d')
+            else:
+                self.logger.warning(f"⚠️ 無法解析日期格式: {date_str}")
+                return str(date_str)  # 保持原樣
+                
+        except Exception as e:
+            self.logger.error(f"❌ 日期格式化錯誤: {e}")
+            return str(date_str)  # 保持原樣
     
     def _format_analysis_message(self, filename, analysis_data):
-        """格式化分析結果訊息"""
+        """格式化分析結果訊息 (更新版 - 顯示同步狀態)"""
         try:
             bank_code = filename.split('_')[0] if '_' in filename else '未知銀行'
             result = analysis_data.get('analysis_result', {})
@@ -356,7 +507,7 @@ class BillScheduler:
         return text + "\n\n"
     
     def _format_credit_card_message(self, filename, bank_name, result):
-        """格式化信用卡帳單訊息 - 改良版（顯示前30筆明細）+ 同步提示"""
+        """格式化信用卡帳單訊息 - 更新版（顯示同步到提醒系統狀態）"""
         message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
         
         total_due = result.get('total_amount_due', '')
@@ -370,15 +521,18 @@ class BillScheduler:
         if due_date:
             message += f"⏰ 繳款期限: {due_date}\n"
         
-        # 🆕 新增同步提示
+        # 🆕 顯示同步狀態
         if total_due and due_date:
-            message += f"📊 已同步到提醒系統，下次提醒會顯示具體金額\n"
+            message += f"📊 ✅ 已同步到智能提醒系統\n"
+            message += f"🔔 系統將在截止前自動提醒具體金額\n"
+        else:
+            message += f"⚠️ 部分資料不完整，可能影響提醒功能\n"
         
         transactions = result.get('transactions', [])
         if transactions:
             message += f"🛍️ 消費筆數: {len(transactions)}筆\n"
             
-            # 顯示前30筆交易（從原本的8筆增加）
+            # 顯示前30筆交易
             display_count = min(30, len(transactions))
             message += f"\n消費明細 (前{display_count}筆):\n"
             
