@@ -1,6 +1,6 @@
 """
-reminder_bot.py - 提醒機器人模組 (修正版生理期追蹤 + 新增下次預測查詢)
-修正 get_period_status 函數的錯誤處理 + 新增 get_next_period_prediction 功能
+reminder_bot.py - 提醒機器人模組 (完整整合版)
+修正版生理期追蹤 + 下次預測查詢 + 智能帳單金額提醒整合
 """
 import re
 import os
@@ -12,7 +12,7 @@ from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_d
 from utils.line_api import send_push_message
 
 class ReminderBot:
-    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤 + 下次預測查詢"""
+    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤 + 智能帳單提醒"""
     
     def __init__(self, todo_manager):
         """初始化提醒機器人"""
@@ -64,7 +64,386 @@ class ReminderBot:
         }
         self.reminder_thread = None
     
-    # ===== 生理期追蹤功能 =====
+    # ===== 🆕 智能帳單提醒功能 =====
+    
+    def check_urgent_bill_payments(self, user_id):
+        """檢查緊急的帳單繳費提醒"""
+        try:
+            taiwan_now = get_taiwan_datetime()
+            today = taiwan_now.date()
+            
+            urgent_bills = []
+            
+            # 檢查所有銀行的帳單
+            banks = ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦']
+            
+            for bank in banks:
+                bill_info = self.get_bill_amount(bank)
+                if bill_info and bill_info.get('due_date'):
+                    try:
+                        due_date = datetime.strptime(bill_info['due_date'], '%Y/%m/%d').date()
+                        days_until_due = (due_date - today).days
+                        
+                        # 緊急程度分類
+                        if days_until_due <= 0:
+                            urgent_bills.append({
+                                'bank': bank,
+                                'amount': bill_info['amount'],
+                                'due_date': bill_info['due_date'],
+                                'days_until_due': days_until_due,
+                                'urgency': 'overdue' if days_until_due < 0 else 'due_today'
+                            })
+                        elif days_until_due <= 3:
+                            urgent_bills.append({
+                                'bank': bank,
+                                'amount': bill_info['amount'],
+                                'due_date': bill_info['due_date'],
+                                'days_until_due': days_until_due,
+                                'urgency': 'urgent'
+                            })
+                        elif days_until_due <= 7:
+                            urgent_bills.append({
+                                'bank': bank,
+                                'amount': bill_info['amount'],
+                                'due_date': bill_info['due_date'],
+                                'days_until_due': days_until_due,
+                                'urgency': 'warning'
+                            })
+                    except ValueError:
+                        continue
+            
+            return urgent_bills
+            
+        except Exception as e:
+            print(f"❌ 檢查緊急帳單失敗: {e}")
+            return []
+    
+    def format_bill_reminders(self, urgent_bills):
+        """格式化帳單提醒訊息"""
+        if not urgent_bills:
+            return ""
+        
+        # 按緊急程度排序
+        urgency_order = {'overdue': 0, 'due_today': 1, 'urgent': 2, 'warning': 3}
+        urgent_bills.sort(key=lambda x: urgency_order.get(x['urgency'], 4))
+        
+        message = ""
+        
+        # 分類顯示
+        overdue_bills = [b for b in urgent_bills if b['urgency'] == 'overdue']
+        due_today_bills = [b for b in urgent_bills if b['urgency'] == 'due_today']
+        urgent_bills_list = [b for b in urgent_bills if b['urgency'] == 'urgent']
+        warning_bills = [b for b in urgent_bills if b['urgency'] == 'warning']
+        
+        if overdue_bills:
+            message += "🚨 逾期未繳：\n"
+            for bill in overdue_bills:
+                overdue_days = abs(bill['days_until_due'])
+                message += f"❗ {bill['bank']}卡費 {bill['amount']} (逾期{overdue_days}天)\n"
+        
+        if due_today_bills:
+            if message:
+                message += "\n"
+            message += "⏰ 今日到期：\n"
+            for bill in due_today_bills:
+                message += f"🔴 {bill['bank']}卡費 {bill['amount']} (今天截止)\n"
+        
+        if urgent_bills_list:
+            if message:
+                message += "\n"
+            message += "⚡ 即將到期：\n"
+            for bill in urgent_bills_list:
+                message += f"🟡 {bill['bank']}卡費 {bill['amount']} ({bill['days_until_due']}天後)\n"
+        
+        if warning_bills:
+            if message:
+                message += "\n"
+            message += "💡 提前提醒：\n"
+            for bill in warning_bills:
+                message += f"🟢 {bill['bank']}卡費 {bill['amount']} ({bill['days_until_due']}天後)\n"
+        
+        return message
+    
+    # ===== 增強版日常提醒功能 =====
+    
+    def send_daily_reminder(self, user_id, current_time):
+        """發送每日提醒（增強版 - 包含智能帳單提醒和生理期提醒）"""
+        time_icon = '🌅' if current_time == self.user_settings['morning_time'] else '🌙'
+        time_text = '早安' if current_time == self.user_settings['morning_time'] else '晚安'
+        
+        # 1. 檢查生理期提醒
+        taiwan_now = get_taiwan_datetime()
+        period_reminder = self.check_period_reminders(user_id, taiwan_now)
+        period_message = self.format_period_reminder(period_reminder)
+        
+        # 2. 🆕 檢查緊急帳單提醒
+        urgent_bills = self.check_urgent_bill_payments(user_id)
+        bill_reminder = self.format_bill_reminders(urgent_bills)
+        
+        todos = self.todo_manager.todos
+        
+        if todos:
+            pending_todos = self.todo_manager.get_pending_todos()
+            completed_todos = self.todo_manager.get_completed_todos()
+            
+            if pending_todos:
+                message = f'{time_icon} {time_text}！您有 {len(pending_todos)} 項待辦事項：\n\n'
+                
+                # 🆕 優先顯示緊急帳單提醒
+                if bill_reminder:
+                    message += f"{bill_reminder}\n"
+                    message += f"{'='*20}\n\n"
+                
+                # 待辦事項列表（增強版顯示）
+                for i, todo in enumerate(pending_todos[:5], 1):
+                    date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
+                    enhanced_content = self._enhance_todo_with_bill_amount(todo["content"])
+                    message += f'{i}. ⭕ {enhanced_content}{date_info}\n'
+                
+                if len(pending_todos) > 5:
+                    message += f'\n...還有 {len(pending_todos) - 5} 項未完成\n'
+                
+                # 已完成事項
+                if completed_todos:
+                    message += f'\n✅ 已完成 {len(completed_todos)} 項：\n'
+                    for todo in completed_todos[:2]:
+                        message += f'✅ {todo["content"]}\n'
+                    if len(completed_todos) > 2:
+                        message += f'...還有 {len(completed_todos) - 2} 項已完成\n'
+                
+                # 生理期提醒
+                if period_message:
+                    message += f'\n{period_message}\n'
+                
+                # 時間相關的鼓勵訊息
+                if current_time == self.user_settings['morning_time']:
+                    if urgent_bills:
+                        message += f'\n💪 新的一天開始了！優先處理緊急帳單，然後完成其他任務！'
+                    else:
+                        message += f'\n💪 新的一天開始了！加油完成這些任務！'
+                else:
+                    if urgent_bills:
+                        message += f'\n🌙 檢查一下今天的進度吧！別忘了緊急的帳單繳費！'
+                    else:
+                        message += f'\n🌙 檢查一下今天的進度吧！記得為明天做準備！'
+                    
+                message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+                
+                send_push_message(user_id, message)
+                print(f"✅ 已發送增強版每日提醒 ({len(pending_todos)} 項待辦, {len(urgent_bills)} 項緊急帳單) - 台灣時間: {get_taiwan_time()}")
+                
+            else:
+                # 沒有待辦事項但可能有緊急帳單
+                message = ""
+                if current_time == self.user_settings['morning_time']:
+                    message = f'{time_icon} {time_text}！🎉 太棒了！目前沒有待辦事項\n💡 可以新增今天要做的事情'
+                else:
+                    message = f'{time_icon} {time_text}！🎉 太棒了！今天的任務都完成了\n😴 好好休息，為明天準備新的目標！'
+                
+                # 🆕 即使沒有待辦事項也要檢查緊急帳單和生理期
+                if bill_reminder:
+                    message += f'\n\n⚠️ 重要提醒：\n{bill_reminder}'
+                
+                if period_message:
+                    message += f'\n\n{period_message}'
+                
+                message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+                send_push_message(user_id, message)
+                print(f"✅ 已發送增強版每日提醒 (無待辦事項, {len(urgent_bills)} 項緊急帳單) - 台灣時間: {get_taiwan_time()}")
+                
+        else:
+            # 首次使用
+            message = ""
+            if current_time == self.user_settings['morning_time']:
+                message = f'{time_icon} {time_text}！✨ 新的一天開始了！\n💡 輸入「新增 事項名稱」來建立今天的目標'
+            else:
+                message = f'{time_icon} {time_text}！😌 今天過得如何？\n💡 別忘了為明天規劃一些目標'
+            
+            # 首次使用也要檢查緊急帳單和生理期
+            if bill_reminder:
+                message += f'\n\n⚠️ 重要提醒：\n{bill_reminder}'
+                
+            if period_message:
+                message += f'\n\n{period_message}'
+            
+            message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
+            send_push_message(user_id, message)
+            print(f"✅ 已發送增強版每日提醒 (首次使用, {len(urgent_bills)} 項緊急帳單) - 台灣時間: {get_taiwan_time()}")
+    
+    def _enhance_todo_with_bill_amount(self, todo_content):
+        """增強待辦事項顯示（更新版 - 更智能的匹配和顯示）"""
+        try:
+            if '卡費' in todo_content:
+                bill_info = None
+                matched_bank = None
+                
+                # 更智能的銀行名稱匹配
+                bank_patterns = {
+                    '永豐': ['永豐', 'sinopac', 'SinoPac'],
+                    '台新': ['台新', 'taishin', 'TAISHIN'],
+                    '國泰': ['國泰', 'cathay', 'CATHAY'],
+                    '星展': ['星展', 'dbs', 'DBS'],
+                    '匯豐': ['匯豐', 'hsbc', 'HSBC'],
+                    '玉山': ['玉山', 'esun', 'E.SUN'],
+                    '聯邦': ['聯邦', 'union', 'UNION']
+                }
+                
+                for bank_name, patterns in bank_patterns.items():
+                    if any(pattern in todo_content for pattern in patterns):
+                        bill_info = self.get_bill_amount(bank_name)
+                        matched_bank = bank_name
+                        break
+                
+                if bill_info and matched_bank:
+                    try:
+                        due_date = bill_info['due_date']
+                        amount = bill_info['amount']
+                        
+                        # 格式化日期顯示
+                        if '/' in due_date and len(due_date.split('/')) == 3:
+                            year, month, day = due_date.split('/')
+                            formatted_date = f"{int(month)}/{int(day)}"
+                        else:
+                            formatted_date = due_date
+                        
+                        # 計算緊急程度
+                        taiwan_now = get_taiwan_datetime()
+                        today = taiwan_now.date()
+                        
+                        try:
+                            due_date_obj = datetime.strptime(due_date, '%Y/%m/%d').date()
+                            days_until_due = (due_date_obj - today).days
+                            
+                            # 根據緊急程度添加不同的提示
+                            if days_until_due < 0:
+                                urgency_icon = "🚨"
+                                urgency_text = f"逾期{abs(days_until_due)}天"
+                            elif days_until_due == 0:
+                                urgency_icon = "⏰"
+                                urgency_text = "今天截止"
+                            elif days_until_due <= 3:
+                                urgency_icon = "⚡"
+                                urgency_text = f"{days_until_due}天後"
+                            elif days_until_due <= 7:
+                                urgency_icon = "💡"
+                                urgency_text = f"{days_until_due}天後"
+                            else:
+                                urgency_icon = ""
+                                urgency_text = f"{days_until_due}天後"
+                            
+                            if urgency_icon:
+                                return f"{todo_content} - {amount} {urgency_icon}({urgency_text}截止)"
+                            else:
+                                return f"{todo_content} - {amount}（截止：{formatted_date}）"
+                                
+                        except ValueError:
+                            return f"{todo_content} - {amount}（截止：{formatted_date}）"
+                        
+                    except Exception as e:
+                        return f"{todo_content} - {bill_info['amount']}"
+            
+            return todo_content
+            
+        except Exception as e:
+            print(f"增強待辦事項顯示失敗: {e}")
+            return todo_content
+    
+    # ===== 帳單金額管理功能（保留原有功能）=====
+    
+    def update_bill_amount(self, bank_name, amount, due_date, statement_date=None):
+        """更新銀行卡費金額"""
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            due_datetime = datetime.strptime(due_date, '%Y/%m/%d')
+            month_key = due_datetime.strftime('%Y-%m')
+            
+            bill_data = {
+                'bank_name': normalized_bank,
+                'original_bank_name': bank_name,
+                'amount': amount,
+                'due_date': due_date,
+                'statement_date': statement_date,
+                'month': month_key,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            if self.use_mongodb:
+                self.bill_amounts_collection.update_one(
+                    {'bank_name': normalized_bank, 'month': month_key},
+                    {'$set': bill_data},
+                    upsert=True
+                )
+            else:
+                if normalized_bank not in self._bill_amounts:
+                    self._bill_amounts[normalized_bank] = {}
+                self._bill_amounts[normalized_bank][month_key] = bill_data
+            
+            print(f"✅ 更新 {normalized_bank} {month_key} 卡費: {amount}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 更新卡費金額失敗: {e}")
+            return False
+    
+    def _normalize_bank_name(self, bank_name):
+        """銀行名稱標準化"""
+        name = bank_name.upper()
+        
+        if '永豐' in name or 'SINOPAC' in name:
+            return '永豐'
+        if '台新' in name or 'TAISHIN' in name:
+            return '台新'
+        if '國泰' in name or 'CATHAY' in name:
+            return '國泰'
+        if '星展' in name or 'DBS' in name:
+            return '星展'
+        if '匯豐' in name or 'HSBC' in name:
+            return '匯豐'
+        if '玉山' in name or 'ESUN' in name or 'E.SUN' in name:
+            return '玉山'
+        if '聯邦' in name or 'UNION' in name:
+            return '聯邦'
+        
+        return bank_name
+    
+    def get_bill_amount(self, bank_name, target_month=None):
+        """取得指定銀行的最新卡費金額"""
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            
+            if self.use_mongodb:
+                query = {'bank_name': normalized_bank}
+                if target_month:
+                    query['month'] = target_month
+                
+                result = self.bill_amounts_collection.find(query).sort('updated_at', -1).limit(1)
+                
+                for bill_data in result:
+                    return {
+                        'amount': bill_data['amount'],
+                        'due_date': bill_data['due_date'],
+                        'statement_date': bill_data.get('statement_date'),
+                        'month': bill_data['month']
+                    }
+            else:
+                if normalized_bank in self._bill_amounts:
+                    months = sorted(self._bill_amounts[normalized_bank].keys(), reverse=True)
+                    if months:
+                        latest_data = self._bill_amounts[normalized_bank][months[0]]
+                        return {
+                            'amount': latest_data['amount'],
+                            'due_date': latest_data['due_date'],
+                            'statement_date': latest_data.get('statement_date'),
+                            'month': latest_data['month']
+                        }
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ 取得卡費金額失敗: {e}")
+            return None
+    
+    # ===== 生理期追蹤功能（保持原有功能完整性）=====
     
     def record_period_start(self, start_date, user_id, notes=""):
         """記錄生理期開始"""
@@ -170,7 +549,6 @@ class ReminderBot:
         try:
             print(f"🔍 開始獲取生理期狀態，用戶ID: {user_id}")
             
-            # 簡化查詢，避免複雜操作
             records = self._get_period_records_safe(user_id)
             print(f"📊 找到 {len(records)} 筆記錄")
             
@@ -229,7 +607,7 @@ class ReminderBot:
             return "❌ 獲取狀態失敗，請稍後再試"
     
     def get_next_period_prediction(self, user_id):
-        """🆕 獲取下次生理期預測日期 - 專門的查詢功能"""
+        """獲取下次生理期預測日期 - 專門的查詢功能"""
         try:
             print(f"🔍 開始預測下次生理期，用戶ID: {user_id}")
             
@@ -286,7 +664,7 @@ class ReminderBot:
             # 預測下次日期
             predicted_date = last_start + timedelta(days=avg_cycle)
             
-            # 計算日期範圍（考慮週期變化）
+            # 計算日期範圍
             earliest_date = last_start + timedelta(days=min_cycle)
             latest_date = last_start + timedelta(days=max_cycle)
             
@@ -315,7 +693,7 @@ class ReminderBot:
             message += f"📏 週期範圍：{min_cycle} - {max_cycle} 天\n"
             message += f"📋 分析基礎：{len(cycles)} 個週期\n"
             
-            # 新增貼心提醒
+            # 貼心提醒
             if days_until_earliest <= 7:
                 message += f"\n💡 貼心提醒：\n"
                 if days_until_earliest <= 3:
@@ -335,38 +713,6 @@ class ReminderBot:
             import traceback
             traceback.print_exc()
             return "❌ 預測失敗，請稍後再試"
-    
-    def _get_period_records_safe(self, user_id):
-        """安全的獲取生理期記錄"""
-        try:
-            if self.use_mongodb:
-                records = list(self.period_records_collection.find(
-                    {'user_id': user_id}
-                ).sort('start_date', -1).limit(10))
-                return records
-            else:
-                user_records = [r for r in self._period_records if r.get('user_id') == user_id]
-                return sorted(user_records, key=lambda x: x.get('start_date', ''), reverse=True)[:10]
-        except Exception as e:
-            print(f"❌ 查詢記錄失敗: {e}")
-            return []
-    
-    def _calculate_simple_cycles(self, records):
-        """簡化的週期計算"""
-        try:
-            cycles = []
-            for i in range(len(records) - 1):
-                try:
-                    current = datetime.strptime(records[i]['start_date'], '%Y-%m-%d')
-                    previous = datetime.strptime(records[i + 1]['start_date'], '%Y-%m-%d')
-                    cycle_length = (current - previous).days
-                    if 15 <= cycle_length <= 45:  # 合理範圍
-                        cycles.append(cycle_length)
-                except:
-                    continue
-            return cycles
-        except:
-            return []
     
     def set_period_settings(self, user_id, cycle_length=None, reminder_days=5):
         """設定生理期追蹤偏好"""
@@ -399,9 +745,39 @@ class ReminderBot:
             print(f"❌ 設定生理期偏好失敗: {e}")
             return "❌ 設定失敗，請稍後再試"
     
-    def _get_period_records(self, user_id, limit=10):
-        """獲取生理期記錄"""
-        return self._get_period_records_safe(user_id)
+    # ===== 生理期輔助功能 =====
+    
+    def _get_period_records_safe(self, user_id):
+        """安全的獲取生理期記錄"""
+        try:
+            if self.use_mongodb:
+                records = list(self.period_records_collection.find(
+                    {'user_id': user_id}
+                ).sort('start_date', -1).limit(10))
+                return records
+            else:
+                user_records = [r for r in self._period_records if r.get('user_id') == user_id]
+                return sorted(user_records, key=lambda x: x.get('start_date', ''), reverse=True)[:10]
+        except Exception as e:
+            print(f"❌ 查詢記錄失敗: {e}")
+            return []
+    
+    def _calculate_simple_cycles(self, records):
+        """簡化的週期計算"""
+        try:
+            cycles = []
+            for i in range(len(records) - 1):
+                try:
+                    current = datetime.strptime(records[i]['start_date'], '%Y-%m-%d')
+                    previous = datetime.strptime(records[i + 1]['start_date'], '%Y-%m-%d')
+                    cycle_length = (current - previous).days
+                    if 15 <= cycle_length <= 45:  # 合理範圍
+                        cycles.append(cycle_length)
+                except:
+                    continue
+            return cycles
+        except:
+            return []
     
     def _get_period_record_by_date(self, date_str, user_id):
         """根據日期獲取生理期記錄"""
@@ -458,7 +834,6 @@ class ReminderBot:
             
             avg_cycle = sum(cycles) // len(cycles)
             
-            # 簡單預測
             if records:
                 last_start = datetime.strptime(records[0]['start_date'], '%Y-%m-%d')
                 predicted = last_start + timedelta(days=avg_cycle)
@@ -482,7 +857,6 @@ class ReminderBot:
             cycles = self._calculate_simple_cycles(records) if len(records) >= 2 else []
             
             if not cycles:
-                # 如果沒有週期資料，使用預設週期
                 avg_cycle = settings.get('default_cycle_length', 28)
             else:
                 avg_cycle = sum(cycles) // len(cycles)
@@ -532,142 +906,7 @@ class ReminderBot:
         
         return ""
     
-    # ===== 帳單金額管理功能 =====
-    
-    def update_bill_amount(self, bank_name, amount, due_date, statement_date=None):
-        """更新銀行卡費金額"""
-        try:
-            normalized_bank = self._normalize_bank_name(bank_name)
-            due_datetime = datetime.strptime(due_date, '%Y/%m/%d')
-            month_key = due_datetime.strftime('%Y-%m')
-            
-            bill_data = {
-                'bank_name': normalized_bank,
-                'original_bank_name': bank_name,
-                'amount': amount,
-                'due_date': due_date,
-                'statement_date': statement_date,
-                'month': month_key,
-                'updated_at': datetime.now().isoformat()
-            }
-            
-            if self.use_mongodb:
-                self.bill_amounts_collection.update_one(
-                    {'bank_name': normalized_bank, 'month': month_key},
-                    {'$set': bill_data},
-                    upsert=True
-                )
-            else:
-                if normalized_bank not in self._bill_amounts:
-                    self._bill_amounts[normalized_bank] = {}
-                self._bill_amounts[normalized_bank][month_key] = bill_data
-            
-            print(f"✅ 更新 {normalized_bank} {month_key} 卡費: {amount}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ 更新卡費金額失敗: {e}")
-            return False
-    
-    def _normalize_bank_name(self, bank_name):
-        """銀行名稱標準化"""
-        name = bank_name.upper()
-        
-        if '永豐' in name or 'SINOPAC' in name:
-            return '永豐'
-        if '台新' in name or 'TAISHIN' in name:
-            return '台新'
-        if '國泰' in name or 'CATHAY' in name:
-            return '國泰'
-        if '星展' in name or 'DBS' in name:
-            return '星展'
-        if '匯豐' in name or 'HSBC' in name:
-            return '匯豐'
-        if '玉山' in name or 'ESUN' in name or 'E.SUN' in name:
-            return '玉山'
-        if '聯邦' in name or 'UNION' in name:
-            return '聯邦'
-        
-        return bank_name
-    
-    def get_bill_amount(self, bank_name, target_month=None):
-        """取得指定銀行的最新卡費金額"""
-        try:
-            normalized_bank = self._normalize_bank_name(bank_name)
-            
-            if self.use_mongodb:
-                query = {'bank_name': normalized_bank}
-                if target_month:
-                    query['month'] = target_month
-                
-                result = self.bill_amounts_collection.find(query).sort('updated_at', -1).limit(1)
-                
-                for bill_data in result:
-                    return {
-                        'amount': bill_data['amount'],
-                        'due_date': bill_data['due_date'],
-                        'statement_date': bill_data.get('statement_date'),
-                        'month': bill_data['month']
-                    }
-            else:
-                if normalized_bank in self._bill_amounts:
-                    months = sorted(self._bill_amounts[normalized_bank].keys(), reverse=True)
-                    if months:
-                        latest_data = self._bill_amounts[normalized_bank][months[0]]
-                        return {
-                            'amount': latest_data['amount'],
-                            'due_date': latest_data['due_date'],
-                            'statement_date': latest_data.get('statement_date'),
-                            'month': latest_data['month']
-                        }
-            
-            return None
-            
-        except Exception as e:
-            print(f"❌ 取得卡費金額失敗: {e}")
-            return None
-    
-    def _enhance_todo_with_bill_amount(self, todo_content):
-        """增強待辦事項顯示"""
-        try:
-            if '卡費' in todo_content:
-                bill_info = None
-                
-                if '永豐' in todo_content:
-                    bill_info = self.get_bill_amount('永豐')
-                elif '台新' in todo_content:
-                    bill_info = self.get_bill_amount('台新')
-                elif '國泰' in todo_content:
-                    bill_info = self.get_bill_amount('國泰')
-                elif '星展' in todo_content:
-                    bill_info = self.get_bill_amount('星展')
-                elif '匯豐' in todo_content:
-                    bill_info = self.get_bill_amount('匯豐')
-                elif '玉山' in todo_content:
-                    bill_info = self.get_bill_amount('玉山')
-                elif '聯邦' in todo_content:
-                    bill_info = self.get_bill_amount('聯邦')
-                
-                if bill_info:
-                    try:
-                        due_date = bill_info['due_date']
-                        if '/' in due_date and len(due_date.split('/')) == 3:
-                            _, month, day = due_date.split('/')
-                            formatted_date = f"{int(month)}/{int(day)}"
-                        else:
-                            formatted_date = due_date
-                        
-                        return f"{todo_content} - {bill_info['amount']}（截止：{formatted_date}）"
-                    except:
-                        return f"{todo_content} - {bill_info['amount']}"
-            
-            return todo_content
-            
-        except Exception as e:
-            print(f"增強待辦事項顯示失敗: {e}")
-            return todo_content
-    
-    # ===== 原有功能保持不變 =====
+    # ===== 原有核心功能保持不變 =====
     
     def _load_user_settings(self):
         """載入用戶設定"""
@@ -710,82 +949,72 @@ class ReminderBot:
         status_msg = "💾 設定已同步到雲端" if self.use_mongodb else ""
         return f"🇹🇼 台灣當前時間：{get_taiwan_time()}\n⏰ 目前提醒時間設定：\n🌅 早上：{self.user_settings['morning_time']}\n🌙 晚上：{self.user_settings['evening_time']}\n\n✅ 時區已修正為台灣時間！\n{status_msg}"
     
-    def send_daily_reminder(self, user_id, current_time):
-        """發送每日提醒（包含生理期提醒）"""
-        time_icon = '🌅' if current_time == self.user_settings['morning_time'] else '🌙'
-        time_text = '早安' if current_time == self.user_settings['morning_time'] else '晚安'
-        
-        # 檢查生理期提醒
-        taiwan_now = get_taiwan_datetime()
-        period_reminder = self.check_period_reminders(user_id, taiwan_now)
-        period_message = self.format_period_reminder(period_reminder)
-        
-        todos = self.todo_manager.todos
-        if todos:
-            pending_todos = self.todo_manager.get_pending_todos()
-            completed_todos = self.todo_manager.get_completed_todos()
-            
-            if pending_todos:
-                message = f'{time_icon} {time_text}！您有 {len(pending_todos)} 項待辦事項：\n\n'
-                
-                for i, todo in enumerate(pending_todos[:5], 1):
-                    date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
-                    enhanced_content = self._enhance_todo_with_bill_amount(todo["content"])
-                    message += f'{i}. ⭕ {enhanced_content}{date_info}\n'
-                
-                if len(pending_todos) > 5:
-                    message += f'\n...還有 {len(pending_todos) - 5} 項未完成\n'
-                
-                if completed_todos:
-                    message += f'\n✅ 已完成 {len(completed_todos)} 項：\n'
-                    for todo in completed_todos[:2]:
-                        message += f'✅ {todo["content"]}\n'
-                    if len(completed_todos) > 2:
-                        message += f'...還有 {len(completed_todos) - 2} 項已完成\n'
-                
-                # 添加生理期提醒
-                if period_message:
-                    message += f'\n{period_message}\n'
-                
-                if current_time == self.user_settings['morning_time']:
-                    message += f'\n💪 新的一天開始了！加油完成這些任務！'
-                else:
-                    message += f'\n🌙 檢查一下今天的進度吧！記得為明天做準備！'
-                    
-                message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
-                
-                send_push_message(user_id, message)
-                print(f"✅ 已發送每日提醒 ({len(pending_todos)} 項待辦) - 台灣時間: {get_taiwan_time()}")
-            else:
-                message = ""
-                if current_time == self.user_settings['morning_time']:
-                    message = f'{time_icon} {time_text}！🎉 太棒了！目前沒有待辦事項\n💡 可以新增今天要做的事情'
-                else:
-                    message = f'{time_icon} {time_text}！🎉 太棒了！今天的任務都完成了\n😴 好好休息，為明天準備新的目標！'
-                
-                # 即使沒有待辦事項也要檢查生理期提醒
-                if period_message:
-                    message += f'\n\n{period_message}'
-                
-                message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
-                send_push_message(user_id, message)
-                print(f"✅ 已發送每日提醒 (無待辦事項) - 台灣時間: {get_taiwan_time()}")
-        else:
-            message = ""
-            if current_time == self.user_settings['morning_time']:
-                message = f'{time_icon} {time_text}！✨ 新的一天開始了！\n💡 輸入「新增 事項名稱」來建立今天的目標'
-            else:
-                message = f'{time_icon} {time_text}！😌 今天過得如何？\n💡 別忘了為明天規劃一些目標'
-            
-            # 首次使用也要檢查生理期提醒
-            if period_message:
-                message += f'\n\n{period_message}'
-            
-            message += f'\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}'
-            send_push_message(user_id, message)
-            print(f"✅ 已發送每日提醒 (首次使用) - 台灣時間: {get_taiwan_time()}")
+    def set_morning_time(self, time_str):
+        self.user_settings['morning_time'] = time_str
+        self._save_user_settings()
+        self.last_reminders['daily_morning_date'] = None
+        self.last_reminders['dated_todo_morning_date'] = None
+        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
     
-    # ===== 其他原有功能的簡化實作 =====
+    def set_evening_time(self, time_str):
+        self.user_settings['evening_time'] = time_str
+        self._save_user_settings()
+        self.last_reminders['daily_evening_date'] = None
+        self.last_reminders['dated_todo_evening_date'] = None
+        self.last_reminders['dated_todo_preview_date'] = None
+        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
+        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
+    
+    # ===== 提醒檢查核心邏輯（包含智能帳單提醒）=====
+    
+    def check_reminders(self):
+        """主提醒檢查循環（增強版 - 包含帳單和生理期提醒）"""
+        while True:
+            try:
+                current_time = get_taiwan_time_hhmm()
+                user_id = self.user_settings.get('user_id')
+                taiwan_now = get_taiwan_datetime()
+                today_date = taiwan_now.strftime('%Y-%m-%d')
+                
+                print(f"🔍 增強版提醒檢查 - 台灣時間: {get_taiwan_time()}")
+                
+                if user_id:
+                    # 早上提醒
+                    if (current_time == self.user_settings['morning_time'] and 
+                        self.last_reminders['daily_morning_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_morning_date'] = today_date
+                    
+                    # 晚上提醒
+                    elif (current_time == self.user_settings['evening_time'] and 
+                          self.last_reminders['daily_evening_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_evening_date'] = today_date
+                
+                time.sleep(60)
+            except Exception as e:
+                print(f"增強版提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
+                time.sleep(60)
+    
+    def start_reminder_thread(self):
+        """啟動提醒執行緒"""
+        if self.reminder_thread is None or not self.reminder_thread.is_alive():
+            self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
+            self.reminder_thread.start()
+            print("✅ 增強版提醒機器人執行緒已啟動（包含智能帳單提醒）")
+    
+    def get_reminder_counts(self):
+        """獲取提醒統計"""
+        short_reminders = self._get_short_reminders()
+        time_reminders = self._get_time_reminders()
+        
+        return {
+            'short_reminders': len(short_reminders),
+            'time_reminders': len(time_reminders)
+        }
+    
+    # ===== 短期和時間提醒功能（保持原有功能）=====
     
     def _get_short_reminders(self):
         if self.use_mongodb:
@@ -949,61 +1178,8 @@ class ReminderBot:
         else:
             return f"❌ {parsed['error']}"
     
-    def set_morning_time(self, time_str):
-        self.user_settings['morning_time'] = time_str
-        self._save_user_settings()
-        self.last_reminders['daily_morning_date'] = None
-        self.last_reminders['dated_todo_morning_date'] = None
-        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
-        return f"🌅 已設定早上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
+    # ===== 屬性訪問器（保持相容性）=====
     
-    def set_evening_time(self, time_str):
-        self.user_settings['evening_time'] = time_str
-        self._save_user_settings()
-        self.last_reminders['daily_evening_date'] = None
-        self.last_reminders['dated_todo_evening_date'] = None
-        self.last_reminders['dated_todo_preview_date'] = None
-        status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
-        return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
-    
-    def check_reminders(self):
-        while True:
-            try:
-                current_time = get_taiwan_time_hhmm()
-                user_id = self.user_settings.get('user_id')
-                taiwan_now = get_taiwan_datetime()
-                today_date = taiwan_now.strftime('%Y-%m-%d')
-                
-                print(f"🔍 提醒檢查 - 台灣時間: {get_taiwan_time()}")
-                
-                if user_id:
-                    if (current_time == self.user_settings['morning_time'] and 
-                        self.last_reminders['daily_morning_date'] != today_date):
-                        self.send_daily_reminder(user_id, current_time)
-                        self.last_reminders['daily_morning_date'] = today_date
-                    
-                    elif (current_time == self.user_settings['evening_time'] and 
-                          self.last_reminders['daily_evening_date'] != today_date):
-                        self.send_daily_reminder(user_id, current_time)
-                        self.last_reminders['daily_evening_date'] = today_date
-                
-                time.sleep(60)
-            except Exception as e:
-                print(f"提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
-                time.sleep(60)
-    
-    def start_reminder_thread(self):
-        if self.reminder_thread is None or not self.reminder_thread.is_alive():
-            self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
-            self.reminder_thread.start()
-            print("✅ 提醒機器人執行緒已啟動")
-    
-    def get_reminder_counts(self):
-        return {
-            'short_reminders': len(self._get_short_reminders()),
-            'time_reminders': len(self._get_time_reminders())
-        }
-
     @property 
     def short_reminders(self):
         return self._get_short_reminders()
