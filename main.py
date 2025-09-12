@@ -703,29 +703,97 @@ def test_add_period():
             'timestamp': get_taiwan_time()
         })
 
-@app.route('/test/next-period-prediction')
-def test_next_period_prediction():
-    """測試下次生理期預測功能"""
+@app.route('/test/mongodb-raw-bills')
+def test_mongodb_raw_bills():
+    """直接查詢 MongoDB 中的原始帳單資料"""
     try:
-        test_user_id = "test_user_period"
+        if not reminder_bot.use_mongodb:
+            return jsonify({
+                'success': False,
+                'error': 'MongoDB 未啟用',
+                'timestamp': get_taiwan_time()
+            })
         
-        prediction = reminder_bot.get_next_period_prediction(test_user_id)
-        status = reminder_bot.get_period_status(test_user_id)
+        # 查詢所有帳單資料
+        all_bills = list(reminder_bot.bill_amounts_collection.find({}))
+        
+        # 將 ObjectId 轉換為字串以便 JSON 序列化
+        for bill in all_bills:
+            if '_id' in bill:
+                bill['_id'] = str(bill['_id'])
+        
+        # 按銀行分類統計
+        bank_counts = {}
+        for bill in all_bills:
+            bank = bill.get('bank_name', 'unknown')
+            bank_counts[bank] = bank_counts.get(bank, 0) + 1
         
         return jsonify({
             'success': True,
             'data': {
-                'next_period_prediction': prediction,
-                'general_status': status,
-                'test_user_id': test_user_id
+                'total_records': len(all_bills),
+                'bank_counts': bank_counts,
+                'all_bills': all_bills
             },
             'timestamp': get_taiwan_time()
         })
         
     except Exception as e:
+        import traceback
         return jsonify({
             'success': False,
             'error': str(e),
+            'traceback': traceback.format_exc(),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/check-union-bill')
+def test_check_union_bill():
+    """專門檢查聯邦銀行帳單資料"""
+    try:
+        # 檢查各種可能的聯邦銀行名稱
+        possible_names = ['聯邦', '聯邦銀行', 'UNION', 'union', 'Union']
+        results = {}
+        
+        for name in possible_names:
+            bill_info = reminder_bot.get_bill_amount(name)
+            results[name] = bill_info
+        
+        # 直接查詢 MongoDB 中包含聯邦相關的記錄
+        if reminder_bot.use_mongodb:
+            mongo_results = []
+            
+            # 查詢各種可能的聯邦相關記錄
+            for name in possible_names:
+                bills = list(reminder_bot.bill_amounts_collection.find({
+                    '$or': [
+                        {'bank_name': {'$regex': name, '$options': 'i'}},
+                        {'original_bank_name': {'$regex': name, '$options': 'i'}}
+                    ]
+                }))
+                
+                for bill in bills:
+                    bill['_id'] = str(bill['_id'])
+                    mongo_results.append(bill)
+            
+            results['mongodb_raw'] = mongo_results
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'analysis': {
+                'has_data': any(info is not None for info in results.values() if info != mongo_results),
+                'mongo_records_found': len(results.get('mongodb_raw', [])) if reminder_bot.use_mongodb else None
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc(),
             'timestamp': get_taiwan_time()
         })
 
