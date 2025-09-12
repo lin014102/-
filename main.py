@@ -1,6 +1,6 @@
 """
-main.py - LINE Todo Reminder Bot 主程式
-v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次生理期預測 完全模組化架構
+main.py - LINE Todo Reminder Bot 主程式 (完整整合版)
+v3.3 + 智能帳單提醒整合 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次生理期預測
 """
 from flask import Flask, request, jsonify
 import os
@@ -19,13 +19,6 @@ from stock_manager import (
     get_stock_cost_analysis, get_stock_account_list, get_stock_help,
     is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
-
-# 🆕 暫時註解信用卡帳單模組 - 檔案已刪除
-# from credit_card_manager import (
-#     handle_credit_card_command, is_credit_card_command, 
-#     is_credit_card_query, get_credit_card_summary,
-#     start_credit_card_monitor, get_credit_card_status
-# )
 
 # 🆕 匯入 Gemini AI 模組
 from gemini_analyzer import EnhancedMessageRouter
@@ -82,16 +75,7 @@ class BackgroundServices:
         """啟動提醒機器人"""
         reminder_bot.start_reminder_thread()
         self.services.append('reminder_bot')
-        print("✅ 提醒機器人已啟動")
-    
-    def start_credit_card_monitor(self):
-        """暫時停用信用卡帳單監控 - 模組已移除"""
-        try:
-            # result = start_credit_card_monitor()
-            # self.services.append('credit_card_monitor')
-            print("⚠️ 信用卡帳單監控已暫時停用 (模組不存在)")
-        except Exception as e:
-            print(f"⚠️ 信用卡帳單監控啟動失敗: {e}")
+        print("✅ 智能提醒機器人已啟動 (包含帳單和生理期提醒)")
     
     def start_bill_scheduler(self, bill_scheduler):
         """啟動帳單分析定時任務"""
@@ -111,34 +95,45 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次預測</h1>
+    <h1>LINE Todo Reminder Bot v3.3 - 智能帳單提醒完整整合版</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
-    <p>🚀 模組化架構，完全重構！</p>
-    <p>💹 新增即時損益功能！</p>
-    <p>🤖 整合 Gemini AI 智能對話！</p>
-    <p>📊 新增帳單自動分析與推播！</p>
-    <p>💳 新增帳單金額智能提醒整合！</p>
-    <p>🩸 新增生理期智能追蹤提醒！</p>
-    <p>📅 🆕 新增下次生理期預測查詢！</p>
+    <p>🚀 完整模組化架構 + 智能帳單提醒整合！</p>
+    <p>💹 即時損益功能！</p>
+    <p>🤖 Gemini AI 智能對話！</p>
+    <p>📊 帳單自動分析與智能提醒整合！</p>
+    <p>💳 繳費截止前自動提醒具體金額！</p>
+    <p>🩸 生理期智能追蹤提醒！</p>
+    <p>📅 下次生理期預測查詢！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
-    <h2>測試端點：</h2>
+    
+    <h2>🆕 完整整合功能測試：</h2>
+    <ul>
+        <li><a href="/test/bill-sync-integration"><strong>📊 測試帳單同步整合</strong></a> - 驗證帳單分析結果自動同步到提醒系統</li>
+        <li><a href="/test/bill-reminder-simulation"><strong>🔔 模擬智能帳單提醒</strong></a> - 測試每日提醒中的帳單金額顯示</li>
+        <li><a href="/test/enhanced-reminder">📈 測試增強版提醒訊息</a></li>
+        <li><a href="/test/bill-amounts">💰 測試帳單金額查詢</a></li>
+    </ul>
+    
+    <h2>帳單分析功能測試：</h2>
     <ul>
         <li><a href="/test/sheets-connection">測試 Google Sheets 連接</a></li>
         <li><a href="/test/bill-analysis">手動執行帳單分析</a></li>
         <li><a href="/test/notifications">手動執行推播</a></li>
-        <li><a href="/test/bill-amounts">測試帳單金額查詢</a></li>
         <li><a href="/test/add-test-bill">新增測試帳單資料</a></li>
-        <li><a href="/test/enhanced-reminder">測試增強版提醒</a></li>
         <li><a href="/test/bank-mapping">測試銀行名稱對應</a></li>
+    </ul>
+    
+    <h2>生理期追蹤測試：</h2>
+    <ul>
         <li><a href="/test/period-tracker">測試生理期追蹤</a></li>
         <li><a href="/test/add-test-period">新增測試生理期資料</a></li>
-        <li><a href="/test/next-period-prediction">🆕 測試下次生理期預測</a></li>
+        <li><a href="/test/next-period-prediction">測試下次生理期預測</a></li>
     </ul>
     """
 
 @app.route('/health')
 def health():
-    """健康檢查端點"""
+    """健康檢查端點 - 更新版"""
     taiwan_now = get_taiwan_datetime()
     
     try:
@@ -173,30 +168,27 @@ def health():
     # 🆕 獲取 Gemini AI 狀態
     gemini_status = message_router.gemini_analyzer.enabled
     
-    # 🆕 信用卡帳單監控狀態 - 提供預設值
-    credit_card_status = {
-        'status': 'disabled', 
-        'gmail_enabled': False, 
-        'groq_enabled': False,
-        'tesseract_enabled': False,
-        'monitored_banks': [],
-        'processed_bills_count': 0,
-        'last_check_time': None,
-        'note': '模組已暫時移除'
-    }
-    
     # 🆕 獲取帳單分析定時任務狀態
     try:
         bill_scheduler_status = bg_services.bill_scheduler.get_status() if bg_services.bill_scheduler else {'scheduler_running': False}
     except:
         bill_scheduler_status = {'scheduler_running': False, 'error': 'not_initialized'}
     
+    # 🆕 測試緊急帳單檢查功能
+    try:
+        user_id = reminder_bot.user_settings.get('user_id', 'health_check_user')
+        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+        bill_integration_working = True
+    except Exception as e:
+        urgent_bills = []
+        bill_integration_working = False
+    
     return jsonify({
         'status': 'healthy',
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.2_modular_architecture_with_next_period_prediction',
+        'version': 'v3.3_smart_bill_reminder_integration',
         
         # 模組狀態
         'modules': {
@@ -220,7 +212,6 @@ def health():
                 'enabled': gemini_status,
                 'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification']
             },
-            'credit_card_manager': credit_card_status,
             'bill_scheduler': {
                 'scheduler_running': bill_scheduler_status.get('scheduler_running', False),
                 'analysis_time': bill_scheduler_status.get('analysis_time', '03:30'),
@@ -228,431 +219,62 @@ def health():
                 'last_analysis_date': bill_scheduler_status.get('last_analysis_date'),
                 'last_notification_date': bill_scheduler_status.get('last_notification_date'),
                 'notification_enabled': bill_scheduler_status.get('notification_enabled', False),
-                'features': ['daily_pdf_analysis', 'google_vision_ocr', 'gemini_llm', 'line_notifications', 'google_sheets_sync']
+                'features': ['daily_pdf_analysis', 'google_vision_ocr', 'gemini_llm', 'line_notifications', 'auto_bill_sync']
             },
-            'bill_amount_integration': {
+            'smart_bill_integration': {
                 'mongodb_enabled': reminder_bot.use_mongodb,
                 'collection_ready': hasattr(reminder_bot, 'bill_amounts_collection') if reminder_bot.use_mongodb else True,
+                'integration_working': bill_integration_working,
+                'urgent_bills_detected': len(urgent_bills),
                 'test_banks': ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦'],
-                'features': ['bank_name_normalization', 'amount_storage', 'enhanced_reminders']
+                'features': ['auto_sync', 'smart_reminders', 'urgency_detection', 'enhanced_todo_display']
             },
             'period_tracker': {
                 'mongodb_enabled': reminder_bot.use_mongodb,
                 'collection_ready': hasattr(reminder_bot, 'period_records_collection') if reminder_bot.use_mongodb else True,
-                'features': ['cycle_calculation', 'prediction', 'smart_reminders', 'health_tracking', 'next_period_prediction']
+                'features': ['cycle_calculation', 'prediction', 'smart_reminders', 'next_period_prediction']
             },
             'background_services': bg_services.services
         }
     })
 
-# ===== 原有測試端點 =====
-@app.route('/test/bill-analysis')
-def test_bill_analysis():
-    """手動測試帳單分析功能"""
+# ===== 🆕 完整整合測試端點 =====
+
+@app.route('/test/bill-sync-integration')
+def test_bill_sync_integration():
+    """測試帳單分析結果同步到提醒系統的完整流程"""
     try:
+        # 模擬帳單分析完成後的資料
+        mock_analysis_data = {
+            'document_type': '信用卡帳單',
+            'bank_name': '永豐銀行',
+            'analysis_result': {
+                'total_amount_due': 'NT$25,680',
+                'minimum_payment': 'NT$2,568',
+                'payment_due_date': '2025/01/25',
+                'statement_date': '2025/01/01',
+                'transactions': [
+                    {'date': '2024/12/15', 'merchant': '全家便利商店', 'amount': 'NT$150'},
+                    {'date': '2024/12/16', 'merchant': '麥當勞', 'amount': 'NT$280'},
+                    {'date': '2024/12/20', 'merchant': '家樂福', 'amount': 'NT$1,250'}
+                ]
+            }
+        }
+        
+        mock_filename = "sinopac_202501_test.pdf"
+        
+        # 1. 測試資料標準化功能
         if not bg_services.bill_scheduler:
             return jsonify({
                 'success': False,
                 'error': '帳單分析器未初始化'
             })
-        
-        # 手動觸發分析任務
-        bg_services.bill_scheduler._run_daily_analysis()
-        
-        return jsonify({
-            'success': True,
-            'message': '手動分析任務已執行',
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/notifications')
-def test_notifications():
-    """手動測試推播功能"""
-    try:
-        if not bg_services.bill_scheduler:
-            return jsonify({
-                'success': False,
-                'error': '帳單分析器未初始化'
-            })
-        
-        # 手動觸發推播任務
-        bg_services.bill_scheduler._run_daily_notifications()
-        
-        return jsonify({
-            'success': True,
-            'message': '手動推播任務已執行',
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/sheets-connection')
-def test_sheets_connection():
-    """測試 Google Sheets 連接"""
-    try:
-        if not bg_services.bill_scheduler:
-            return jsonify({
-                'success': False,
-                'error': '帳單分析器未初始化'
-            })
-        
-        sheets_handler = bg_services.bill_scheduler.sheets_handler
-        
-        # 測試讀取待處理檔案
-        pending_files = sheets_handler.get_pending_files()
-        failed_files = sheets_handler.get_failed_files()
-        notification_files = sheets_handler.get_notification_pending_files()
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'pending_files_count': len(pending_files),
-                'failed_files_count': len(failed_files),
-                'notification_pending_count': len(notification_files),
-                'pending_files': pending_files[:3] if pending_files else [],  # 顯示前3筆
-                'failed_files': failed_files[:3] if failed_files else [],
-                'notification_files': notification_files[:3] if notification_files else []
-            },
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/analyze-single/<file_id>')
-def test_analyze_single(file_id):
-    """測試分析單一檔案"""
-    try:
-        if not bg_services.bill_scheduler:
-            return jsonify({
-                'success': False,
-                'error': '帳單分析器未初始化'
-            })
-        
-        sheets_handler = bg_services.bill_scheduler.sheets_handler
-        drive_handler = bg_services.bill_scheduler.drive_handler
-        bill_analyzer = bg_services.bill_scheduler.bill_analyzer
-        
-        # 從 sheets 中找到對應的檔案資訊
-        pending_files = sheets_handler.get_pending_files()
-        target_file = None
-        
-        for file_info in pending_files:
-            if file_info['file_id'] == file_id:
-                target_file = file_info
-                break
-        
-        if not target_file:
-            return jsonify({
-                'success': False,
-                'error': f'找不到檔案 ID: {file_id}',
-                'available_files': [f['file_id'] for f in pending_files[:5]]
-            })
-        
-        # 下載檔案
-        file_content = drive_handler.download_file(target_file['file_id'], target_file['filename'])
-        
-        if not file_content:
-            return jsonify({
-                'success': False,
-                'error': '檔案下載失敗'
-            })
-        
-        # 取得銀行設定
-        bank_config = sheets_handler.get_bank_config_by_filename(target_file['filename'])
-        
-        if not bank_config:
-            return jsonify({
-                'success': False,
-                'error': '找不到銀行設定'
-            })
-        
-        # 執行分析
-        analysis_result = bill_analyzer.analyze_pdf(
-            file_content, 
-            bank_config, 
-            target_file['filename']
-        )
-        
-        return jsonify({
-            'success': True,
-            'file_info': target_file,
-            'bank_config': bank_config,
-            'analysis_result': analysis_result,
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/vision-api')
-def test_vision_api():
-    """測試 Vision API 連接"""
-    try:
-        if not bg_services.bill_scheduler:
-            return jsonify({'success': False, 'error': '帳單分析器未初始化'})
-        
-        # 檢查環境變數設定
-        vision_api_key = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
-        return jsonify({
-            'success': True,
-            'api_key_configured': vision_api_key is not None,
-            'api_key_prefix': vision_api_key[:10] if vision_api_key else None,
-            'timestamp': get_taiwan_time()
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-# ===== 帳單金額整合測試端點 =====
-
-@app.route('/test/bill-amounts')
-def test_bill_amounts():
-    """測試帳單金額查詢功能"""
-    try:
-        banks = ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦']
-        results = {}
-        
-        for bank in banks:
-            bill_info = reminder_bot.get_bill_amount(bank)
-            results[bank] = bill_info
-        
-        return jsonify({
-            'success': True,
-            'data': results,
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/add-test-bill')
-def test_add_bill():
-    """手動新增測試帳單金額"""
-    try:
-        # 新增一筆測試資料
-        success = reminder_bot.update_bill_amount(
-            bank_name="永豐銀行",
-            amount="NT$15,234",
-            due_date="2025/01/24",
-            statement_date="2025/01/01"
-        )
-        
-        if success:
-            return jsonify({
-                'success': True,
-                'message': '測試帳單金額新增成功',
-                'test_data': {
-                    'bank': '永豐銀行',
-                    'amount': 'NT$15,234',
-                    'due_date': '2025/01/24'
-                },
-                'timestamp': get_taiwan_time()
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': '新增失敗',
-                'timestamp': get_taiwan_time()
-            })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/enhanced-reminder')
-def test_enhanced_reminder():
-    """測試增強版提醒訊息顯示"""
-    try:
-        # 測試不同的待辦事項內容
-        test_todos = [
-            "繳永豐卡費",
-            "繳台新卡費", 
-            "繳國泰卡費",
-            "買菜",
-            "繳星展卡費"
-        ]
-        
-        results = {}
-        for todo in test_todos:
-            enhanced = reminder_bot._enhance_todo_with_bill_amount(todo)
-            results[todo] = enhanced
-        
-        return jsonify({
-            'success': True,
-            'data': results,
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/bank-mapping')
-def test_bank_mapping():
-    """測試銀行名稱標準化"""
-    try:
-        test_banks = [
-            "永豐銀行",
-            "SinoPac", 
-            "台新銀行",
-            "TAISHIN",
-            "星展銀行",
-            "DBS Bank",
-            "國泰世華",
-            "CATHAY",
-            "未知銀行"
-        ]
-        
-        results = {}
-        for bank in test_banks:
-            normalized = reminder_bot._normalize_bank_name(bank)
-            results[bank] = normalized
-        
-        return jsonify({
-            'success': True,
-            'data': results,
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-# ===== 生理期追蹤測試端點 =====
-
-@app.route('/test/period-tracker')
-def test_period_tracker():
-    """測試生理期追蹤功能"""
-    try:
-        # 模擬用戶 ID
-        test_user_id = "test_user_period"
-        
-        # 獲取生理期狀態
-        status = reminder_bot.get_period_status(test_user_id)
-        
-        # 檢查提醒狀態
-        taiwan_now = get_taiwan_datetime()
-        reminder_info = reminder_bot.check_period_reminders(test_user_id, taiwan_now)
-        reminder_message = reminder_bot.format_period_reminder(reminder_info)
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'status': status,
-                'reminder_info': reminder_info,
-                'reminder_message': reminder_message,
-                'current_time': taiwan_now.isoformat()
-            },
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/add-test-period')
-def test_add_period():
-    """新增測試生理期資料"""
-    try:
-        test_user_id = "test_user_period"
-        
-        # 新增一筆測試記錄（30天前）
-        from datetime import datetime
-        test_date = (datetime.now() - timedelta(days=30)).strftime('%Y/%m/%d')
-        
-        result = reminder_bot.record_period_start(test_date, test_user_id, "測試記錄")
-        
-        return jsonify({
-            'success': True,
-            'message': '測試生理期記錄新增成功',
-            'result': result,
-            'test_data': {
-                'user_id': test_user_id,
-                'start_date': test_date,
-                'notes': '測試記錄'
-            },
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
-
-# ===== 🆕 下次生理期預測測試端點 =====
-
-@app.route('/test/next-period-prediction')
-def test_next_period_prediction():
-    """🆕 測試下次生理期預測功能"""
-    try:
-        test_user_id = "test_user_period"
-        
-        # 獲取下次生理期預測
-        prediction = reminder_bot.get_next_period_prediction(test_user_id)
-        
-        # 同時獲取一般狀態用於比較
-        status = reminder_bot.get_period_status(test_user_id)
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'next_period_prediction': prediction,
-                'general_status': status,
-                'test_user_id': test_user_id
-            },
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': get_taiwan_time()
-        })
 
 # ===== Webhook 處理 =====
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """LINE Webhook 處理 - 統一入口"""
+    """LINE Webhook 處理 - 統一入口（包含智能帳單提醒整合）"""
     try:
         data = request.get_json()
         
@@ -664,7 +286,7 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 🆕 增強版訊息路由處理（包含生理期追蹤與下次預測）
+                # 增強版訊息路由處理（包含智能帳單提醒整合）
                 reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
@@ -683,33 +305,29 @@ def is_todo_query(message_text):
         '提醒', '事項', '計畫', '安排'
     ]
     
-    # 單純的「查詢」應該是待辦事項查詢
     if message_text.strip() == '查詢':
         return True
     
-    # 包含待辦相關關鍵字的查詢
     if any(keyword in message_text for keyword in todo_keywords):
-        # 但排除明確的股票相關查詢
         stock_exclusions = [
             '股票', '股價', '損益', '帳戶', '交易', '成本',
             '總覽', '即時', '代號'
         ]
         
-        # 如果同時包含股票關鍵字，則不視為待辦事項查詢
         if not any(stock_word in message_text for stock_word in stock_exclusions):
             return True
     
     return False
 
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合所有功能模組（修正優先順序）"""
+    """增強版訊息路由器 - 整合所有功能模組（包含智能帳單提醒）"""
     try:
-        # 🆕 生理期追蹤指令檢查（包含下次預測）
+        # 生理期追蹤指令檢查（包含下次預測）
         if is_period_command(message_text):
             print(f"🔀 路由到生理期追蹤模組: {message_text}")
             return handle_period_command(message_text, user_id)
         
-        # ✅ 優先檢查待辦事項相關的查詢（避免被股票查詢攔截）
+        # 優先檢查待辦事項相關的查詢
         elif is_todo_query(message_text):
             print(f"🔀 路由到待辦事項模組: {message_text}")
             return message_router.route_message(message_text, user_id)
@@ -746,7 +364,7 @@ def enhanced_message_router(message_text, user_id):
                 account_name = message_text[:-2]
                 return get_stock_summary(account_name)
         
-        # 🆕 其他指令繼續使用原本的 Gemini AI 路由器
+        # 其他指令使用原本的 Gemini AI 路由器
         else:
             return message_router.route_message(message_text, user_id)
     
@@ -754,7 +372,7 @@ def enhanced_message_router(message_text, user_id):
         print(f"❌ 訊息路由錯誤: {e}")
         return f"❌ 系統處理錯誤，請稍後再試\n🕒 {get_taiwan_time()}"
 
-# ===== 🆕 生理期追蹤訊息處理函數（新增下次預測功能） =====
+# ===== 生理期追蹤訊息處理函數 =====
 
 def is_period_command(message_text):
     """檢查是否為生理期相關指令（包含下次預測）"""
@@ -763,7 +381,7 @@ def is_period_command(message_text):
         '生理期結束', '結束生理期',
         '生理期查詢', '生理期狀態', '週期查詢',
         '生理期設定', '週期設定',
-        '下次生理期', '下次月經', '生理期預測'  # 🆕 新增下次預測關鍵字
+        '下次生理期', '下次月經', '生理期預測'
     ]
     
     return any(keyword in message_text for keyword in period_keywords)
@@ -771,13 +389,12 @@ def is_period_command(message_text):
 def handle_period_command(message_text, user_id):
     """處理生理期相關指令（包含下次預測）"""
     try:
-        # 🆕 下次生理期預測查詢
+        # 下次生理期預測查詢
         if any(keyword in message_text for keyword in ['下次生理期', '下次月經', '生理期預測']):
             return reminder_bot.get_next_period_prediction(user_id)
         
         # 記錄生理期開始
         elif any(keyword in message_text for keyword in ['記錄生理期', '生理期開始', '生理期記錄']):
-            # 提取日期
             date_match = re.search(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})', message_text)
             if date_match:
                 date_str = date_match.group(1).replace('-', '/')
@@ -788,7 +405,6 @@ def handle_period_command(message_text, user_id):
         
         # 記錄生理期結束
         elif any(keyword in message_text for keyword in ['生理期結束', '結束生理期']):
-            # 提取日期
             date_match = re.search(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})', message_text)
             if date_match:
                 date_str = date_match.group(1).replace('-', '/')
@@ -803,7 +419,6 @@ def handle_period_command(message_text, user_id):
         
         # 設定生理期偏好
         elif any(keyword in message_text for keyword in ['生理期設定', '週期設定']):
-            # 檢查是否有指定週期長度
             cycle_match = re.search(r'(\d+)\s*天', message_text)
             reminder_match = re.search(r'提前\s*(\d+)\s*天', message_text)
             
@@ -819,43 +434,49 @@ def handle_period_command(message_text, user_id):
             return reminder_bot.set_period_settings(user_id, cycle_length, reminder_days)
         
         else:
-            return "❌ 生理期指令格式錯誤\n\n💡 可用指令：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n• 生理期查詢\n• 下次生理期 🆕\n• 生理期設定 [週期天數] [提前天數]"
+            return "❌ 生理期指令格式錯誤\n\n💡 可用指令：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n• 生理期查詢\n• 下次生理期\n• 生理期設定 [週期天數] [提前天數]"
     
     except Exception as e:
         print(f"❌ 處理生理期指令失敗: {e}")
         return f"❌ 處理失敗，請稍後再試\n🕒 {get_taiwan_time()}"
 
 def initialize_app():
-    """初始化應用程式"""
-    print("🚀 LINE Todo Reminder Bot v3.2 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次預測 啟動中...")
+    """初始化應用程式（完整整合版）"""
+    print("🚀 LINE Todo Reminder Bot v3.3 - 智能帳單提醒完整整合版 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
     bg_services.start_keep_alive()
     bg_services.start_reminder_bot()
-    bg_services.start_credit_card_monitor()  # 會顯示停用訊息
     
-    # 🆕 新增：啟動帳單分析定時任務
+    # 啟動帳單分析定時任務（包含同步功能）
     try:
         bill_scheduler = BillScheduler(reminder_bot)
         bg_services.start_bill_scheduler(bill_scheduler)
     except Exception as e:
         print(f"⚠️ 帳單分析定時任務初始化失敗: {e}")
     
-    print("=" * 60)
+    print("=" * 70)
     print("📋 待辦事項管理：✅ 已載入")
-    print("⏰ 提醒機器人：✅ 已啟動") 
+    print("⏰ 智能提醒機器人：✅ 已啟動（包含帳單和生理期提醒）") 
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
     print("🤖 Gemini AI 模組：✅ 已整合")
-    print("💳 信用卡帳單監控：⚠️ 暫時停用")
     print("📊 帳單分析定時任務：✅ 已啟動")
-    print("💰 帳單金額智能提醒：✅ 已整合")
+    print("💳 智能帳單提醒整合：✅ 已完成 - 帳單分析結果自動同步到提醒系統")
+    print("🔔 繳費截止智能提醒：✅ 已啟用 - 顯示具體金額和緊急程度")
+    print("📈 增強版待辦顯示：✅ 已啟用 - 卡費待辦自動顯示金額和截止日")
     print("🩸 生理期智能追蹤：✅ 已整合")
     print("📅 下次生理期預測：✅ 新功能已加入")
-    print("🔧 模組化架構：✅ 完全重構")
-    print("=" * 60)
-    print("🎉 系統初始化完成！")
+    print("🔧 完整模組化架構：✅ 完全重構並整合")
+    print("=" * 70)
+    print("🎉 智能帳單提醒系統初始化完成！")
+    print("💡 特色功能：")
+    print("   • 帳單分析完成後自動同步金額到提醒系統")
+    print("   • 每日提醒自動檢查緊急帳單並優先顯示")
+    print("   • 卡費相關待辦事項自動顯示具體金額和截止日期")
+    print("   • 根據緊急程度智能標記（逾期/今日截止/即將到期）")
+    print("   • 整合生理期追蹤，提供全方位健康提醒")
 
 if __name__ == '__main__':
     # 初始化應用
@@ -864,3 +485,100 @@ if __name__ == '__main__':
     # 啟動 Flask 應用
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
+        
+        normalized_data = bg_services.bill_scheduler._normalize_bill_data(
+            mock_analysis_data['bank_name'],
+            mock_analysis_data['analysis_result']['total_amount_due'],
+            mock_analysis_data['analysis_result']['payment_due_date'],
+            mock_analysis_data['analysis_result']['statement_date']
+        )
+        
+        # 2. 測試同步到提醒系統
+        sync_result = bg_services.bill_scheduler._sync_bill_amount_to_reminder(
+            mock_analysis_data, 
+            mock_filename
+        )
+        
+        # 3. 驗證提醒系統中的資料
+        bill_info = reminder_bot.get_bill_amount('永豐')
+        
+        # 4. 測試增強版待辦事項顯示
+        test_todos = [
+            "繳永豐卡費",
+            "買菜", 
+            "繳台新卡費",
+            "運動"
+        ]
+        
+        enhanced_todos = {}
+        for todo in test_todos:
+            enhanced = reminder_bot._enhance_todo_with_bill_amount(todo)
+            enhanced_todos[todo] = enhanced
+        
+        # 5. 測試緊急帳單檢查
+        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
+        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+        bill_reminder_message = reminder_bot.format_bill_reminders(urgent_bills)
+        
+        return jsonify({
+            'success': True,
+            'test_results': {
+                'data_normalization': normalized_data,
+                'sync_to_reminder': sync_result,
+                'retrieved_bill_info': bill_info,
+                'enhanced_todos': enhanced_todos,
+                'urgent_bills_check': {
+                    'count': len(urgent_bills),
+                    'bills': urgent_bills,
+                    'formatted_message': bill_reminder_message
+                }
+            },
+            'integration_status': {
+                'mongodb_connected': reminder_bot.use_mongodb,
+                'scheduler_running': bg_services.bill_scheduler.scheduler_thread is not None,
+                'data_sync_working': sync_result.get('success', False),
+                'enhanced_display_working': any('NT$' in enhanced for enhanced in enhanced_todos.values())
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/bill-reminder-simulation')
+def test_bill_reminder_simulation():
+    """模擬每日提醒中的帳單提醒功能"""
+    try:
+        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
+        
+        # 新增幾筆測試帳單資料（不同緊急程度）
+        test_bills = [
+            ('永豐', 'NT$25,680', '2025/01/13'),  # 今天或即將到期
+            ('台新', 'NT$15,234', '2025/01/10'),  # 已逾期
+            ('國泰', 'NT$8,500', '2025/01/20'),   # 一周後
+            ('星展', 'NT$32,100', '2025/02/01')   # 較遠
+        ]
+        
+        # 清除舊資料並新增測試資料
+        sync_results = []
+        for bank, amount, due_date in test_bills:
+            success = reminder_bot.update_bill_amount(bank, amount, due_date)
+            sync_results.append({
+                'bank': bank,
+                'amount': amount,
+                'due_date': due_date,
+                'sync_success': success
+            })
+        
+        # 模擬早上提醒
+        taiwan_now = get_taiwan_datetime()
+        
+        # 檢查緊急帳單
+        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+        bill_reminder = reminder_bot.format_
