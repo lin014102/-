@@ -1,6 +1,7 @@
 """
-bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步 (完整整合版)
+bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步 (完整修正版)
 負責每日 03:30 分析帳單，15:15 推播結果，並同步金額到提醒系統
+支援民國年日期轉換和完整金額格式處理
 """
 
 import os
@@ -18,7 +19,7 @@ from utils.line_api import send_push_message
 
 
 class BillScheduler:
-    """信用卡帳單分析定時任務管理器 + 帳單金額同步 (完整整合版)"""
+    """信用卡帳單分析定時任務管理器 + 帳單金額同步 (完整修正版)"""
     
     def __init__(self, reminder_bot):
         self.logger = logging.getLogger(__name__)
@@ -243,7 +244,7 @@ class BillScheduler:
                         )
                         send_push_message(notification_user_id, message)
                         
-                        # 2. 🆕 完整版：如果是信用卡帳單，同步金額到提醒系統
+                        # 2. 如果是信用卡帳單，同步金額到提醒系統（修正版）
                         if analysis_data.get('document_type') != "交割憑單":
                             sync_result = self._sync_bill_amount_to_reminder(
                                 analysis_data, 
@@ -279,7 +280,7 @@ class BillScheduler:
             self.logger.error(f"發送成功通知錯誤: {e}")
     
     def _sync_bill_amount_to_reminder(self, analysis_data, filename):
-        """🆕 完整版：將帳單金額同步到提醒系統"""
+        """完整修正版：將帳單金額同步到提醒系統，支援民國年和金額格式處理"""
         try:
             self.logger.info(f"🔄 開始同步帳單金額: {filename}")
             
@@ -308,7 +309,7 @@ class BillScheduler:
                     'missing_fields': missing_fields
                 }
             
-            # 3. 資料格式標準化
+            # 3. 資料格式標準化（修正版）
             normalized_data = self._normalize_bill_data(bank_name, total_due, due_date, statement_date)
             
             if not normalized_data['success']:
@@ -350,26 +351,25 @@ class BillScheduler:
             }
     
     def _normalize_bill_data(self, bank_name, total_due, due_date, statement_date=None):
-        """標準化帳單資料格式"""
+        """標準化帳單資料格式（完全修正版 - 支援民國年和完整金額處理）"""
         try:
             # 1. 銀行名稱標準化 (使用 ReminderBot 的方法)
             normalized_bank = self.reminder_bot._normalize_bank_name(bank_name)
             
-            # 2. 金額格式標準化
-            # 保持原始格式，確保包含貨幣符號和千分位逗號
+            # 2. 金額格式標準化（完整版）
             if isinstance(total_due, (int, float)):
                 # 如果是數字，轉換為標準格式
                 formatted_amount = f"NT${int(total_due):,}"
             else:
-                # 如果是字串，清理並標準化
+                # 如果是字串，進行完整清理和標準化
                 amount_str = str(total_due).strip()
                 
-                # 移除可能的空格和特殊字符
+                # 移除所有空格
                 amount_str = re.sub(r'\s+', '', amount_str)
                 
-                # 如果沒有貨幣符號，加上 NT$
-                if not any(currency in amount_str.upper() for currency in ['NT$', 'TWD', '$']):
-                    # 提取數字部分
+                # 檢查是否已有貨幣符號
+                if any(currency in amount_str.upper() for currency in ['NT$', 'TWD', '$']):
+                    # 已有貨幣符號，提取數字部分重新格式化
                     numbers = re.findall(r'[\d,]+', amount_str)
                     if numbers:
                         clean_number = numbers[0].replace(',', '')
@@ -380,19 +380,17 @@ class BillScheduler:
                     else:
                         formatted_amount = amount_str
                 else:
-                    # 已有貨幣符號，保持原樣但確保千分位逗號
-                    if 'NT$' in amount_str.upper():
-                        number_part = re.sub(r'[^\d]', '', amount_str)
-                        if number_part.isdigit():
-                            formatted_amount = f"NT${int(number_part):,}"
-                        else:
-                            formatted_amount = amount_str
+                    # 沒有貨幣符號，只有數字和逗號
+                    clean_number = re.sub(r'[^\d]', '', amount_str)
+                    if clean_number.isdigit() and len(clean_number) > 0:
+                        formatted_amount = f"NT${int(clean_number):,}"
                     else:
-                        formatted_amount = amount_str
+                        # 如果無法解析，至少加上前綴
+                        formatted_amount = f"NT${amount_str}"
             
-            # 3. 日期格式標準化 (統一為 YYYY/MM/DD)
+            # 3. 日期格式標準化（支援民國年）
             normalized_due_date = self._normalize_date_format(due_date)
-            if not normalized_due_date:
+            if not normalized_due_date or '/' not in normalized_due_date:
                 return {
                     'success': False,
                     'error': f"無效的到期日格式: {due_date}"
@@ -417,12 +415,35 @@ class BillScheduler:
             }
     
     def _normalize_date_format(self, date_str):
-        """統一日期格式為 YYYY/MM/DD"""
+        """統一日期格式為 YYYY/MM/DD，支援民國年轉換（完整版）"""
         if not date_str:
             return None
         
         try:
-            # 嘗試各種日期格式
+            date_str = str(date_str).strip()
+            
+            # 檢查是否為民國年格式 (例如: 114/09/24, 114/9/24)
+            if '/' in date_str:
+                parts = date_str.split('/')
+                if len(parts) == 3:
+                    year_str = parts[0].strip()
+                    month_str = parts[1].strip()
+                    day_str = parts[2].strip()
+                    
+                    # 如果年份是 2-3 位數，可能是民國年
+                    if len(year_str) <= 3 and year_str.isdigit():
+                        roc_year = int(year_str)
+                        # 民國年轉西元年 (民國元年 = 西元1912年)
+                        # 合理的民國年範圍：1-200年 (西元1912-2112年)
+                        if 1 <= roc_year <= 200:
+                            west_year = roc_year + 1911
+                            month = month_str.zfill(2)
+                            day = day_str.zfill(2)
+                            converted_date = f"{west_year}/{month}/{day}"
+                            self.logger.info(f"✅ 民國年轉換成功: {date_str} -> {converted_date}")
+                            return converted_date
+            
+            # 嘗試各種標準日期格式
             date_formats = [
                 '%Y/%m/%d',
                 '%Y-%m-%d', 
@@ -434,13 +455,15 @@ class BillScheduler:
             parsed_date = None
             for fmt in date_formats:
                 try:
-                    parsed_date = datetime.strptime(str(date_str).strip(), fmt)
+                    parsed_date = datetime.strptime(date_str, fmt)
                     break
                 except ValueError:
                     continue
             
             if parsed_date:
-                return parsed_date.strftime('%Y/%m/%d')
+                formatted_date = parsed_date.strftime('%Y/%m/%d')
+                self.logger.debug(f"日期格式標準化: {date_str} -> {formatted_date}")
+                return formatted_date
             else:
                 self.logger.warning(f"⚠️ 無法解析日期格式: {date_str}")
                 return str(date_str)  # 保持原樣
@@ -521,7 +544,7 @@ class BillScheduler:
         if due_date:
             message += f"⏰ 繳款期限: {due_date}\n"
         
-        # 🆕 顯示同步狀態
+        # 顯示同步狀態（修正版）
         if total_due and due_date:
             message += f"📊 ✅ 已同步到智能提醒系統\n"
             message += f"🔔 系統將在截止前自動提醒具體金額\n"
