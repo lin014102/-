@@ -768,12 +768,20 @@ def is_todo_query(message_text):
         return True
     
     if any(keyword in message_text for keyword in todo_keywords):
+        # 排除股票相關查詢
         stock_exclusions = [
             '股票', '股價', '損益', '帳戶', '交易', '成本',
             '總覽', '即時', '代號'
         ]
         
-        if not any(stock_word in message_text for stock_word in stock_exclusions):
+        # 🚨 新增：排除帳單相關查詢
+        bill_exclusions = [
+            '帳單', '卡費', '繳費', '永豐', '台新', '國泰', 
+            '星展', '匯豐', '玉山', '聯邦', '緊急帳單', '逾期帳單'
+        ]
+        
+        if not any(stock_word in message_text for stock_word in stock_exclusions) and \
+           not any(bill_word in message_text for bill_word in bill_exclusions):
             return True
     
     return False
