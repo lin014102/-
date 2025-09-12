@@ -831,6 +831,168 @@ def enhanced_message_router(message_text, user_id):
         print(f"❌ 訊息路由錯誤: {e}")
         return f"❌ 系統處理錯誤，請稍後再試\n🕒 {get_taiwan_time()}"
 
+# ===== 帳單查詢訊息處理函數 =====
+
+def is_bill_query_command(message_text):
+    """檢查是否為帳單查詢相關指令"""
+    bill_query_keywords = [
+        '帳單查詢', '卡費查詢', '繳費查詢', '帳單狀態',
+        '緊急帳單', '逾期帳單', '即將到期', '帳單總覽',
+        '查詢帳單', '查詢卡費', '查詢繳費', '繳費狀態',
+        '帳單金額', '卡費金額'
+    ]
+    
+    return any(keyword in message_text for keyword in bill_query_keywords)
+
+def handle_bill_query_command(message_text, user_id):
+    """處理帳單查詢相關指令"""
+    try:
+        # 緊急帳單查詢
+        if any(keyword in message_text for keyword in ['緊急帳單', '逾期帳單', '即將到期']):
+            urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+            if urgent_bills:
+                bill_reminder = reminder_bot.format_bill_reminders(urgent_bills)
+                return f"📊 緊急帳單狀態\n\n{bill_reminder}\n\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
+            else:
+                return f"✅ 目前沒有緊急帳單\n💡 所有帳單都在安全期限內\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
+        
+        # 帳單總覽查詢
+        elif any(keyword in message_text for keyword in ['帳單總覽', '帳單查詢', '卡費查詢', '帳單狀態']):
+            banks = ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦']
+            bill_info_list = []
+            urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+            
+            message = "💳 帳單總覽\n\n"
+            
+            # 顯示緊急帳單提醒
+            if urgent_bills:
+                bill_reminder = reminder_bot.format_bill_reminders(urgent_bills)
+                message += f"{bill_reminder}\n\n"
+                message += f"{'='*20}\n\n"
+            
+            # 顯示所有銀行帳單狀態
+            has_bills = False
+            for bank in banks:
+                bill_info = reminder_bot.get_bill_amount(bank)
+                if bill_info:
+                    has_bills = True
+                    try:
+                        taiwan_now = get_taiwan_datetime()
+                        today = taiwan_now.date()
+                        due_date = datetime.strptime(bill_info['due_date'], '%Y/%m/%d').date()
+                        days_until_due = (due_date - today).days
+                        
+                        # 格式化日期顯示
+                        if '/' in bill_info['due_date'] and len(bill_info['due_date'].split('/')) == 3:
+                            year, month, day = bill_info['due_date'].split('/')
+                            formatted_date = f"{int(month)}/{int(day)}"
+                        else:
+                            formatted_date = bill_info['due_date']
+                        
+                        # 狀態顯示
+                        if days_until_due < 0:
+                            status_icon = "🚨"
+                            status_text = f"逾期{abs(days_until_due)}天"
+                        elif days_until_due == 0:
+                            status_icon = "⏰"
+                            status_text = "今天截止"
+                        elif days_until_due <= 3:
+                            status_icon = "⚡"
+                            status_text = f"{days_until_due}天後"
+                        elif days_until_due <= 7:
+                            status_icon = "💡"
+                            status_text = f"{days_until_due}天後"
+                        else:
+                            status_icon = "✅"
+                            status_text = f"{days_until_due}天後"
+                        
+                        message += f"{status_icon} {bank}：{bill_info['amount']}\n"
+                        message += f"   截止：{formatted_date} ({status_text})\n\n"
+                        
+                    except ValueError:
+                        message += f"📄 {bank}：{bill_info['amount']}\n"
+                        message += f"   截止：{bill_info['due_date']}\n\n"
+            
+            if not has_bills:
+                message += "📝 目前沒有帳單記錄\n💡 帳單分析完成後會自動同步到這裡"
+            
+            message += f"🕒 查詢時間: {get_taiwan_time_hhmm()}"
+            return message
+        
+        # 特定銀行帳單查詢
+        else:
+            # 檢查是否指定特定銀行
+            banks_mapping = {
+                '永豐': ['永豐', 'sinopac'],
+                '台新': ['台新', 'taishin'],
+                '國泰': ['國泰', 'cathay'],
+                '星展': ['星展', 'dbs'],
+                '匯豐': ['匯豐', 'hsbc'],
+                '玉山': ['玉山', 'esun'],
+                '聯邦': ['聯邦', 'union']
+            }
+            
+            matched_bank = None
+            for bank_name, patterns in banks_mapping.items():
+                if any(pattern in message_text.lower() for pattern in patterns):
+                    matched_bank = bank_name
+                    break
+            
+            if matched_bank:
+                bill_info = reminder_bot.get_bill_amount(matched_bank)
+                if bill_info:
+                    try:
+                        taiwan_now = get_taiwan_datetime()
+                        today = taiwan_now.date()
+                        due_date = datetime.strptime(bill_info['due_date'], '%Y/%m/%d').date()
+                        days_until_due = (due_date - today).days
+                        
+                        message = f"💳 {matched_bank}銀行帳單\n\n"
+                        message += f"💰 應繳金額：{bill_info['amount']}\n"
+                        message += f"⏰ 繳款截止：{bill_info['due_date']}\n"
+                        
+                        if days_until_due < 0:
+                            message += f"🚨 狀態：逾期 {abs(days_until_due)} 天\n"
+                        elif days_until_due == 0:
+                            message += f"⏰ 狀態：今天截止\n"
+                        elif days_until_due <= 3:
+                            message += f"⚡ 狀態：{days_until_due} 天後到期\n"
+                        elif days_until_due <= 7:
+                            message += f"💡 狀態：{days_until_due} 天後到期\n"
+                        else:
+                            message += f"✅ 狀態：{days_until_due} 天後到期\n"
+                        
+                        if bill_info.get('statement_date'):
+                            message += f"📅 帳單日期：{bill_info['statement_date']}\n"
+                        
+                        message += f"\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
+                        return message
+                        
+                    except ValueError:
+                        return f"💳 {matched_bank}銀行帳單\n\n💰 應繳金額：{bill_info['amount']}\n⏰ 繳款截止：{bill_info['due_date']}\n\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
+                else:
+                    return f"📝 {matched_bank}銀行目前沒有帳單記錄\n💡 帳單分析完成後會自動同步"
+            else:
+                # 通用帳單查詢幫助
+                return """💳 帳單查詢指令說明
+
+🔍 可用查詢指令：
+• 帳單查詢 / 帳單總覽 - 查看所有銀行帳單
+• 緊急帳單 - 查看即將到期或逾期的帳單
+• [銀行名稱]帳單查詢 - 查看特定銀行帳單
+
+🏦 支援銀行：
+永豐、台新、國泰、星展、匯豐、玉山、聯邦
+
+💡 範例：
+• 「帳單查詢」- 查看所有帳單狀態
+• 「緊急帳單」- 查看需要優先處理的帳單
+• 「永豐帳單查詢」- 查看永豐銀行帳單"""
+    
+    except Exception as e:
+        print(f"❌ 處理帳單查詢指令失敗: {e}")
+        return f"❌ 查詢失敗，請稍後再試\n🕒 {get_taiwan_time()}"
+
 # ===== 生理期追蹤訊息處理函數 =====
 
 def is_period_command(message_text):
