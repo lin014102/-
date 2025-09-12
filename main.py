@@ -20,10 +20,10 @@ from stock_manager import (
     is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
 
-# 🆕 匯入 Gemini AI 模組
+# 匯入 Gemini AI 模組
 from gemini_analyzer import EnhancedMessageRouter
 
-# 🆕 匯入帳單分析定時任務
+# 匯入帳單分析定時任務
 from bill_scheduler import BillScheduler
 
 # 初始化 Flask 應用
@@ -32,7 +32,7 @@ app = Flask(__name__)
 # 建立模組實例
 reminder_bot = ReminderBot(todo_manager)
 
-# 🆕 使用增強版訊息路由器
+# 使用增強版訊息路由器
 message_router = EnhancedMessageRouter(todo_manager, reminder_bot, None)
 
 # 背景服務管理
@@ -165,16 +165,16 @@ def health():
     # 獲取各模組狀態
     reminder_counts = reminder_bot.get_reminder_counts()
     
-    # 🆕 獲取 Gemini AI 狀態
+    # 獲取 Gemini AI 狀態
     gemini_status = message_router.gemini_analyzer.enabled
     
-    # 🆕 獲取帳單分析定時任務狀態
+    # 獲取帳單分析定時任務狀態
     try:
         bill_scheduler_status = bg_services.bill_scheduler.get_status() if bg_services.bill_scheduler else {'scheduler_running': False}
     except:
         bill_scheduler_status = {'scheduler_running': False, 'error': 'not_initialized'}
     
-    # 🆕 測試緊急帳單檢查功能
+    # 測試緊急帳單檢查功能
     try:
         user_id = reminder_bot.user_settings.get('user_id', 'health_check_user')
         urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
@@ -238,7 +238,7 @@ def health():
         }
     })
 
-# ===== 🆕 完整整合測試端點 =====
+# ===== 完整整合測試端點 =====
 
 @app.route('/test/bill-sync-integration')
 def test_bill_sync_integration():
@@ -269,6 +269,465 @@ def test_bill_sync_integration():
                 'success': False,
                 'error': '帳單分析器未初始化'
             })
+        
+        normalized_data = bg_services.bill_scheduler._normalize_bill_data(
+            mock_analysis_data['bank_name'],
+            mock_analysis_data['analysis_result']['total_amount_due'],
+            mock_analysis_data['analysis_result']['payment_due_date'],
+            mock_analysis_data['analysis_result']['statement_date']
+        )
+        
+        # 2. 測試同步到提醒系統
+        sync_result = bg_services.bill_scheduler._sync_bill_amount_to_reminder(
+            mock_analysis_data, 
+            mock_filename
+        )
+        
+        # 3. 驗證提醒系統中的資料
+        bill_info = reminder_bot.get_bill_amount('永豐')
+        
+        # 4. 測試增強版待辦事項顯示
+        test_todos = [
+            "繳永豐卡費",
+            "買菜", 
+            "繳台新卡費",
+            "運動"
+        ]
+        
+        enhanced_todos = {}
+        for todo in test_todos:
+            enhanced = reminder_bot._enhance_todo_with_bill_amount(todo)
+            enhanced_todos[todo] = enhanced
+        
+        # 5. 測試緊急帳單檢查
+        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
+        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+        bill_reminder_message = reminder_bot.format_bill_reminders(urgent_bills)
+        
+        return jsonify({
+            'success': True,
+            'test_results': {
+                'data_normalization': normalized_data,
+                'sync_to_reminder': sync_result,
+                'retrieved_bill_info': bill_info,
+                'enhanced_todos': enhanced_todos,
+                'urgent_bills_check': {
+                    'count': len(urgent_bills),
+                    'bills': urgent_bills,
+                    'formatted_message': bill_reminder_message
+                }
+            },
+            'integration_status': {
+                'mongodb_connected': reminder_bot.use_mongodb,
+                'scheduler_running': bg_services.bill_scheduler.scheduler_thread is not None,
+                'data_sync_working': sync_result.get('success', False),
+                'enhanced_display_working': any('NT$' in enhanced for enhanced in enhanced_todos.values())
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/bill-reminder-simulation')
+def test_bill_reminder_simulation():
+    """模擬每日提醒中的帳單提醒功能"""
+    try:
+        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
+        
+        # 新增幾筆測試帳單資料（不同緊急程度）
+        test_bills = [
+            ('永豐', 'NT$25,680', '2025/01/13'),  # 今天或即將到期
+            ('台新', 'NT$15,234', '2025/01/10'),  # 已逾期
+            ('國泰', 'NT$8,500', '2025/01/20'),   # 一周後
+            ('星展', 'NT$32,100', '2025/02/01')   # 較遠
+        ]
+        
+        # 清除舊資料並新增測試資料
+        sync_results = []
+        for bank, amount, due_date in test_bills:
+            success = reminder_bot.update_bill_amount(bank, amount, due_date)
+            sync_results.append({
+                'bank': bank,
+                'amount': amount,
+                'due_date': due_date,
+                'sync_success': success
+            })
+        
+        # 模擬早上提醒
+        taiwan_now = get_taiwan_datetime()
+        
+        # 檢查緊急帳單
+        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
+        bill_reminder = reminder_bot.format_bill_reminders(urgent_bills)
+        
+        # 檢查生理期提醒
+        period_reminder = reminder_bot.check_period_reminders(user_id, taiwan_now)
+        period_message = reminder_bot.format_period_reminder(period_reminder)
+        
+        # 模擬完整提醒訊息（不實際發送）
+        mock_todos = [
+            {"content": "繳永豐卡費", "has_date": False},
+            {"content": "買菜", "has_date": False},
+            {"content": "繳台新卡費", "has_date": True, "target_date": "2025/01/15"}
+        ]
+        
+        enhanced_todos_display = []
+        for todo in mock_todos:
+            enhanced_content = reminder_bot._enhance_todo_with_bill_amount(todo["content"])
+            date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
+            enhanced_todos_display.append(f"⭕ {enhanced_content}{date_info}")
+        
+        # 組合模擬訊息
+        time_icon = '🌅'
+        time_text = '早安'
+        
+        simulated_message = f"{time_icon} {time_text}！您有 {len(mock_todos)} 項待辦事項：\n\n"
+        
+        if bill_reminder:
+            simulated_message += f"{bill_reminder}\n"
+            simulated_message += f"{'='*20}\n\n"
+        
+        for i, enhanced_todo in enumerate(enhanced_todos_display, 1):
+            simulated_message += f"{i}. {enhanced_todo}\n"
+        
+        if period_message:
+            simulated_message += f"\n{period_message}\n"
+        
+        simulated_message += f"\n💪 新的一天開始了！優先處理緊急帳單，然後完成其他任務！"
+        simulated_message += f"\n🇹🇼 台灣時間: {get_taiwan_time_hhmm()}"
+        
+        return jsonify({
+            'success': True,
+            'simulation_results': {
+                'test_data_sync': sync_results,
+                'urgent_bills_detected': urgent_bills,
+                'bill_reminder_message': bill_reminder,
+                'period_reminder_message': period_message,
+                'enhanced_todos': enhanced_todos_display,
+                'complete_simulated_message': simulated_message
+            },
+            'statistics': {
+                'total_bills_added': len(test_bills),
+                'urgent_bills_count': len(urgent_bills),
+                'todos_with_bill_info': sum(1 for todo in enhanced_todos_display if 'NT$' in todo),
+                'message_length': len(simulated_message)
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'timestamp': get_taiwan_time()
+        })
+
+# ===== 原有測試端點保持不變 =====
+
+@app.route('/test/bill-analysis')
+def test_bill_analysis():
+    """手動測試帳單分析功能"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        bg_services.bill_scheduler._run_daily_analysis()
+        
+        return jsonify({
+            'success': True,
+            'message': '手動分析任務已執行',
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/notifications')
+def test_notifications():
+    """手動測試推播功能"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        bg_services.bill_scheduler._run_daily_notifications()
+        
+        return jsonify({
+            'success': True,
+            'message': '手動推播任務已執行',
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/sheets-connection')
+def test_sheets_connection():
+    """測試 Google Sheets 連接"""
+    try:
+        if not bg_services.bill_scheduler:
+            return jsonify({
+                'success': False,
+                'error': '帳單分析器未初始化'
+            })
+        
+        sheets_handler = bg_services.bill_scheduler.sheets_handler
+        
+        pending_files = sheets_handler.get_pending_files()
+        failed_files = sheets_handler.get_failed_files()
+        notification_files = sheets_handler.get_notification_pending_files()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'pending_files_count': len(pending_files),
+                'failed_files_count': len(failed_files),
+                'notification_pending_count': len(notification_files),
+                'pending_files': pending_files[:3] if pending_files else [],
+                'failed_files': failed_files[:3] if failed_files else [],
+                'notification_files': notification_files[:3] if notification_files else []
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/bill-amounts')
+def test_bill_amounts():
+    """測試帳單金額查詢功能"""
+    try:
+        banks = ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦']
+        results = {}
+        
+        for bank in banks:
+            bill_info = reminder_bot.get_bill_amount(bank)
+            results[bank] = bill_info
+        
+        return jsonify({
+            'success': True,
+            'data': results,
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/add-test-bill')
+def test_add_bill():
+    """手動新增測試帳單金額"""
+    try:
+        success = reminder_bot.update_bill_amount(
+            bank_name="永豐銀行",
+            amount="NT$15,234",
+            due_date="2025/01/24",
+            statement_date="2025/01/01"
+        )
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': '測試帳單金額新增成功',
+                'test_data': {
+                    'bank': '永豐銀行',
+                    'amount': 'NT$15,234',
+                    'due_date': '2025/01/24'
+                },
+                'timestamp': get_taiwan_time()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '新增失敗',
+                'timestamp': get_taiwan_time()
+            })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/enhanced-reminder')
+def test_enhanced_reminder():
+    """測試增強版提醒訊息顯示"""
+    try:
+        test_todos = [
+            "繳永豐卡費",
+            "繳台新卡費", 
+            "繳國泰卡費",
+            "買菜",
+            "繳星展卡費"
+        ]
+        
+        results = {}
+        for todo in test_todos:
+            enhanced = reminder_bot._enhance_todo_with_bill_amount(todo)
+            results[todo] = enhanced
+        
+        return jsonify({
+            'success': True,
+            'data': results,
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/bank-mapping')
+def test_bank_mapping():
+    """測試銀行名稱標準化"""
+    try:
+        test_banks = [
+            "永豐銀行",
+            "SinoPac", 
+            "台新銀行",
+            "TAISHIN",
+            "星展銀行",
+            "DBS Bank",
+            "國泰世華",
+            "CATHAY",
+            "未知銀行"
+        ]
+        
+        results = {}
+        for bank in test_banks:
+            normalized = reminder_bot._normalize_bank_name(bank)
+            results[bank] = normalized
+        
+        return jsonify({
+            'success': True,
+            'data': results,
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/period-tracker')
+def test_period_tracker():
+    """測試生理期追蹤功能"""
+    try:
+        test_user_id = "test_user_period"
+        
+        status = reminder_bot.get_period_status(test_user_id)
+        
+        taiwan_now = get_taiwan_datetime()
+        reminder_info = reminder_bot.check_period_reminders(test_user_id, taiwan_now)
+        reminder_message = reminder_bot.format_period_reminder(reminder_info)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'status': status,
+                'reminder_info': reminder_info,
+                'reminder_message': reminder_message,
+                'current_time': taiwan_now.isoformat()
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/add-test-period')
+def test_add_period():
+    """新增測試生理期資料"""
+    try:
+        test_user_id = "test_user_period"
+        
+        from datetime import datetime
+        test_date = (datetime.now() - timedelta(days=30)).strftime('%Y/%m/%d')
+        
+        result = reminder_bot.record_period_start(test_date, test_user_id, "測試記錄")
+        
+        return jsonify({
+            'success': True,
+            'message': '測試生理期記錄新增成功',
+            'result': result,
+            'test_data': {
+                'user_id': test_user_id,
+                'start_date': test_date,
+                'notes': '測試記錄'
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
+
+@app.route('/test/next-period-prediction')
+def test_next_period_prediction():
+    """測試下次生理期預測功能"""
+    try:
+        test_user_id = "test_user_period"
+        
+        prediction = reminder_bot.get_next_period_prediction(test_user_id)
+        status = reminder_bot.get_period_status(test_user_id)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'next_period_prediction': prediction,
+                'general_status': status,
+                'test_user_id': test_user_id
+            },
+            'timestamp': get_taiwan_time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
 
 # ===== Webhook 處理 =====
 
@@ -485,100 +944,3 @@ if __name__ == '__main__':
     # 啟動 Flask 應用
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
-        
-        normalized_data = bg_services.bill_scheduler._normalize_bill_data(
-            mock_analysis_data['bank_name'],
-            mock_analysis_data['analysis_result']['total_amount_due'],
-            mock_analysis_data['analysis_result']['payment_due_date'],
-            mock_analysis_data['analysis_result']['statement_date']
-        )
-        
-        # 2. 測試同步到提醒系統
-        sync_result = bg_services.bill_scheduler._sync_bill_amount_to_reminder(
-            mock_analysis_data, 
-            mock_filename
-        )
-        
-        # 3. 驗證提醒系統中的資料
-        bill_info = reminder_bot.get_bill_amount('永豐')
-        
-        # 4. 測試增強版待辦事項顯示
-        test_todos = [
-            "繳永豐卡費",
-            "買菜", 
-            "繳台新卡費",
-            "運動"
-        ]
-        
-        enhanced_todos = {}
-        for todo in test_todos:
-            enhanced = reminder_bot._enhance_todo_with_bill_amount(todo)
-            enhanced_todos[todo] = enhanced
-        
-        # 5. 測試緊急帳單檢查
-        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
-        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
-        bill_reminder_message = reminder_bot.format_bill_reminders(urgent_bills)
-        
-        return jsonify({
-            'success': True,
-            'test_results': {
-                'data_normalization': normalized_data,
-                'sync_to_reminder': sync_result,
-                'retrieved_bill_info': bill_info,
-                'enhanced_todos': enhanced_todos,
-                'urgent_bills_check': {
-                    'count': len(urgent_bills),
-                    'bills': urgent_bills,
-                    'formatted_message': bill_reminder_message
-                }
-            },
-            'integration_status': {
-                'mongodb_connected': reminder_bot.use_mongodb,
-                'scheduler_running': bg_services.bill_scheduler.scheduler_thread is not None,
-                'data_sync_working': sync_result.get('success', False),
-                'enhanced_display_working': any('NT$' in enhanced for enhanced in enhanced_todos.values())
-            },
-            'timestamp': get_taiwan_time()
-        })
-        
-    except Exception as e:
-        import traceback
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc(),
-            'timestamp': get_taiwan_time()
-        })
-
-@app.route('/test/bill-reminder-simulation')
-def test_bill_reminder_simulation():
-    """模擬每日提醒中的帳單提醒功能"""
-    try:
-        user_id = reminder_bot.user_settings.get('user_id', 'test_user')
-        
-        # 新增幾筆測試帳單資料（不同緊急程度）
-        test_bills = [
-            ('永豐', 'NT$25,680', '2025/01/13'),  # 今天或即將到期
-            ('台新', 'NT$15,234', '2025/01/10'),  # 已逾期
-            ('國泰', 'NT$8,500', '2025/01/20'),   # 一周後
-            ('星展', 'NT$32,100', '2025/02/01')   # 較遠
-        ]
-        
-        # 清除舊資料並新增測試資料
-        sync_results = []
-        for bank, amount, due_date in test_bills:
-            success = reminder_bot.update_bill_amount(bank, amount, due_date)
-            sync_results.append({
-                'bank': bank,
-                'amount': amount,
-                'due_date': due_date,
-                'sync_success': success
-            })
-        
-        # 模擬早上提醒
-        taiwan_now = get_taiwan_datetime()
-        
-        # 檢查緊急帳單
-        urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
-        bill_reminder = reminder_bot.format_
