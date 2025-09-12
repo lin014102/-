@@ -745,8 +745,17 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 增強版訊息路由處理（包含智能帳單提醒整合）
-                reply_text = enhanced_message_router(message_text, user_id)
+                # 🔥 在這裡直接攔截帳單查詢，不經過路由器
+                bill_keywords = ['帳單查詢', '帳單總覽', '卡費查詢', '緊急帳單', '逾期帳單', '帳單狀態']
+                bank_bill_patterns = ['永豐帳單查詢', '台新帳單查詢', '國泰帳單查詢', '星展帳單查詢', '匯豐帳單查詢', '玉山帳單查詢', '聯邦帳單查詢']
+                
+                if (any(keyword in message_text for keyword in bill_keywords) or 
+                    any(pattern in message_text for pattern in bank_bill_patterns)):
+                    print(f"🔥 Webhook直接處理帳單查詢: {message_text}")
+                    reply_text = handle_bill_query_command(message_text, user_id)
+                else:
+                    # 其他訊息才使用路由器
+                    reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
                 reply_message(reply_token, reply_text)
