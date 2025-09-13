@@ -1,6 +1,6 @@
 """
-reminder_bot.py - 提醒機器人模組 (完整整合版)
-修正版生理期追蹤 + 下次預測查詢 + 智能帳單金額提醒整合
+reminder_bot.py - 提醒機器人模組 (完整整合版 + 修復短期提醒)
+修正版生理期追蹤 + 下次預測查詢 + 智能帳單金額提醒整合 + 完整短期提醒功能
 """
 import re
 import os
@@ -12,7 +12,7 @@ from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_d
 from utils.line_api import send_push_message
 
 class ReminderBot:
-    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤 + 智能帳單提醒"""
+    """提醒機器人 (MongoDB Atlas 版本) + 帳單金額整合 + 生理期追蹤 + 智能帳單提醒 + 完整短期提醒功能"""
     
     def __init__(self, todo_manager):
         """初始化提醒機器人"""
@@ -347,6 +347,92 @@ class ReminderBot:
         except Exception as e:
             print(f"增強待辦事項顯示失敗: {e}")
             return todo_content
+
+    # ===== 🚀 修復版短期提醒功能 =====
+    
+    def send_short_reminder(self, user_id, reminder):
+        """發送短期提醒"""
+        try:
+            message = f"⏰ 短期提醒時間到！\n\n"
+            message += f"📝 提醒內容：{reminder['content']}\n"
+            message += f"🕒 設定時間：{reminder['original_value']}{reminder['unit']}前\n"
+            message += f"🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}"
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送短期提醒：{reminder['content']} - 台灣時間: {get_taiwan_time()}")
+            
+        except Exception as e:
+            print(f"❌ 發送短期提醒失敗: {e}")
+    
+    def send_time_reminder(self, user_id, reminder):
+        """發送時間提醒"""
+        try:
+            message = f"🕐 定時提醒時間到！\n\n"
+            message += f"📝 提醒內容：{reminder['content']}\n"
+            message += f"⏰ 設定時間：{reminder['time_string']}\n"
+            message += f"🇹🇼 當前台灣時間：{get_taiwan_time_hhmm()}"
+            
+            send_push_message(user_id, message)
+            print(f"✅ 已發送定時提醒：{reminder['content']} ({reminder['time_string']}) - 台灣時間: {get_taiwan_time()}")
+            
+        except Exception as e:
+            print(f"❌ 發送定時提醒失敗: {e}")
+    
+    def check_and_send_short_reminders(self):
+        """檢查並發送短期提醒"""
+        try:
+            taiwan_now = get_taiwan_datetime()
+            short_reminders = self._get_short_reminders()
+            
+            reminders_to_remove = []
+            
+            for reminder in short_reminders:
+                reminder_time = datetime.fromisoformat(reminder['reminder_time'])
+                
+                # 檢查是否到時間（允許1分鐘的誤差）
+                time_diff = (taiwan_now - reminder_time).total_seconds()
+                
+                if 0 <= time_diff <= 60:  # 在提醒時間後的1分鐘內
+                    self.send_short_reminder(reminder['user_id'], reminder)
+                    reminders_to_remove.append(reminder['id'])
+                elif time_diff > 60:  # 超過1分鐘，視為過期
+                    print(f"⚠️ 短期提醒過期：{reminder['content']} (過期 {int(time_diff/60)} 分鐘)")
+                    reminders_to_remove.append(reminder['id'])
+            
+            # 移除已發送或過期的提醒
+            for reminder_id in reminders_to_remove:
+                self._remove_short_reminder(reminder_id)
+                
+        except Exception as e:
+            print(f"❌ 檢查短期提醒失敗: {e}")
+    
+    def check_and_send_time_reminders(self):
+        """檢查並發送時間提醒"""
+        try:
+            taiwan_now = get_taiwan_datetime()
+            time_reminders = self._get_time_reminders()
+            
+            reminders_to_remove = []
+            
+            for reminder in time_reminders:
+                reminder_time = datetime.fromisoformat(reminder['reminder_time'])
+                
+                # 檢查是否到時間（允許1分鐘的誤差）
+                time_diff = (taiwan_now - reminder_time).total_seconds()
+                
+                if 0 <= time_diff <= 60:  # 在提醒時間後的1分鐘內
+                    self.send_time_reminder(reminder['user_id'], reminder)
+                    reminders_to_remove.append(reminder['id'])
+                elif time_diff > 60:  # 超過1分鐘，視為過期
+                    print(f"⚠️ 時間提醒過期：{reminder['content']} ({reminder['time_string']}) (過期 {int(time_diff/60)} 分鐘)")
+                    reminders_to_remove.append(reminder['id'])
+            
+            # 移除已發送或過期的提醒
+            for reminder_id in reminders_to_remove:
+                self._remove_time_reminder(reminder_id)
+                
+        except Exception as e:
+            print(f"❌ 檢查時間提醒失敗: {e}")
     
     # ===== 帳單金額管理功能（保留原有功能）=====
     
@@ -966,10 +1052,10 @@ class ReminderBot:
         status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
         return f"🌙 已設定晚上提醒時間為：{time_str}\n🇹🇼 台灣時間\n💡 新時間將立即生效\n{status_msg}"
     
-    # ===== 提醒檢查核心邏輯（包含智能帳單提醒）=====
+    # ===== 🚀 修復版提醒檢查核心邏輯（包含完整短期提醒功能）=====
     
     def check_reminders(self):
-        """主提醒檢查循環（增強版 - 包含帳單和生理期提醒）"""
+        """主提醒檢查循環（修復版 - 包含短期提醒、時間提醒、帳單和生理期提醒）"""
         while True:
             try:
                 current_time = get_taiwan_time_hhmm()
@@ -977,8 +1063,15 @@ class ReminderBot:
                 taiwan_now = get_taiwan_datetime()
                 today_date = taiwan_now.strftime('%Y-%m-%d')
                 
-                print(f"🔍 增強版提醒檢查 - 台灣時間: {get_taiwan_time()}")
+                print(f"🔍 完整提醒檢查 - 台灣時間: {get_taiwan_time()}")
                 
+                # 🚀 1. 檢查短期提醒（新增功能）
+                self.check_and_send_short_reminders()
+                
+                # 🚀 2. 檢查時間提醒（新增功能）
+                self.check_and_send_time_reminders()
+                
+                # 3. 檢查每日提醒
                 if user_id:
                     # 早上提醒
                     if (current_time == self.user_settings['morning_time'] and 
@@ -992,9 +1085,9 @@ class ReminderBot:
                         self.send_daily_reminder(user_id, current_time)
                         self.last_reminders['daily_evening_date'] = today_date
                 
-                time.sleep(60)
+                time.sleep(60)  # 每分鐘檢查一次
             except Exception as e:
-                print(f"增強版提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
+                print(f"❌ 完整提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
                 time.sleep(60)
     
     def start_reminder_thread(self):
@@ -1002,7 +1095,7 @@ class ReminderBot:
         if self.reminder_thread is None or not self.reminder_thread.is_alive():
             self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
             self.reminder_thread.start()
-            print("✅ 增強版提醒機器人執行緒已啟動（包含智能帳單提醒）")
+            print("✅ 完整提醒機器人執行緒已啟動（包含短期提醒、時間提醒、智能帳單提醒和生理期提醒）")
     
     def get_reminder_counts(self):
         """獲取提醒統計"""
@@ -1177,6 +1270,83 @@ class ReminderBot:
             return f"🕐 已設定時間提醒：「{parsed['content']}」\n⏰ {date_text} {parsed['time_string']} 提醒\n🇹🇼 台灣時間\n{status_msg}"
         else:
             return f"❌ {parsed['error']}"
+    
+    # ===== 🆕 查詢提醒功能 =====
+    
+    def get_all_reminders(self, user_id):
+        """獲取所有提醒列表"""
+        try:
+            taiwan_now = get_taiwan_datetime()
+            
+            # 獲取短期提醒
+            short_reminders = self._get_short_reminders()
+            user_short_reminders = [r for r in short_reminders if r.get('user_id') == user_id]
+            
+            # 獲取時間提醒
+            time_reminders = self._get_time_reminders()
+            user_time_reminders = [r for r in time_reminders if r.get('user_id') == user_id]
+            
+            message = "📋 提醒清單\n\n"
+            
+            if user_short_reminders:
+                message += "⏰ 短期提醒：\n"
+                for reminder in user_short_reminders:
+                    try:
+                        reminder_time = datetime.fromisoformat(reminder['reminder_time'])
+                        time_diff = (reminder_time - taiwan_now).total_seconds()
+                        
+                        if time_diff > 0:
+                            if time_diff < 3600:  # 小於1小時
+                                remaining = f"{int(time_diff/60)}分鐘後"
+                            elif time_diff < 86400:  # 小於1天
+                                hours = int(time_diff/3600)
+                                minutes = int((time_diff % 3600)/60)
+                                remaining = f"{hours}小時{minutes}分鐘後"
+                            else:
+                                days = int(time_diff/86400)
+                                hours = int((time_diff % 86400)/3600)
+                                remaining = f"{days}天{hours}小時後"
+                            
+                            message += f"• {reminder['content']} ({remaining})\n"
+                        else:
+                            message += f"• {reminder['content']} (待發送)\n"
+                    except:
+                        message += f"• {reminder['content']} (時間解析錯誤)\n"
+                message += "\n"
+            
+            if user_time_reminders:
+                message += "🕐 定時提醒：\n"
+                for reminder in user_time_reminders:
+                    try:
+                        reminder_time = datetime.fromisoformat(reminder['reminder_time'])
+                        
+                        if reminder_time.date() == taiwan_now.date():
+                            date_text = "今天"
+                        elif reminder_time.date() == (taiwan_now + timedelta(days=1)).date():
+                            date_text = "明天"
+                        else:
+                            date_text = reminder_time.strftime('%m/%d')
+                        
+                        message += f"• {reminder['content']} ({date_text} {reminder['time_string']})\n"
+                    except:
+                        message += f"• {reminder['content']} ({reminder.get('time_string', '時間錯誤')})\n"
+                message += "\n"
+            
+            if not user_short_reminders and not user_time_reminders:
+                message += "📝 目前沒有任何提醒\n\n"
+                message += "💡 設定提醒方式：\n"
+                message += "• 短期：「5分鐘後倒垃圾」\n"
+                message += "• 定時：「14:00倒垃圾」\n"
+            else:
+                total_count = len(user_short_reminders) + len(user_time_reminders)
+                message += f"📊 總計 {total_count} 個提醒"
+            
+            message += f"\n🕒 查詢時間：{get_taiwan_time_hhmm()}"
+            return message
+            
+        except Exception as e:
+            print(f"❌ 獲取提醒列表失敗: {e}")
+            return f"❌ 獲取提醒列表失敗，請稍後再試\n🕒 {get_taiwan_time()}"
     
     # ===== 屬性訪問器（保持相容性）=====
     
