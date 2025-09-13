@@ -1,37 +1,4 @@
-return None
-            
-        except Exception as e:
-            print(f"❌ 取得卡費金額失敗: {e}")
-            return None
-    
-    # ===== 生理期追蹤功能（保持原有功能完整性）=====
-    
-    def record_period_start(self, start_date, user_id, notes=""):
-        """記錄生理期開始"""
-        try:
-            if isinstance(start_date, str):
-                if '/' in start_date:
-                    start_datetime = datetime.strptime(start_date, '%Y/%m/%d')
-                else:
-                    start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
-            else:
-                start_datetime = start_date
-            
-            start_date_str = start_datetime.strftime('%Y-%m-%d')
-            
-            existing_record = self._get_period_record_by_date(start_date_str, user_id)
-            if existing_record:
-                return f"❌ {start_date_str} 已有生理期記錄"
-            
-            record = {
-                'user_id': user_id,
-                'start_date': start_date_str,
-                'end_date': None,
-                'notes': notes,
-                'created_at': datetime.now().isoformat()
-            }
-            
-            if self.use_mongodb:
+if self.use_mongodb:
                 self.period_records_collection.insert_one(record)
             else:
                 self._period_records.append(record)
@@ -106,19 +73,14 @@ return None
             return "❌ 記錄失敗，請稍後再試"
     
     def get_period_status(self, user_id):
-        """獲取生理期狀態和預測 - 修正版"""
+        """獲取生理期狀態和預測"""
         try:
-            print(f"🔍 開始獲取生理期狀態，用戶ID: {user_id}")
-            
             records = self._get_period_records_safe(user_id)
-            print(f"📊 找到 {len(records)} 筆記錄")
             
             if not records:
                 return "📊 生理期追蹤狀態\n\n❌ 尚未有任何記錄\n💡 請使用「記錄生理期 YYYY/MM/DD」開始追蹤"
             
-            # 最近記錄
             latest_record = records[0]
-            print(f"📅 最新記錄：{latest_record}")
             
             message = "📊 生理期追蹤狀態\n\n"
             message += f"📅 最近記錄：{latest_record['start_date']}"
@@ -136,7 +98,6 @@ return None
             
             message += f"📋 總記錄數：{len(records)} 次\n"
             
-            # 簡化的週期計算
             if len(records) >= 2:
                 try:
                     cycles = self._calculate_simple_cycles(records)
@@ -144,7 +105,6 @@ return None
                         avg_cycle = sum(cycles) // len(cycles)
                         message += f"📊 平均週期：約 {avg_cycle} 天\n"
                         
-                        # 簡單預測
                         last_start = datetime.strptime(latest_record['start_date'], '%Y-%m-%d')
                         predicted = last_start + timedelta(days=avg_cycle)
                         message += f"📅 下次預測：約 {predicted.strftime('%Y-%m-%d')}\n"
@@ -158,32 +118,24 @@ return None
             message += "• 下次生理期\n"
             message += "• 生理期設定"
             
-            print("✅ 狀態獲取成功")
             return message
             
         except Exception as e:
             print(f"❌ 獲取生理期狀態失敗: {e}")
-            import traceback
-            traceback.print_exc()
             return "❌ 獲取狀態失敗，請稍後再試"
     
     def get_next_period_prediction(self, user_id):
-        """獲取下次生理期預測日期 - 專門的查詢功能"""
+        """獲取下次生理期預測日期"""
         try:
-            print(f"🔍 開始預測下次生理期，用戶ID: {user_id}")
-            
             records = self._get_period_records_safe(user_id)
-            print(f"📊 找到 {len(records)} 筆記錄")
             
             if not records:
                 return "📅 下次生理期預測\n\n❌ 尚未有任何記錄\n💡 請先使用「記錄生理期 YYYY/MM/DD」建立歷史資料，才能進行預測"
             
             if len(records) < 2:
-                # 如果只有一筆記錄，使用預設週期28天
                 latest_record = records[0]
                 last_start = datetime.strptime(latest_record['start_date'], '%Y-%m-%d')
                 
-                # 獲取用戶設定的預設週期
                 settings = self._get_period_settings(user_id)
                 default_cycle = settings.get('default_cycle_length', 28)
                 
@@ -193,7 +145,7 @@ return None
                 
                 message = "📅 下次生理期預測\n\n"
                 message += f"⚠️ 記錄不足，使用預設週期 {default_cycle} 天\n"
-                message += f"📅 預測日期：{predicted_date.strftime('%Y-%m-%d')} ({predicted_date.strftime('%A')})\n"
+                message += f"📅 預測日期：{predicted_date.strftime('%Y-%m-%d')}\n"
                 
                 if days_until > 0:
                     message += f"⏳ 距離：{days_until} 天後\n"
@@ -207,36 +159,29 @@ return None
                 
                 return message
             
-            # 計算週期長度
             cycles = self._calculate_simple_cycles(records)
             
             if not cycles:
                 return "📅 下次生理期預測\n\n⚠️ 週期資料異常，無法計算\n💡 請檢查記錄的日期是否正確"
             
-            # 計算統計資料
             avg_cycle = sum(cycles) // len(cycles)
             min_cycle = min(cycles)
             max_cycle = max(cycles)
             
-            # 最近一次記錄
             latest_record = records[0]
             last_start = datetime.strptime(latest_record['start_date'], '%Y-%m-%d')
             
-            # 預測下次日期
             predicted_date = last_start + timedelta(days=avg_cycle)
-            
-            # 計算日期範圍
             earliest_date = last_start + timedelta(days=min_cycle)
             latest_date = last_start + timedelta(days=max_cycle)
             
-            # 計算距離今天的天數
             today = datetime.now().date()
             days_until_predicted = (predicted_date.date() - today).days
             days_until_earliest = (earliest_date.date() - today).days
             days_until_latest = (latest_date.date() - today).days
             
             message = "📅 下次生理期預測\n\n"
-            message += f"🎯 最可能日期：{predicted_date.strftime('%Y-%m-%d')} ({predicted_date.strftime('%A')})\n"
+            message += f"🎯 最可能日期：{predicted_date.strftime('%Y-%m-%d')}\n"
             
             if days_until_predicted > 0:
                 message += f"⏳ 距離：{days_until_predicted} 天後\n"
@@ -246,15 +191,14 @@ return None
                 message += f"⚠️ 可能已過期 {abs(days_until_predicted)} 天\n"
             
             message += f"\n📊 可能範圍：\n"
-            message += f"🟢 最早：{earliest_date.strftime('%Y-%m-%d')} ({days_until_earliest}天{"後" if days_until_earliest >= 0 else "前"})\n"
-            message += f"🔴 最晚：{latest_date.strftime('%Y-%m-%d')} ({days_until_latest}天{"後" if days_until_latest >= 0 else "前"})\n"
+            message += f"🟢 最早：{earliest_date.strftime('%Y-%m-%d')} ({days_until_earliest}天後)\n"
+            message += f"🔴 最晚：{latest_date.strftime('%Y-%m-%d')} ({days_until_latest}天後)\n"
             
             message += f"\n📈 週期分析：\n"
             message += f"📊 平均週期：{avg_cycle} 天\n"
             message += f"📏 週期範圍：{min_cycle} - {max_cycle} 天\n"
             message += f"📋 分析基礎：{len(cycles)} 個週期\n"
             
-            # 貼心提醒
             if days_until_earliest <= 7:
                 message += f"\n💡 貼心提醒：\n"
                 if days_until_earliest <= 3:
@@ -266,13 +210,10 @@ return None
             status_msg = "💾 已同步到雲端" if self.use_mongodb else ""
             message += f"{status_msg}"
             
-            print(f"✅ 下次生理期預測完成: {predicted_date.strftime('%Y-%m-%d')}")
             return message
             
         except Exception as e:
             print(f"❌ 獲取下次生理期預測失敗: {e}")
-            import traceback
-            traceback.print_exc()
             return "❌ 預測失敗，請稍後再試"
     
     def set_period_settings(self, user_id, cycle_length=None, reminder_days=5):
@@ -332,7 +273,7 @@ return None
                     current = datetime.strptime(records[i]['start_date'], '%Y-%m-%d')
                     previous = datetime.strptime(records[i + 1]['start_date'], '%Y-%m-%d')
                     cycle_length = (current - previous).days
-                    if 15 <= cycle_length <= 45:  # 合理範圍
+                    if 15 <= cycle_length <= 45:
                         cycles.append(cycle_length)
                 except:
                     continue
@@ -408,7 +349,7 @@ return None
             return None
     
     def check_period_reminders(self, user_id, taiwan_now):
-        """檢查生理期提醒 - 簡化版"""
+        """檢查生理期提醒"""
         try:
             records = self._get_period_records_safe(user_id)
             if not records:
@@ -467,7 +408,7 @@ return None
         
         return ""
     
-    # ===== 原有核心功能保持不變 =====
+    # ===== 核心功能 =====
     
     def _load_user_settings(self):
         """載入用戶設定"""
@@ -544,7 +485,7 @@ return None
             'time_reminders': len(time_reminders)
         }
     
-    # ===== 短期和時間提醒功能（保持原有功能）=====
+    # ===== 短期和時間提醒功能 =====
     
     def _get_short_reminders(self):
         if self.use_mongodb:
@@ -830,7 +771,7 @@ return None
             print(f"❌ 刪除提醒失敗: {e}")
             return "❌ 刪除失敗，請稍後再試"
     
-    # ===== 🔧 調試功能 =====
+    # ===== 調試功能 =====
     
     def debug_reminders(self):
         """調試提醒功能 - 檢查資料庫狀態"""
@@ -950,7 +891,7 @@ class ReminderBot:
         }
         self.reminder_thread = None
     
-    # ===== 🆕 智能帳單提醒功能 =====
+    # ===== 智能帳單提醒功能 =====
     
     def check_urgent_bill_payments(self, user_id):
         """檢查緊急的帳單繳費提醒"""
@@ -1050,6 +991,130 @@ class ReminderBot:
         
         return message
     
+    # ===== 修正後的提醒檢查功能 =====
+    
+    def check_reminders(self):
+        """主提醒檢查循環（完整修正版 - 包含所有提醒類型）"""
+        while True:
+            try:
+                current_time = get_taiwan_time_hhmm()
+                user_id = self.user_settings.get('user_id')
+                taiwan_now = get_taiwan_datetime()
+                today_date = taiwan_now.strftime('%Y-%m-%d')
+                
+                print(f"🔍 增強版提醒檢查 - 台灣時間: {get_taiwan_time()}")
+                
+                if user_id:
+                    # === 每日定時提醒 ===
+                    # 早上提醒
+                    if (current_time == self.user_settings['morning_time'] and 
+                        self.last_reminders['daily_morning_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_morning_date'] = today_date
+                    
+                    # 晚上提醒
+                    elif (current_time == self.user_settings['evening_time'] and 
+                          self.last_reminders['daily_evening_date'] != today_date):
+                        self.send_daily_reminder(user_id, current_time)
+                        self.last_reminders['daily_evening_date'] = today_date
+                    
+                    # === 短期提醒檢查 ===
+                    self._check_and_send_short_reminders(user_id, taiwan_now)
+                    
+                    # === 時間提醒檢查 ===
+                    self._check_and_send_time_reminders(user_id, taiwan_now)
+                
+                time.sleep(60)
+            except Exception as e:
+                print(f"增強版提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
+                time.sleep(60)
+    
+    def _check_and_send_short_reminders(self, user_id, taiwan_now):
+        """檢查並發送短期提醒"""
+        try:
+            short_reminders = self._get_short_reminders()
+            print(f"🔍 檢查短期提醒，共 {len(short_reminders)} 筆記錄")
+            
+            for reminder in short_reminders[:]:
+                try:
+                    reminder_time_str = reminder['reminder_time']
+                    if reminder_time_str.endswith('Z'):
+                        reminder_time_str = reminder_time_str[:-1] + '+00:00'
+                    
+                    reminder_time = datetime.fromisoformat(reminder_time_str)
+                    
+                    if reminder_time.tzinfo is None:
+                        reminder_time = reminder_time.replace(tzinfo=TAIWAN_TZ)
+                    
+                    time_diff = (taiwan_now - reminder_time).total_seconds()
+                    
+                    print(f"⏱️ 短期提醒 ID:{reminder.get('id')} - 時間差: {time_diff}秒")
+                    
+                    if 0 <= time_diff <= 120:
+                        message = f"⏰ 短期提醒：{reminder['content']}\n"
+                        message += f"🕒 提醒時間：{reminder_time.strftime('%H:%M')}\n"
+                        message += f"🇹🇼 台灣時間：{get_taiwan_time_hhmm()}"
+                        
+                        send_push_message(user_id, message)
+                        self._remove_short_reminder(reminder['id'])
+                        print(f"✅ 已發送短期提醒: {reminder['content']} - {get_taiwan_time()}")
+                    
+                    elif time_diff > 86400:
+                        self._remove_short_reminder(reminder['id'])
+                        print(f"🗑️ 清理過期短期提醒: {reminder['content']}")
+                        
+                except Exception as e:
+                    print(f"❌ 處理短期提醒失敗: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"❌ 檢查短期提醒失敗: {e}")
+    
+    def _check_and_send_time_reminders(self, user_id, taiwan_now):
+        """檢查並發送時間提醒"""
+        try:
+            time_reminders = self._get_time_reminders()
+            current_time_hhmm = taiwan_now.strftime('%H:%M')
+            
+            print(f"🔍 檢查時間提醒，共 {len(time_reminders)} 筆記錄，當前時間: {current_time_hhmm}")
+            
+            for reminder in time_reminders[:]:
+                try:
+                    reminder_time_str = reminder['reminder_time']
+                    if reminder_time_str.endswith('Z'):
+                        reminder_time_str = reminder_time_str[:-1] + '+00:00'
+                    
+                    reminder_time = datetime.fromisoformat(reminder_time_str)
+                    
+                    if reminder_time.tzinfo is None:
+                        reminder_time = reminder_time.replace(tzinfo=TAIWAN_TZ)
+                    
+                    reminder_hhmm = reminder_time.strftime('%H:%M')
+                    
+                    print(f"⏱️ 時間提醒 ID:{reminder.get('id')} - 目標: {reminder_hhmm}, 當前: {current_time_hhmm}")
+                    
+                    if (current_time_hhmm == reminder_hhmm and 
+                        taiwan_now.date() == reminder_time.date()):
+                        
+                        message = f"🕐 時間提醒：{reminder['content']}\n"
+                        message += f"⏰ 設定時間：{reminder['time_string']}\n"
+                        message += f"🇹🇼 台灣時間：{get_taiwan_time_hhmm()}"
+                        
+                        send_push_message(user_id, message)
+                        self._remove_time_reminder(reminder['id'])
+                        print(f"✅ 已發送時間提醒: {reminder['content']} - {get_taiwan_time()}")
+                    
+                    elif taiwan_now > reminder_time + timedelta(days=1):
+                        self._remove_time_reminder(reminder['id'])
+                        print(f"🗑️ 清理過期時間提醒: {reminder['content']}")
+                        
+                except Exception as e:
+                    print(f"❌ 處理時間提醒失敗: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"❌ 檢查時間提醒失敗: {e}")
+    
     # ===== 增強版日常提醒功能 =====
     
     def send_daily_reminder(self, user_id, current_time):
@@ -1062,7 +1127,7 @@ class ReminderBot:
         period_reminder = self.check_period_reminders(user_id, taiwan_now)
         period_message = self.format_period_reminder(period_reminder)
         
-        # 2. 🆕 檢查緊急帳單提醒
+        # 2. 檢查緊急帳單提醒
         urgent_bills = self.check_urgent_bill_payments(user_id)
         bill_reminder = self.format_bill_reminders(urgent_bills)
         
@@ -1075,7 +1140,7 @@ class ReminderBot:
             if pending_todos:
                 message = f'{time_icon} {time_text}！您有 {len(pending_todos)} 項待辦事項：\n\n'
                 
-                # 🆕 優先顯示緊急帳單提醒
+                # 優先顯示緊急帳單提醒
                 if bill_reminder:
                     message += f"{bill_reminder}\n"
                     message += f"{'='*20}\n\n"
@@ -1126,7 +1191,7 @@ class ReminderBot:
                 else:
                     message = f'{time_icon} {time_text}！🎉 太棒了！今天的任務都完成了\n😴 好好休息，為明天準備新的目標！'
                 
-                # 🆕 即使沒有待辦事項也要檢查緊急帳單和生理期
+                # 即使沒有待辦事項也要檢查緊急帳單和生理期
                 if bill_reminder:
                     message += f'\n\n⚠️ 重要提醒：\n{bill_reminder}'
                 
@@ -1234,151 +1299,7 @@ class ReminderBot:
             print(f"增強待辦事項顯示失敗: {e}")
             return todo_content
     
-    # ===== 🔧 修正後的提醒檢查功能 =====
-    
-    def check_reminders(self):
-        """主提醒檢查循環（完整修正版 - 包含所有提醒類型）"""
-        while True:
-            try:
-                current_time = get_taiwan_time_hhmm()
-                user_id = self.user_settings.get('user_id')
-                taiwan_now = get_taiwan_datetime()
-                today_date = taiwan_now.strftime('%Y-%m-%d')
-                
-                print(f"🔍 增強版提醒檢查 - 台灣時間: {get_taiwan_time()}")
-                
-                if user_id:
-                    # === 每日定時提醒 ===
-                    # 早上提醒
-                    if (current_time == self.user_settings['morning_time'] and 
-                        self.last_reminders['daily_morning_date'] != today_date):
-                        self.send_daily_reminder(user_id, current_time)
-                        self.last_reminders['daily_morning_date'] = today_date
-                    
-                    # 晚上提醒
-                    elif (current_time == self.user_settings['evening_time'] and 
-                          self.last_reminders['daily_evening_date'] != today_date):
-                        self.send_daily_reminder(user_id, current_time)
-                        self.last_reminders['daily_evening_date'] = today_date
-                    
-                    # === 🆕 短期提醒檢查 ===
-                    self._check_and_send_short_reminders(user_id, taiwan_now)
-                    
-                    # === 🆕 時間提醒檢查 ===
-                    self._check_and_send_time_reminders(user_id, taiwan_now)
-                
-                time.sleep(60)
-            except Exception as e:
-                print(f"增強版提醒檢查錯誤: {e} - 台灣時間: {get_taiwan_time()}")
-                time.sleep(60)
-    
-    def _check_and_send_short_reminders(self, user_id, taiwan_now):
-        """檢查並發送短期提醒"""
-        try:
-            short_reminders = self._get_short_reminders()
-            print(f"🔍 檢查短期提醒，共 {len(short_reminders)} 筆記錄")
-            
-            for reminder in short_reminders[:]:  # 使用切片避免迭代時修改列表
-                try:
-                    # 解析提醒時間
-                    reminder_time_str = reminder['reminder_time']
-                    if reminder_time_str.endswith('Z'):
-                        reminder_time_str = reminder_time_str[:-1] + '+00:00'
-                    
-                    reminder_time = datetime.fromisoformat(reminder_time_str)
-                    
-                    # 確保時間有時區資訊
-                    if reminder_time.tzinfo is None:
-                        reminder_time = reminder_time.replace(tzinfo=TAIWAN_TZ)
-                    
-                    # 檢查是否到達提醒時間（允許2分鐘誤差）
-                    time_diff = (taiwan_now - reminder_time).total_seconds()
-                    
-                    print(f"⏱️ 短期提醒 ID:{reminder.get('id')} - 時間差: {time_diff}秒")
-                    
-                    if 0 <= time_diff <= 120:  # 0-2分鐘內觸發
-                        # 發送提醒訊息
-                        message = f"⏰ 短期提醒：{reminder['content']}\n"
-                        message += f"🕒 提醒時間：{reminder_time.strftime('%H:%M')}\n"
-                        message += f"🇹🇼 台灣時間：{get_taiwan_time_hhmm()}"
-                        
-                        send_push_message(user_id, message)
-                        
-                        # 移除已發送的提醒
-                        self._remove_short_reminder(reminder['id'])
-                        
-                        print(f"✅ 已發送短期提醒: {reminder['content']} - {get_taiwan_time()}")
-                    
-                    # 清理過期的提醒（超過24小時）
-                    elif time_diff > 86400:  # 24小時
-                        self._remove_short_reminder(reminder['id'])
-                        print(f"🗑️ 清理過期短期提醒: {reminder['content']}")
-                        
-                except Exception as e:
-                    print(f"❌ 處理短期提醒失敗: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-                    
-        except Exception as e:
-            print(f"❌ 檢查短期提醒失敗: {e}")
-    
-    def _check_and_send_time_reminders(self, user_id, taiwan_now):
-        """檢查並發送時間提醒"""
-        try:
-            time_reminders = self._get_time_reminders()
-            current_time_hhmm = taiwan_now.strftime('%H:%M')
-            
-            print(f"🔍 檢查時間提醒，共 {len(time_reminders)} 筆記錄，當前時間: {current_time_hhmm}")
-            
-            for reminder in time_reminders[:]:  # 使用切片避免迭代時修改列表
-                try:
-                    # 解析提醒時間
-                    reminder_time_str = reminder['reminder_time']
-                    if reminder_time_str.endswith('Z'):
-                        reminder_time_str = reminder_time_str[:-1] + '+00:00'
-                    
-                    reminder_time = datetime.fromisoformat(reminder_time_str)
-                    
-                    # 確保時間有時區資訊
-                    if reminder_time.tzinfo is None:
-                        reminder_time = reminder_time.replace(tzinfo=TAIWAN_TZ)
-                    
-                    # 檢查是否到達提醒時間（精確到分鐘）
-                    reminder_hhmm = reminder_time.strftime('%H:%M')
-                    
-                    print(f"⏱️ 時間提醒 ID:{reminder.get('id')} - 目標: {reminder_hhmm}, 當前: {current_time_hhmm}")
-                    
-                    if (current_time_hhmm == reminder_hhmm and 
-                        taiwan_now.date() == reminder_time.date()):
-                        
-                        # 發送提醒訊息
-                        message = f"🕐 時間提醒：{reminder['content']}\n"
-                        message += f"⏰ 設定時間：{reminder['time_string']}\n"
-                        message += f"🇹🇼 台灣時間：{get_taiwan_time_hhmm()}"
-                        
-                        send_push_message(user_id, message)
-                        
-                        # 移除已發送的提醒
-                        self._remove_time_reminder(reminder['id'])
-                        
-                        print(f"✅ 已發送時間提醒: {reminder['content']} - {get_taiwan_time()}")
-                    
-                    # 清理過期的提醒（超過提醒時間1天）
-                    elif taiwan_now > reminder_time + timedelta(days=1):
-                        self._remove_time_reminder(reminder['id'])
-                        print(f"🗑️ 清理過期時間提醒: {reminder['content']}")
-                        
-                except Exception as e:
-                    print(f"❌ 處理時間提醒失敗: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-                    
-        except Exception as e:
-            print(f"❌ 檢查時間提醒失敗: {e}")
-    
-    # ===== 帳單金額管理功能（保留原有功能）=====
+    # ===== 帳單金額管理功能 =====
     
     def update_bill_amount(self, bank_name, amount, due_date, statement_date=None):
         """更新銀行卡費金額"""
@@ -1469,4 +1390,38 @@ class ReminderBot:
             
             return None
             
-        except Exception as
+        except Exception as e:
+            print(f"❌ 取得卡費金額失敗: {e}")
+            return None
+    
+    # ===== 生理期追蹤功能 =====
+    
+    def record_period_start(self, start_date, user_id, notes=""):
+        """記錄生理期開始"""
+        try:
+            if isinstance(start_date, str):
+                if '/' in start_date:
+                    start_datetime = datetime.strptime(start_date, '%Y/%m/%d')
+                else:
+                    start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
+            else:
+                start_datetime = start_date
+            
+            start_date_str = start_datetime.strftime('%Y-%m-%d')
+            
+            existing_record = self._get_period_record_by_date(start_date_str, user_id)
+            if existing_record:
+                return f"❌ {start_date_str} 已有生理期記錄"
+            
+            record = {
+                'user_id': user_id,
+                'start_date': start_date_str,
+                'end_date': None,
+                'notes': notes,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            if self.use_mongodb:
+                self.period_records_collection.insert_one(record)
+            else:
+                self._period_records.appen
