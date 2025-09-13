@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 # 匯入所有模組
 from utils.time_utils import get_taiwan_time, get_taiwan_time_hhmm, get_taiwan_datetime, is_valid_time_format
@@ -317,7 +317,6 @@ def debug_bill_query_steps():
         
         # 測試日期處理
         try:
-            from datetime import datetime
             taiwan_now = get_taiwan_datetime()
             today = taiwan_now.date()
             debug_info.append(f"步驟6: 當前日期處理成功，今天 = {today}")
@@ -486,7 +485,7 @@ def debug_unicode_test():
             'timestamp': get_taiwan_time()
         })
 
-# ===== 完整整合測試端點保持不變 =====
+# ===== 完整整合測試端點 =====
 
 @app.route('/test/bill-sync-integration')
 def test_bill_sync_integration():
@@ -664,8 +663,7 @@ def test_bill_reminder_simulation():
             'statistics': {
                 'total_bills_added': len(test_bills),
                 'urgent_bills_count': len(urgent_bills),
-                'todos_with_bill_info': sum(1 for todo in enhanced_todos_display if 'NT
-             in todo),
+                'todos_with_bill_info': sum(1 for todo in enhanced_todos_display if 'NT in todo),
                 'message_length': len(simulated_message)
             },
             'timestamp': get_taiwan_time()
@@ -1031,7 +1029,7 @@ def test_check_union_bill():
             'success': True,
             'results': results,
             'analysis': {
-                'has_data': any(info is not None for info in results.values() if info != mongo_results),
+                'has_data': any(info is not None for info in results.values() if isinstance(info, dict)),
                 'mongo_records_found': len(results.get('mongodb_raw', [])) if reminder_bot.use_mongodb else None
             },
             'timestamp': get_taiwan_time()
@@ -1119,7 +1117,6 @@ def handle_bill_query_command_with_debug(message_text, user_id):
         # 帳單總覽查詢
         elif any(keyword in message_text for keyword in ['帳單總覽', '帳單查詢', '卡費查詢', '帳單狀態']):
             banks = ['永豐', '台新', '國泰', '星展', '匯豐', '玉山', '聯邦']
-            bill_info_list = []
             urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
             
             message = "💳 帳單總覽\n\n"
@@ -1179,75 +1176,16 @@ def handle_bill_query_command_with_debug(message_text, user_id):
             message += f"🕒 查詢時間: {get_taiwan_time_hhmm()}"
             return message
         
-        # 特定銀行帳單查詢
+        # 其他查詢
         else:
-            # 檢查是否指定特定銀行
-            banks_mapping = {
-                '永豐': ['永豐', 'sinopac'],
-                '台新': ['台新', 'taishin'],
-                '國泰': ['國泰', 'cathay'],
-                '星展': ['星展', 'dbs'],
-                '匯豐': ['匯豐', 'hsbc'],
-                '玉山': ['玉山', 'esun'],
-                '聯邦': ['聯邦', 'union']
-            }
-            
-            matched_bank = None
-            for bank_name, patterns in banks_mapping.items():
-                if any(pattern in message_text.lower() for pattern in patterns):
-                    matched_bank = bank_name
-                    break
-            
-            if matched_bank:
-                bill_info = reminder_bot.get_bill_amount(matched_bank)
-                if bill_info:
-                    try:
-                        taiwan_now = get_taiwan_datetime()
-                        today = taiwan_now.date()
-                        due_date = datetime.strptime(bill_info['due_date'], '%Y/%m/%d').date()
-                        days_until_due = (due_date - today).days
-                        
-                        message = f"💳 {matched_bank}銀行帳單\n\n"
-                        message += f"💰 應繳金額：{bill_info['amount']}\n"
-                        message += f"⏰ 繳款截止：{bill_info['due_date']}\n"
-                        
-                        if days_until_due < 0:
-                            message += f"🚨 狀態：逾期 {abs(days_until_due)} 天\n"
-                        elif days_until_due == 0:
-                            message += f"⏰ 狀態：今天截止\n"
-                        elif days_until_due <= 3:
-                            message += f"⚡ 狀態：{days_until_due} 天後到期\n"
-                        elif days_until_due <= 7:
-                            message += f"💡 狀態：{days_until_due} 天後到期\n"
-                        else:
-                            message += f"✅ 狀態：{days_until_due} 天後到期\n"
-                        
-                        if bill_info.get('statement_date'):
-                            message += f"📅 帳單日期：{bill_info['statement_date']}\n"
-                        
-                        message += f"\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
-                        return message
-                        
-                    except ValueError:
-                        return f"💳 {matched_bank}銀行帳單\n\n💰 應繳金額：{bill_info['amount']}\n⏰ 繳款截止：{bill_info['due_date']}\n\n🕒 查詢時間: {get_taiwan_time_hhmm()}"
-                else:
-                    return f"📝 {matched_bank}銀行目前沒有帳單記錄\n💡 帳單分析完成後會自動同步"
-            else:
-                # 通用帳單查詢幫助
-                return """💳 帳單查詢指令說明
+            return """💳 帳單查詢指令說明
 
 🔍 可用查詢指令：
 • 帳單查詢 / 帳單總覽 - 查看所有銀行帳單
 • 緊急帳單 - 查看即將到期或逾期的帳單
-• [銀行名稱]帳單查詢 - 查看特定銀行帳單
 
 🏦 支援銀行：
-永豐、台新、國泰、星展、匯豐、玉山、聯邦
-
-💡 範例：
-• 「帳單查詢」- 查看所有帳單狀態
-• 「緊急帳單」- 查看需要優先處理的帳單
-• 「永豐帳單查詢」- 查看永豐銀行帳單"""
+永豐、台新、國泰、星展、匯豐、玉山、聯邦"""
     
     except Exception as e:
         import traceback
