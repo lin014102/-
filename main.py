@@ -663,11 +663,7 @@ def test_bill_reminder_simulation():
         period_reminder = reminder_bot.check_period_reminders(user_id, taiwan_now)
         period_message = reminder_bot.format_period_reminder(period_reminder)
         
-        # 模擬完整提醒訊息（不實際發送）
-        mock_todos = [
-            {"content": "繳永豐卡費", "has_date": False},
-            {"content": "買菜", "has_date": False},
-            {"content": "繳台新卡費", in todo),
+        # 模擬完整提 in todo),
                 'message_length': len(simulated_message)
             },
             'timestamp': get_taiwan_time()
@@ -2025,8 +2021,4 @@ def test_bill_reminder_simulation():
         period_reminder = reminder_bot.check_period_reminders(user_id, taiwan_now)
         period_message = reminder_bot.format_period_reminder(period_reminder)
         
-        # 模擬完整提醒訊息（不實際發送）
-        mock_todos = [
-            {"content": "繳永豐卡費", "has_date": False},
-            {"content": "買菜", "has_date": False},
-            {"content": "繳台新卡費",
+        # 模擬完整提
