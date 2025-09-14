@@ -724,7 +724,7 @@ def handle_bill_query_command(message_text, user_id):
     """處理帳單查詢相關指令"""
     try:
         # 緊急帳單查詢
-        if any(keyword in message_text for keyword in ['緊急帳單', '逾期帳單', '即將到期']):
+        if any(keyword in message_text for keyword in ['緊急帳單', '逾期帳單', '即將到期']):帳單', '逾期帳單', '即將到期']):
             urgent_bills = reminder_bot.check_urgent_bill_payments(user_id)
             if urgent_bills:
                 bill_reminder = reminder_bot.format_bill_reminders(urgent_bills)
