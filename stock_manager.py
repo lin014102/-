@@ -903,7 +903,7 @@ if __name__ == "__main__":
     print("=== 測試總覽 ===")
     print(sm.get_all_accounts_summary())"""
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
-多帳戶股票記帳系統 v2.3 - 簡化交易格式版（修正縮排錯誤）
+多帳戶股票記帳系統 v2.3 - 簡化交易格式版
 """
 import re
 import os
@@ -1512,4 +1512,5 @@ class StockManager:
             account, stock_name, zhang_count, amount = match.groups()
             stock_name = stock_name.strip()
             
-            # 從現有對應表
+            # 從現有對應表查詢股票代號
+            stock_code = self.stock_data['stock_codes
