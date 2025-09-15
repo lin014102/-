@@ -1,6 +1,7 @@
 """
-信用卡帳單分析器 - 雲端版本
+信用卡帳單分析器 - 雲端版本 (修正版)
 整合 Google Vision OCR + Gemini LLM 進行帳單解析
+修正日期顯示 null 和商家名稱截斷問題
 """
 
 import os
@@ -24,7 +25,7 @@ class BillAnalyzer:
         
         # 處理設定
         self.settings = {
-            "dpi": 200,  # 圖片解析度
+            "dpi": 300,  # 提高解析度，改善 OCR 品質
             "remove_last_page": True,  # 是否移除最後一頁
         }
         
@@ -33,7 +34,8 @@ class BillAnalyzer:
             "星展銀行": ["星展", "DBS", "DBS Bank", "DBS BANK"],
             "台新銀行": ["台新", "TAISHIN", "台新銀行", "TAISHIN BANK"],
             "永豐銀行": ["永豐", "SinoPac", "永豐銀行", "SINOPAC"],
-            "國泰世華": ["國泰", "CATHAY", "國泰世華", "CATHAY UNITED BANK"]
+            "國泰世華": ["國泰", "CATHAY", "國泰世華", "CATHAY UNITED BANK"],
+            "聯邦銀行": ["聯邦", "UNION", "聯邦銀行", "UNION BANK"]
         }
     
     def setup_apis(self):
@@ -102,6 +104,10 @@ class BillAnalyzer:
             if not processed_text['raw_text']:
                 raise Exception("文字處理失敗")
             
+            # 輸出 OCR 原始結果到日誌 (調試用)
+            self.logger.info(f"OCR 原始結果長度: {len(processed_text['raw_text'])}")
+            self.logger.info(f"OCR 原始結果前500字元: {processed_text['raw_text'][:500]}")
+            
             # 5. 識別文件類型
             document_type = self.identify_document_type(processed_text['raw_text'], filename)
             
@@ -117,6 +123,9 @@ class BillAnalyzer:
             
             if not analysis_result:
                 raise Exception("LLM 分析失敗")
+            
+            # 輸出 LLM 分析結果到日誌 (調試用)
+            self.logger.info(f"LLM 分析結果: {json.dumps(analysis_result, ensure_ascii=False, indent=2)}")
             
             self.logger.info(f"帳單分析成功: {filename}")
             return {
@@ -183,7 +192,7 @@ class BillAnalyzer:
             for page_num in range(end_page):
                 page = pdf_document[page_num]
                 
-                # 設定轉換參數
+                # 設定轉換參數 - 提高解析度
                 mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
                 pix = page.get_pixmap(matrix=mat)
                 
@@ -193,7 +202,7 @@ class BillAnalyzer:
                 
                 # 儲存暫存圖片
                 temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
-                image.save(temp_path)
+                image.save(temp_path, "PNG", quality=95)
                 images.append(temp_path)
                 
                 self.logger.info(f"頁面 {page_num + 1} 轉換完成")
@@ -233,21 +242,24 @@ class BillAnalyzer:
                                 "type": "DOCUMENT_TEXT_DETECTION",
                                 "maxResults": 1
                             }
-                        ]
+                        ],
+                        "imageContext": {
+                            "languageHints": ["zh-TW", "en"]
+                        }
                     }
                 ]
             }
             
             # 發送請求
             headers = {"Content-Type": "application/json"}
-            response = requests.post(url, headers=headers, json=request_body)
+            response = requests.post(url, headers=headers, json=request_body, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
                 self.logger.info(f"OCR 處理成功: {os.path.basename(image_path)}")
                 return result
             else:
-                self.logger.error(f"Vision API 請求失敗: {response.status_code}")
+                self.logger.error(f"Vision API 請求失敗: {response.status_code} - {response.text}")
                 return None
                 
         except Exception as e:
@@ -317,7 +329,7 @@ class BillAnalyzer:
                 
             y_coord = item['vertices'][0]['y']
             # 容許一定的Y座標誤差，歸為同一行
-            line_key = round(y_coord / 10) * 10  # 每10像素為一個群組
+            line_key = round(y_coord / 15) * 15  # 每15像素為一個群組
             
             if line_key not in lines:
                 lines[line_key] = []
@@ -368,10 +380,21 @@ class BillAnalyzer:
             else:
                 prompt = self.create_bill_analysis_prompt(text, bank_name)
             
+            # 輸出 prompt 到日誌 (調試用)
+            self.logger.info(f"Gemini Prompt 長度: {len(prompt)}")
+            
             # 使用 Gemini API
-            response = self.gemini_model.generate_content(prompt)
+            response = self.gemini_model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=4000,
+                )
+            )
             
             if response and response.text:
+                # 輸出原始回應到日誌 (調試用)
+                self.logger.info(f"Gemini 原始回應: {response.text[:1000]}...")
                 return self.parse_json_response(response.text)
             else:
                 self.logger.error("Gemini 回應為空")
@@ -415,7 +438,7 @@ class BillAnalyzer:
 """
     
     def create_bill_analysis_prompt(self, text, bank_name):
-        """建立信用卡帳單分析提示詞"""
+        """建立信用卡帳單分析提示詞 - 修正版"""
         return f"""
 請分析以下{bank_name}信用卡帳單內容，並以JSON格式回傳結構化資料。
 
@@ -434,20 +457,40 @@ class BillAnalyzer:
     "minimum_payment": "本期最低應繳金額",
     "transactions": [
         {{
-            "date": "交易日期",
-            "merchant": "商家名稱", 
-            "amount": "金額",
-            "category": "消費類別"
+            "date": "YYYY/MM/DD",
+            "merchant": "完整商家名稱", 
+            "amount": "金額"
         }}
     ]
 }}
 
-注意事項:
-1. 金額請保留原始格式（包含逗號和貨幣符號）
-2. 日期格式請統一為 YYYY/MM/DD
-3. 如果是退款，金額請加上負號
-4. 找不到的欄位填入null
-5. 交易明細請按時間順序排列
+重要格式要求:
+1. 日期必須轉換為西元年格式 YYYY/MM/DD
+   - 民國114年 = 西元2025年
+   - 民國113年 = 西元2024年
+   - 格式如 "08/21 07/20" 請取後面日期並轉換：07/20 → 2025/07/20
+   - 格式如 "08/21" 請轉換為：2025/08/21
+
+2. 商家名稱處理規則:
+   - 保持完整商家名稱，不要截斷
+   - 不要在商家名稱前加入 "null" 或其他前綴
+   - 移除多餘的空格和符號
+   - 如果是外幣交易，保留完整的商家名稱和地區資訊
+
+3. 金額處理:
+   - 保留原始格式（包含逗號和負號）
+   - 退款金額請加上負號 "-"
+   - 不要包含貨幣符號除非原始資料有
+
+4. 其他要求:
+   - 找不到的欄位填入null
+   - 交易明細請按時間順序排列
+   - 繳款截止日期也要轉換為西元年格式
+
+特別注意聯邦銀行帳單格式:
+- 交易記錄格式通常為: "入帳日 消費日 商家名稱 金額"
+- 有些記錄前面會有 "+" 號表示外幣交易
+- 國外交易會有手續費記錄
 
 帳單內容:
 {text}
@@ -456,7 +499,7 @@ class BillAnalyzer:
 """
     
     def parse_json_response(self, content):
-        """解析 LLM 回應中的 JSON 內容"""
+        """解析 LLM 回應中的 JSON 內容 - 增強版"""
         try:
             # 移除可能的 markdown 語法
             content = content.strip()
@@ -471,11 +514,16 @@ class BillAnalyzer:
             
             # 嘗試直接解析 JSON
             analysis_result = json.loads(content)
+            
+            # 後處理：確保日期格式正確
+            analysis_result = self.post_process_analysis_result(analysis_result)
+            
             self.logger.info("JSON 解析成功")
             return analysis_result
                 
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON 解析失敗: {e}")
+            self.logger.error(f"原始內容: {content[:500]}...")
             
             # 嘗試提取 JSON 部分
             try:
@@ -494,6 +542,7 @@ class BillAnalyzer:
                 if json_start >= 0 and json_end > json_start:
                     json_str = content[json_start:json_end]
                     analysis_result = json.loads(json_str)
+                    analysis_result = self.post_process_analysis_result(analysis_result)
                     self.logger.info("從混合內容中成功解析 JSON")
                     return analysis_result
                 
@@ -501,6 +550,104 @@ class BillAnalyzer:
                 self.logger.error("無法從內容中提取有效的 JSON")
             
             return None
+    
+    def post_process_analysis_result(self, result):
+        """後處理分析結果，確保格式正確"""
+        try:
+            if not result:
+                return result
+            
+            # 處理交易明細中的日期和商家名稱
+            if 'transactions' in result and isinstance(result['transactions'], list):
+                for transaction in result['transactions']:
+                    # 修正日期格式
+                    if 'date' in transaction and transaction['date']:
+                        transaction['date'] = self.normalize_date(transaction['date'])
+                    
+                    # 清理商家名稱
+                    if 'merchant' in transaction and transaction['merchant']:
+                        merchant = transaction['merchant']
+                        # 移除 null 前綴
+                        if merchant.startswith('null '):
+                            merchant = merchant[5:]
+                        # 清理多餘空格
+                        merchant = ' '.join(merchant.split())
+                        transaction['merchant'] = merchant
+            
+            # 處理繳款截止日期
+            if 'payment_due_date' in result and result['payment_due_date']:
+                result['payment_due_date'] = self.normalize_date(result['payment_due_date'])
+            
+            # 處理結帳日期
+            if 'statement_date' in result and result['statement_date']:
+                result['statement_date'] = self.normalize_date(result['statement_date'])
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"後處理分析結果失敗: {e}")
+            return result
+    
+    def normalize_date(self, date_str):
+        """標準化日期格式為西元年 YYYY/MM/DD"""
+        try:
+            if not date_str or date_str.lower() == 'null':
+                return None
+            
+            # 處理 114/09/24 格式 (民國年)
+            if re.match(r'^\d{3}/\d{1,2}/\d{1,2}$', date_str):
+                parts = date_str.split('/')
+                year = int(parts[0]) + 1911
+                month = parts[1].zfill(2)
+                day = parts[2].zfill(2)
+                return f"{year}/{month}/{day}"
+            
+            # 處理 08/21 格式 (假設是2025年)
+            elif re.match(r'^\d{1,2}/\d{1,2}$', date_str):
+                parts = date_str.split('/')
+                month = parts[0].zfill(2)
+                day = parts[1].zfill(2)
+                return f"2025/{month}/{day}"
+            
+            # 處理已經是西元年格式
+            elif re.match(r'^\d{4}/\d{1,2}/\d{1,2}$', date_str):
+                parts = date_str.split('/')
+                year = parts[0]
+                month = parts[1].zfill(2)
+                day = parts[2].zfill(2)
+                return f"{year}/{month}/{day}"
+            
+            # 其他格式嘗試解析
+            else:
+                # 嘗試找到日期模式
+                date_patterns = [
+                    r'(\d{3})/(\d{1,2})/(\d{1,2})',  # 民國年
+                    r'(\d{1,2})/(\d{1,2})',          # MM/DD
+                    r'(\d{4})/(\d{1,2})/(\d{1,2})',  # 西元年
+                ]
+                
+                for pattern in date_patterns:
+                    match = re.search(pattern, date_str)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 3:
+                            year, month, day = groups
+                            if len(year) == 3:  # 民國年
+                                year = int(year) + 1911
+                            month = month.zfill(2)
+                            day = day.zfill(2)
+                            return f"{year}/{month}/{day}"
+                        elif len(groups) == 2:  # MM/DD
+                            month, day = groups
+                            month = month.zfill(2)
+                            day = day.zfill(2)
+                            return f"2025/{month}/{day}"
+                
+                return date_str  # 無法解析，回傳原始值
+                
+        except Exception as e:
+            self.logger.error(f"日期格式化失敗: {e} - 原始日期: {date_str}")
+            return date_str
     
     def cleanup_temp_files(self, file_paths):
         """清理暫存檔案"""
