@@ -547,27 +547,39 @@ class StockManager:
         if message_text == '批量設定代號':
             return {'type': 'batch_code_guide'}
         
-        elif match := re.match(r'檢查代號(?:\s+(.+))?', message_text):
+        # 檢查代號
+        match = re.match(r'檢查代號(?:\s+(.+))?', message_text)
+        if match:
             account_name = match.group(1).strip() if match.group(1) else None
             return {'type': 'check_codes', 'account': account_name}
         
-        elif match := re.match(r'設定代號\s+(.+?)\s+(\w+)', message_text):
+        # 設定代號
+        match = re.match(r'設定代號\s+(.+?)\s+(\w+)', message_text)
+        if match:
             stock_name, stock_code = match.groups()
             return {'type': 'set_code', 'stock_name': stock_name.strip(), 'stock_code': stock_code.strip()}
         
-        elif match := re.match(r'(?:股價查詢|股價|估價查詢)\s+(.+)', message_text):
+        # 股價查詢
+        match = re.match(r'(?:股價查詢|股價|估價查詢)\s+(.+)', message_text)
+        if match:
             stock_name = match.group(1).strip()
             return {'type': 'price_query', 'stock_name': stock_name}
         
-        elif match := re.match(r'(.+?)入帳\s*(\d+)', message_text):
+        # 入帳
+        match = re.match(r'(.+?)入帳\s*(\d+)', message_text)
+        if match:
             account, amount = match.groups()
             return {'type': 'deposit', 'account': account.strip(), 'amount': int(amount)}
         
-        elif match := re.match(r'(.+?)提款\s*(\d+)', message_text):
+        # 提款
+        match = re.match(r'(.+?)提款\s*(\d+)', message_text)
+        if match:
             account, amount = match.groups()
             return {'type': 'withdraw', 'account': account.strip(), 'amount': int(amount)}
         
-        elif match := re.match(r'(.+?)持有\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)', message_text):
+        # 持有
+        match = re.match(r'(.+?)持有\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)', message_text)
+        if match:
             account, stock_name, stock_code, quantity, total_cost = match.groups()
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
@@ -575,7 +587,8 @@ class StockManager:
         # ===== 新增：簡化買入格式 =====
         
         # 簡化格式1: 爸爸買 中美晶 5483 1張 107653 (首次含代號，整張)
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text):
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text)
+        if match:
             account, stock_name, stock_code, zhang_count, amount = match.groups()
             quantity = int(zhang_count) * 1000  # 轉換為股數
             today = datetime.now().strftime('%Y/%m/%d')
@@ -583,14 +596,16 @@ class StockManager:
                    'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': today}
         
         # 簡化格式2: 爸爸買 中美晶 5483 500股 53826 (首次含代號，零股)
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text):
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text)
+        if match:
             account, stock_name, stock_code, quantity, amount = match.groups()
             today = datetime.now().strftime('%Y/%m/%d')
             return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
         
         # 簡化格式3: 爸爸買 中美晶 1張 107653 (省略代號，整張)
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+)', message_text):
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
+        if match:
             account, stock_name, zhang_count, amount = match.groups()
             stock_name = stock_name.strip()
             
@@ -598,103 +613,111 @@ class StockManager:
             stock_code = self.stock_data['stock_codes'].get(stock_name)
             if not stock_code:
                 return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {zhang_count}張 {amount}'}
+            
+            quantity = int(zhang_count) * 1000  # 轉換為股數
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
+                   'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
         
-        quantity = int(zhang_count) * 1000  # 轉換為股數
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
-               'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
-    
-    # 簡化格式4: 爸爸買 中美晶 500股 53826 (省略代號，零股)
-    elif match := re.match(r'(.+?)買\s+(.+?)\s+(\d+)股\s+(\d+)', message_text):
-        account, stock_name, quantity, amount = match.groups()
-        stock_name = stock_name.strip()
+        # 簡化格式4: 爸爸買 中美晶 500股 53826 (省略代號，零股)
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)股\s+(\d+)', message_text)
+        if match:
+            account, stock_name, quantity, amount = match.groups()
+            stock_name = stock_name.strip()
+            
+            # 從現有對應表查詢股票代號
+            stock_code = self.stock_data['stock_codes'].get(stock_name)
+            if not stock_code:
+                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {quantity}股 {amount}'}
+            
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
+                   'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
         
-        # 從現有對應表查詢股票代號
-        stock_code = self.stock_data['stock_codes'].get(stock_name)
-        if not stock_code:
-            return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {quantity}股 {amount}'}
+        # ===== 新增：簡化賣出格式 =====
         
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
-               'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-    
-    # ===== 新增：簡化賣出格式 =====
-    
-    # 簡化格式5: 爸爸賣 中美晶 5483 1張 107653 (首次含代號，整張)
-    elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text):
-        account, stock_name, stock_code, zhang_count, amount = match.groups()
-        quantity = int(zhang_count) * 1000  # 轉換為股數
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-               'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': today}
-    
-    # 簡化格式6: 爸爸賣 中美晶 5483 500股 53826 (首次含代號，零股)
-    elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text):
-        account, stock_name, stock_code, quantity, amount = match.groups()
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-               'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-    
-    # 簡化格式7: 爸爸賣 中美晶 1張 107653 (省略代號，整張)
-    elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\d+)張\s+(\d+)', message_text):
-        account, stock_name, zhang_count, amount = match.groups()
-        stock_name = stock_name.strip()
+        # 簡化格式5: 爸爸賣 中美晶 5483 1張 107653 (首次含代號，整張)
+        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text)
+        if match:
+            account, stock_name, stock_code, zhang_count, amount = match.groups()
+            quantity = int(zhang_count) * 1000  # 轉換為股數
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': today}
         
-        # 從現有對應表查詢股票代號
-        stock_code = self.stock_data['stock_codes'].get(stock_name)
-        if not stock_code:
-            return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {zhang_count}張 {amount}'}
+        # 簡化格式6: 爸爸賣 中美晶 5483 500股 53826 (首次含代號，零股)
+        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text)
+        if match:
+            account, stock_name, stock_code, quantity, amount = match.groups()
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
         
-        quantity = int(zhang_count) * 1000  # 轉換為股數
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
-               'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
-    
-    # 簡化格式8: 爸爸賣 中美晶 500股 53826 (省略代號，零股)
-    elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\d+)股\s+(\d+)', message_text):
-        account, stock_name, quantity, amount = match.groups()
-        stock_name = stock_name.strip()
+        # 簡化格式7: 爸爸賣 中美晶 1張 107653 (省略代號，整張)
+        match = re.match(r'(.+?)賣\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
+        if match:
+            account, stock_name, zhang_count, amount = match.groups()
+            stock_name = stock_name.strip()
+            
+            # 從現有對應表查詢股票代號
+            stock_code = self.stock_data['stock_codes'].get(stock_name)
+            if not stock_code:
+                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {zhang_count}張 {amount}'}
+            
+            quantity = int(zhang_count) * 1000  # 轉換為股數
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
+                   'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
         
-        # 從現有對應表查詢股票代號
-        stock_code = self.stock_data['stock_codes'].get(stock_name)
-        if not stock_code:
-            return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {quantity}股 {amount}'}
+        # 簡化格式8: 爸爸賣 中美晶 500股 53826 (省略代號，零股)
+        match = re.match(r'(.+?)賣\s+(.+?)\s+(\d+)股\s+(\d+)', message_text)
+        if match:
+            account, stock_name, quantity, amount = match.groups()
+            stock_name = stock_name.strip()
+            
+            # 從現有對應表查詢股票代號
+            stock_code = self.stock_data['stock_codes'].get(stock_name)
+            if not stock_code:
+                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {quantity}股 {amount}'}
+            
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
+                   'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
         
-        today = datetime.now().strftime('%Y/%m/%d')
-        return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
-               'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-    
-    # ===== 保留原本的完整格式 (向下兼容) =====
-    
-    elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text):
-        account, stock_name, stock_code, quantity, amount, date = match.groups()
-        try:
-            year = datetime.now().year
-            month = int(date[:2])
-            day = int(date[2:])
-            formatted_date = f"{year}/{month:02d}/{day:02d}"
-        except:
-            return None
-        return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-               'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-    
-    elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text):
-        account, stock_name, stock_code, quantity, amount, date = match.groups()
-        try:
-            year = datetime.now().year
-            month = int(date[:2])
-            day = int(date[2:])
-            formatted_date = f"{year}/{month:02d}/{day:02d}"
-        except:
-            return None
-        return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-               'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-    
-    elif match := re.match(r'新增帳戶\s*(.+)', message_text):
-        account = match.group(1).strip()
-        return {'type': 'create_account', 'account': account}
-    
-    return None
+        # ===== 保留原本的完整格式 (向下兼容) =====
+        
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text)
+        if match:
+            account, stock_name, stock_code, quantity, amount, date = match.groups()
+            try:
+                year = datetime.now().year
+                month = int(date[:2])
+                day = int(date[2:])
+                formatted_date = f"{year}/{month:02d}/{day:02d}"
+            except:
+                return None
+            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        
+        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text)
+        if match:
+            account, stock_name, stock_code, quantity, amount, date = match.groups()
+            try:
+                year = datetime.now().year
+                month = int(date[:2])
+                day = int(date[2:])
+                formatted_date = f"{year}/{month:02d}/{day:02d}"
+            except:
+                return None
+            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        
+        match = re.match(r'新增帳戶\s*(.+)', message_text)
+        if match:
+            account = match.group(1).strip()
+            return {'type': 'create_account', 'account': account}
+        
+        return None
 
 def handle_command(self, message_text):
     """處理股票指令的主要函數 - 支援簡化格式"""
