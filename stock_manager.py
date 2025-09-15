@@ -1,14 +1,4 @@
-today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-        
-        # 簡化格式3: 爸爸買 中美晶 1張 107653 (省略代號，整張)
-        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
-        if match:
-            account, stock_name, zhang_count, amount = match.groups()
-            stock_name = stock_name.strip()
-            
-            # 從現有對應表查詢股票代號
+# 從現有對應表查詢股票代號
             stock_code = self.stock_data['stock_codes'].get(stock_name)
             if not stock_code:
                 return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {zhang_count}張 {amount}'}
@@ -586,7 +576,6 @@ today = datetime.now().strftime('%Y/%m/%d')
             result += "\n"
         
         result += f"💰 總現金：{total_cash:,}元\n"
-        result += f"📊 總投資：{total_investment:,}元\n"
         result += f"🏦 總資產：{total_cash + total_investment:,}元"
         
         if all_stocks:
@@ -914,7 +903,7 @@ if __name__ == "__main__":
     print("=== 測試總覽 ===")
     print(sm.get_all_accounts_summary())"""
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
-多帳戶股票記帳系統 v2.3 - 簡化交易格式版（修正語法錯誤）
+多帳戶股票記帳系統 v2.3 - 簡化交易格式版（修正縮排錯誤）
 """
 import re
 import os
@@ -1513,4 +1502,14 @@ class StockManager:
         match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text)
         if match:
             account, stock_name, stock_code, quantity, amount = match.groups()
-            today = datetime.now().strftime('%Y/%m/%
+            today = datetime.now().strftime('%Y/%m/%d')
+            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
+        
+        # 簡化格式3: 爸爸買 中美晶 1張 107653 (省略代號，整張)
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
+        if match:
+            account, stock_name, zhang_count, amount = match.groups()
+            stock_name = stock_name.strip()
+            
+            # 從現有對應表
