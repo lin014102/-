@@ -2,6 +2,7 @@
 bill_scheduler.py - 信用卡帳單自動分析定時任務 + 帳單金額同步 (完整修正版)
 負責每日 03:30 分析帳單，15:15 推播結果，並同步金額到提醒系統
 支援民國年日期轉換和完整金額格式處理
+修正日期顯示 null 和商家名稱截斷問題
 """
 
 import os
@@ -415,8 +416,8 @@ class BillScheduler:
             }
     
     def _normalize_date_format(self, date_str):
-        """統一日期格式為 YYYY/MM/DD，支援民國年轉換（完整版）"""
-        if not date_str:
+        """統一日期格式為 YYYY/MM/DD，支援民國年轉換（完整版）- 增強錯誤處理"""
+        if not date_str or str(date_str).lower() in ['null', 'none', '']:
             return None
         
         try:
@@ -440,14 +441,20 @@ class BillScheduler:
                             month = month_str.zfill(2)
                             day = day_str.zfill(2)
                             converted_date = f"{west_year}/{month}/{day}"
-                            self.logger.info(f"✅ 民國年轉換成功: {date_str} -> {converted_date}")
+                            self.logger.debug(f"民國年轉換: {date_str} -> {converted_date}")
                             return converted_date
+                    
+                    # 檢查是否已是西元年格式
+                    elif len(year_str) == 4 and year_str.isdigit():
+                        year = year_str
+                        month = month_str.zfill(2)
+                        day = day_str.zfill(2)
+                        return f"{year}/{month}/{day}"
             
             # 嘗試各種標準日期格式
             date_formats = [
                 '%Y/%m/%d',
                 '%Y-%m-%d', 
-                '%Y/%m/%d',
                 '%m/%d/%Y',
                 '%d/%m/%Y'
             ]
@@ -465,11 +472,11 @@ class BillScheduler:
                 self.logger.debug(f"日期格式標準化: {date_str} -> {formatted_date}")
                 return formatted_date
             else:
-                self.logger.warning(f"⚠️ 無法解析日期格式: {date_str}")
+                self.logger.warning(f"無法解析日期格式，保持原樣: {date_str}")
                 return str(date_str)  # 保持原樣
                 
         except Exception as e:
-            self.logger.error(f"❌ 日期格式化錯誤: {e}")
+            self.logger.error(f"日期格式化錯誤: {e} - 原始: {date_str}")
             return str(date_str)  # 保持原樣
     
     def _format_analysis_message(self, filename, analysis_data):
@@ -530,8 +537,8 @@ class BillScheduler:
         return text + "\n\n"
     
     def _format_credit_card_message(self, filename, bank_name, result):
-        """格式化信用卡帳單訊息 - 更新版（顯示同步到提醒系統狀態）"""
-        message = f"💳 信用卡帳單分析完成\n\n🏦 {bank_name}\n📄 {filename}\n\n"
+        """格式化信用卡帳單訊息 - 完全修正版（解決日期 null 和商家名稱截斷問題）"""
+        message = f"💳 信用卡帳單分析完成\n🏦 {bank_name}\n📄 {filename}\n"
         
         total_due = result.get('total_amount_due', '')
         min_payment = result.get('minimum_payment', '')
@@ -542,9 +549,11 @@ class BillScheduler:
         if min_payment:
             message += f"💳 最低應繳: {min_payment}\n"
         if due_date:
-            message += f"⏰ 繳款期限: {due_date}\n"
+            # 確保日期格式正確
+            normalized_due_date = self._normalize_date_format(due_date)
+            message += f"⏰ 繳款期限: {normalized_due_date}\n"
         
-        # 顯示同步狀態（修正版）
+        # 顯示同步狀態
         if total_due and due_date:
             message += f"📊 ✅ 已同步到智能提醒系統\n"
             message += f"🔔 系統將在截止前自動提醒具體金額\n"
@@ -553,34 +562,54 @@ class BillScheduler:
         
         transactions = result.get('transactions', [])
         if transactions:
-            message += f"🛍️ 消費筆數: {len(transactions)}筆\n"
+            message += f"\n🛍️ 消費筆數: {len(transactions)}筆\n"
             
-            # 顯示前30筆交易
-            display_count = min(30, len(transactions))
-            message += f"\n消費明細 (前{display_count}筆):\n"
+            # 顯示前20筆交易（格式：日期(西元) 商家名稱 金額）
+            display_count = min(20, len(transactions))
+            message += f"消費明細 (前{display_count}筆):\n"
             
-            for i, trans in enumerate(transactions[:30], 1):
+            for i, trans in enumerate(transactions[:20], 1):
                 date = trans.get('date', '')
                 merchant = trans.get('merchant', '')
                 amount = trans.get('amount', '')
                 
-                if date or merchant or amount:
-                    message += f"{i}. "
-                    if date:
-                        message += f"{date} "
-                    if merchant:
-                        # 限制商家名稱長度避免訊息過長
-                        merchant_display = merchant[:25] + "..." if len(merchant) > 25 else merchant
-                        message += f"{merchant_display} "
-                    if amount:
-                        message += f"{amount}"
-                    message += "\n"
+                # 處理日期格式
+                display_date = ''
+                if date and date.lower() != 'null':
+                    normalized_date = self._normalize_date_format(date)
+                    if normalized_date:
+                        display_date = normalized_date
+                
+                # 處理商家名稱
+                display_merchant = ''
+                if merchant and merchant.lower() != 'null':
+                    # 移除 null 前綴（如果有）
+                    if merchant.startswith('null '):
+                        merchant = merchant[5:]
+                    # 清理多餘空格
+                    merchant = ' '.join(merchant.split())
+                    # 限制長度但不截斷重要資訊
+                    display_merchant = merchant[:35] + "..." if len(merchant) > 35 else merchant
+                
+                # 處理金額
+                display_amount = amount if amount else ''
+                
+                # 組合顯示 - 確保格式一致：日期 商家名稱 金額
+                line_parts = []
+                if display_date:
+                    line_parts.append(display_date)
+                if display_merchant:
+                    line_parts.append(display_merchant)
+                if display_amount:
+                    line_parts.append(display_amount)
+                
+                if line_parts:
+                    message += f"{i}. {' '.join(line_parts)}\n"
             
             # 如果還有更多交易，顯示提示
-            if len(transactions) > 30:
-                remaining = len(transactions) - 30
+            if len(transactions) > 20:
+                remaining = len(transactions) - 20
                 message += f"\n📋 還有 {remaining} 筆交易未顯示"
-                message += f"\n💡 如需查看完整明細，請聯繫系統管理員"
         
         return message
     
