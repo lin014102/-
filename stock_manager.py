@@ -1,188 +1,4 @@
-# 從現有對應表查詢股票代號
-            stock_code = self.stock_data['stock_codes'].get(stock_name)
-            if not stock_code:
-                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {zhang_count}張 {amount}'}
-            
-            quantity = int(zhang_count) * 1000  # 轉換為股數
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
-                   'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
-        
-        # 簡化格式4: 爸爸買 中美晶 500股 53826 (省略代號，零股)
-        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)股\s+(\d+)', message_text)
-        if match:
-            account, stock_name, quantity, amount = match.groups()
-            stock_name = stock_name.strip()
-            
-            # 從現有對應表查詢股票代號
-            stock_code = self.stock_data['stock_codes'].get(stock_name)
-            if not stock_code:
-                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}買 {stock_name} [代號] {quantity}股 {amount}'}
-            
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name, 
-                   'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-        
-        # ===== 新增：簡化賣出格式 =====
-        
-        # 簡化格式5: 爸爸賣 中美晶 5483 1張 107653 (首次含代號，整張)
-        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text)
-        if match:
-            account, stock_name, stock_code, zhang_count, amount = match.groups()
-            quantity = int(zhang_count) * 1000  # 轉換為股數
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': today}
-        
-        # 簡化格式6: 爸爸賣 中美晶 5483 500股 53826 (首次含代號，零股)
-        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text)
-        if match:
-            account, stock_name, stock_code, quantity, amount = match.groups()
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-        
-        # 簡化格式7: 爸爸賣 中美晶 1張 107653 (省略代號，整張)
-        match = re.match(r'(.+?)賣\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
-        if match:
-            account, stock_name, zhang_count, amount = match.groups()
-            stock_name = stock_name.strip()
-            
-            # 從現有對應表查詢股票代號
-            stock_code = self.stock_data['stock_codes'].get(stock_name)
-            if not stock_code:
-                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {zhang_count}張 {amount}'}
-            
-            quantity = int(zhang_count) * 1000  # 轉換為股數
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
-                   'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': today}
-        
-        # 簡化格式8: 爸爸賣 中美晶 500股 53826 (省略代號，零股)
-        match = re.match(r'(.+?)賣\s+(.+?)\s+(\d+)股\s+(\d+)', message_text)
-        if match:
-            account, stock_name, quantity, amount = match.groups()
-            stock_name = stock_name.strip()
-            
-            # 從現有對應表查詢股票代號
-            stock_code = self.stock_data['stock_codes'].get(stock_name)
-            if not stock_code:
-                return {'type': 'error', 'message': f'找不到「{stock_name}」的股票代號\n💡 請使用完整格式：{account}賣 {stock_name} [代號] {quantity}股 {amount}'}
-            
-            today = datetime.now().strftime('%Y/%m/%d')
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name, 
-                   'stock_code': stock_code, 'quantity': int(quantity), 'amount': int(amount), 'date': today}
-        
-        # ===== 保留原本的完整格式 (向下兼容) =====
-        
-        match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text)
-        if match:
-            account, stock_name, stock_code, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-        
-        match = re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text)
-        if match:
-            account, stock_name, stock_code, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
-        
-        match = re.match(r'新增帳戶\s*(.+)', message_text)
-        if match:
-            account = match.group(1).strip()
-            return {'type': 'create_account', 'account': account}
-        
-        return None
-    
-    def handle_command(self, message_text):
-        """處理股票指令的主要函數 - 支援簡化格式"""
-        parsed = self.parse_command(message_text)
-        
-        if not parsed:
-            return "❌ 指令格式不正確\n💡 輸入「股票幫助」查看使用說明"
-        
-        # 處理錯誤類型（股票代號找不到的情況）
-        if parsed['type'] == 'error':
-            return parsed['message']
-        
-        try:
-            if parsed['type'] == 'deposit':
-                return self.handle_deposit(parsed['account'], parsed['amount'])
-            
-            elif parsed['type'] == 'withdraw':
-                return self.handle_withdraw(parsed['account'], parsed['amount'])
-            
-            elif parsed['type'] == 'holding':
-                return self.handle_holding(
-                    parsed['account'], parsed['stock_name'], parsed['stock_code'],
-                    parsed['quantity'], parsed['total_cost']
-                )
-            
-            elif parsed['type'] == 'buy':
-                return self.handle_buy(
-                    parsed['account'], parsed['stock_name'], parsed['stock_code'],
-                    parsed['quantity'], parsed['amount'], parsed['date']
-                )
-            
-            elif parsed['type'] == 'sell':
-                return self.handle_sell(
-                    parsed['account'], parsed['stock_name'], parsed['stock_code'],
-                    parsed['quantity'], parsed['amount'], parsed['date']
-                )
-            
-            elif parsed['type'] == 'create_account':
-                return self.create_account(parsed['account'])
-            
-            elif parsed['type'] == 'set_code':
-                return self.set_stock_code(parsed['stock_name'], parsed['stock_code'])
-            
-            elif parsed['type'] == 'price_query':
-                stock_name = parsed['stock_name']
-                stock_code = self.stock_data['stock_codes'].get(stock_name)
-                if stock_code:
-                    price = self.get_stock_price(stock_code)
-                    if price:
-                        return f"💹 {stock_name} ({stock_code}) 即時股價：{price}元"
-                    else:
-                        return f"❌ 無法取得 {stock_name} ({stock_code}) 的股價"
-                else:
-                    return f"❌ 請先設定 {stock_name} 的股票代號\n💡 使用：設定代號 {stock_name} XXXX"
-            
-            elif parsed['type'] == 'batch_code_guide':
-                return """📝 批量設定股票代號說明：
-
-請按以下格式輸入多個股票代號：
-```
-鴻海 2317
-台積電 2330
-佳世達 2352
-群光 2385
-台新金 2887
-```
-
-💡 使用「檢查代號」查看哪些股票還沒設定代號"""
-            
-            elif parsed['type'] == 'check_codes':
-                return self.get_missing_stock_codes(parsed.get('account'))
-            
-        except Exception as e:
-            return f"❌ 處理失敗：{str(e)}\n💡 請檢查指令格式"
-        
-        return "❌ 未知的指令類型"
+return "❌ 未知的指令類型"
     
     def handle_holding(self, account_name, stock_name, stock_code, quantity, total_cost):
         """處理持有股票設定"""
@@ -576,6 +392,7 @@
             result += "\n"
         
         result += f"💰 總現金：{total_cash:,}元\n"
+        result += f"📊 總投資：{total_investment:,}元\n"
         result += f"🏦 總資產：{total_cash + total_investment:,}元"
         
         if all_stocks:
@@ -901,7 +718,8 @@ if __name__ == "__main__":
     print(sm.get_account_summary("爸爸"))
     print()
     print("=== 測試總覽 ===")
-    print(sm.get_all_accounts_summary())"""
+    print(sm.get_all_accounts_summary())
+                """
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
 多帳戶股票記帳系統 v2.3 - 簡化交易格式版
 """
@@ -1487,18 +1305,16 @@ class StockManager:
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
         
-        # ===== 新增：簡化買入格式 =====
-        
-        # 簡化格式1: 爸爸買 中美晶 5483 1張 107653 (首次含代號，整張)
+        # 新增：簡化買入格式1 - 爸爸買 中美晶 5483 1張 107653 (首次含代號，整張)
         match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)張\s+(\d+)', message_text)
         if match:
             account, stock_name, stock_code, zhang_count, amount = match.groups()
-            quantity = int(zhang_count) * 1000  # 轉換為股數
+            quantity = int(zhang_count) * 1000
             today = datetime.now().strftime('%Y/%m/%d')
             return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': today}
         
-        # 簡化格式2: 爸爸買 中美晶 5483 500股 53826 (首次含代號，零股)
+        # 新增：簡化買入格式2 - 爸爸買 中美晶 5483 500股 53826 (首次含代號，零股)
         match = re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)股\s+(\d+)', message_text)
         if match:
             account, stock_name, stock_code, quantity, amount = match.groups()
@@ -1506,11 +1322,5 @@ class StockManager:
             return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': today}
         
-        # 簡化格式3: 爸爸買 中美晶 1張 107653 (省略代號，整張)
-        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+)', message_text)
-        if match:
-            account, stock_name, zhang_count, amount = match.groups()
-            stock_name = stock_name.strip()
-            
-            # 從現有對應表查詢股票代號
-            stock_code = self.stock_data['stock_codes
+        # 新增：簡化買入格式3 - 爸爸買 中美晶 1張 107653 (省略代號，整張)
+        match = re.match(r'(.+?)買\s+(.+?)\s+(\d+)張\s+(\d+
