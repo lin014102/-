@@ -70,6 +70,342 @@ def handle_command(self, message_text):
         
         return "❌ 未知的指令類型"
     
+    def create_account(self, account_name):
+        """建立新帳戶"""
+        is_new = self.get_or_create_account(account_name)
+        if is_new:
+            result_msg = f"🆕 已建立帳戶「{account_name}」\n💡 可以開始入帳和交易了！"
+            
+            if self.sheets_enabled:
+                sync_success = self.sync_to_sheets_safe()
+                if sync_success:
+                    result_msg += "\n☁️ 已同步到 Google Sheets"
+                else:
+                    result_msg += "\n❌ Google Sheets 同步失敗"
+            else:
+                result_msg += "\n💾 已儲存到記憶體"
+            
+            return result_msg
+        else:
+            return f"ℹ️ 帳戶「{account_name}」已存在"
+    
+    def handle_deposit(self, account_name, amount):
+        """處理入帳"""
+        is_new = self.get_or_create_account(account_name)
+        self.stock_data['accounts'][account_name]['cash'] += amount
+        
+        transaction = {
+            'id': len(self.stock_data['transactions']) + 1,
+            'type': '入帳',
+            'account': account_name,
+            'stock_code': None,
+            'quantity': 0,
+            'amount': amount,
+            'price_per_share': 0,
+            'date': self.get_taiwan_time().split(' ')[0],
+            'cash_after': self.stock_data['accounts'][account_name]['cash'],
+            'created_at': self.get_taiwan_time()
+        }
+        self.stock_data['transactions'].append(transaction)
+        
+        result_msg = f"💰 {account_name} 入帳成功！\n"
+        if is_new:
+            result_msg += f"🆕 已建立新帳戶\n"
+        result_msg += f"💵 入帳金額：{amount:,}元\n"
+        result_msg += f"💳 帳戶餘額：{self.stock_data['accounts'][account_name]['cash']:,}元"
+        
+        if self.sheets_enabled:
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
+        else:
+            result_msg += "\n💾 已儲存到記憶體"
+        
+        return result_msg
+    
+    def handle_withdraw(self, account_name, amount):
+        """處理提款"""
+        if account_name not in self.stock_data['accounts']:
+            return f"❌ 帳戶「{account_name}」不存在"
+        
+        account = self.stock_data['accounts'][account_name]
+        if account['cash'] < amount:
+            return f"❌ 餘額不足！\n💳 目前餘額：{account['cash']:,}元\n💸 提款金額：{amount:,}元"
+        
+        account['cash'] -= amount
+        
+        transaction = {
+            'id': len(self.stock_data['transactions']) + 1,
+            'type': '提款',
+            'account': account_name,
+            'stock_code': None,
+            'quantity': 0,
+            'amount': amount,
+            'price_per_share': 0,
+            'date': self.get_taiwan_time().split(' ')[0],
+            'cash_after': account['cash'],
+            'created_at': self.get_taiwan_time()
+        }
+        self.stock_data['transactions'].append(transaction)
+        
+        result_msg = f"💸 {account_name} 提款成功！\n💵 提款金額：{amount:,}元\n💳 帳戶餘額：{account['cash']:,}元"
+        
+        if self.sheets_enabled:
+            sync_success = self.sync_to_sheets_safe()
+            if sync_success:
+                result_msg += "\n☁️ 已同步到 Google Sheets"
+            else:
+                result_msg += "\n❌ Google Sheets 同步失敗"
+        else:
+            result_msg += "\n💾 已儲存到記憶體"
+        
+        return result_msg
+    
+    def get_account_summary(self, account_name):
+        """獲取帳戶摘要"""
+        if account_name not in self.stock_data['accounts']:
+            return f"❌ 帳戶「{account_name}」不存在"
+        
+        account = self.stock_data['accounts'][account_name]
+        
+        result = f"📊 {account_name} 帳戶摘要：\n\n💳 現金餘額：{account['cash']:,}元\n"
+        
+        if account['stocks']:
+            result += f"\n📈 持股明細：\n"
+            total_investment = 0
+            for stock_name, holding in account['stocks'].items():
+                stock_code = holding.get('stock_code', '')
+                code_display = f" ({stock_code})" if stock_code else ""
+                
+                # 智能顯示持股數量
+                shares = holding['quantity']
+                if shares >= 1000 and shares % 1000 == 0:
+                    display_quantity = f"{shares // 1000}張"
+                elif shares >= 1000:
+                    zhang = shares // 1000
+                    gu = shares % 1000
+                    display_quantity = f"{zhang}張{gu}股"
+                else:
+                    display_quantity = f"{shares}股"
+                
+                result += f"🏷️ {stock_name}{code_display}\n"
+                result += f"   📊 {display_quantity} ({shares:,}股) @ {holding['avg_cost']}元\n"
+                result += f"   💰 投資成本：{holding['total_cost']:,}元\n\n"
+                total_investment += holding['total_cost']
+            
+            total_assets = account['cash'] + total_investment
+            result += f"💼 總投資：{total_investment:,}元\n"
+            result += f"🏦 總資產：{total_assets:,}元"
+        else:
+            result += "\n📝 目前無持股"
+        
+        return result
+    
+    def get_all_accounts_summary(self):
+        """獲取所有帳戶總覽"""
+        if not self.stock_data['accounts']:
+            return "📝 目前沒有任何帳戶\n💡 輸入「爸爸入帳 100000」來建立第一個帳戶\n💡 或輸入「爸爸持有 台積電 10張 500000」設定現有持股"
+        
+        result = "🏦 家庭投資總覽：\n\n"
+        
+        total_cash = 0
+        total_investment = 0
+        all_stocks = {}
+        
+        for account_name, account in self.stock_data['accounts'].items():
+            result += f"👤 {account_name}：\n"
+            result += f"   💳 現金 {account['cash']:,}元\n"
+            
+            account_investment = 0
+            if account['stocks']:
+                for stock_name, holding in account['stocks'].items():
+                    stock_code = holding.get('stock_code', '')
+                    code_display = f" ({stock_code})" if stock_code else ""
+                    
+                    # 智能顯示持股數量
+                    shares = holding['quantity']
+                    if shares >= 1000 and shares % 1000 == 0:
+                        display_quantity = f"{shares // 1000}張"
+                    elif shares >= 1000:
+                        zhang = shares // 1000
+                        gu = shares % 1000
+                        display_quantity = f"{zhang}張{gu}股"
+                    else:
+                        display_quantity = f"{shares}股"
+                    
+                    result += f"   📈 {stock_name}{code_display} {display_quantity}\n"
+                    account_investment += holding['total_cost']
+                    
+                    if stock_name in all_stocks:
+                        all_stocks[stock_name] += holding['quantity']
+                    else:
+                        all_stocks[stock_name] = holding['quantity']
+            
+            if account_investment > 0:
+                result += f"   💼 投資 {account_investment:,}元\n"
+            
+            total_cash += account['cash']
+            total_investment += account_investment
+            result += "\n"
+        
+        result += f"💰 總現金：{total_cash:,}元\n"
+        result += f"📊 總投資：{total_investment:,}元\n"
+        result += f"🏦 總資產：{total_cash + total_investment:,}元"
+        
+        if all_stocks:
+            result += f"\n\n📈 家庭總持股：\n"
+            for stock_name, total_quantity in all_stocks.items():
+                # 智能顯示總持股
+                if total_quantity >= 1000 and total_quantity % 1000 == 0:
+                    display_total = f"{total_quantity // 1000}張"
+                elif total_quantity >= 1000:
+                    zhang = total_quantity // 1000
+                    gu = total_quantity % 1000
+                    display_total = f"{zhang}張{gu}股"
+                else:
+                    display_total = f"{total_quantity}股"
+                
+                result += f"🏷️ {stock_name}：{display_total} ({total_quantity:,}股)\n"
+        
+        if self.sheets_enabled:
+            result += f"\n☁️ 資料來源：Google Sheets"
+        else:
+            result += f"\n💾 資料儲存：記憶體模式"
+        
+        return result
+    
+    def get_transaction_history(self, account_name=None, limit=10):
+        """獲取交易記錄"""
+        transactions = self.stock_data['transactions']
+        
+        if account_name:
+            transactions = [t for t in transactions if t['account'] == account_name]
+            if not transactions:
+                return f"📝 {account_name} 沒有交易記錄"
+            title = f"📋 {account_name} 交易記錄 (最近{limit}筆)：\n\n"
+        else:
+            if not transactions:
+                return "📝 目前沒有任何交易記錄"
+            title = f"📋 所有交易記錄 (最近{limit}筆)：\n\n"
+        
+        recent_transactions = sorted(transactions, key=lambda x: x['created_at'], reverse=True)[:limit]
+        
+        result = title
+        for i, t in enumerate(recent_transactions, 1):
+            result += f"{i}. {t['type']} - {t['account']}\n"
+            if t['stock_code']:
+                # 智能顯示交易數量
+                shares = t['quantity']
+                if shares >= 1000 and shares % 1000 == 0:
+                    display_quantity = f"{shares // 1000}張"
+                elif shares >= 1000:
+                    zhang = shares // 1000
+                    gu = shares % 1000
+                    display_quantity = f"{zhang}張{gu}股"
+                else:
+                    display_quantity = f"{shares}股"
+                
+                result += f"   🏷️ {t['stock_code']} {display_quantity} ({shares:,}股)\n"
+                if t.get('price_per_share'):
+                    result += f"   💰 {t['amount']:,}元 @ {t['price_per_share']}元/股\n"
+                else:
+                    result += f"   💰 {t['amount']:,}元\n"
+            else:
+                result += f"   💰 {t['amount']:,}元\n"
+            result += f"   📅 {t['date']} 💳餘額 {t['cash_after']:,}元\n\n"
+        
+        if self.sheets_enabled:
+            result += f"☁️ 資料來源：Google Sheets"
+        else:
+            result += f"💾 資料來源：記憶體"
+        
+        return result
+    
+    def get_cost_analysis(self, account_name, stock_input):
+        """獲取特定股票的成本分析"""
+        if account_name not in self.stock_data['accounts']:
+            return f"❌ 帳戶「{account_name}」不存在"
+        
+        account = self.stock_data['accounts'][account_name]
+        
+        stock_name = None
+        for name in account['stocks'].keys():
+            if stock_input.lower() in name.lower() or name.lower() in stock_input.lower():
+                stock_name = name
+                break
+        
+        if not stock_name:
+            return f"❌ {account_name} 沒有持有「{stock_input}」相關的股票"
+        
+        holding = account['stocks'][stock_name]
+        stock_code = holding.get('stock_code', '')
+        code_display = f" ({stock_code})" if stock_code else ""
+        
+        # 智能顯示持股數量
+        shares = holding['quantity']
+        if shares >= 1000 and shares % 1000 == 0:
+            display_quantity = f"{shares // 1000}張"
+        elif shares >= 1000:
+            zhang = shares // 1000
+            gu = shares % 1000
+            display_quantity = f"{zhang}張{gu}股"
+        else:
+            display_quantity = f"{shares}股"
+        
+        related_transactions = [
+            t for t in self.stock_data['transactions'] 
+            if t['account'] == account_name and t.get('stock_code') == stock_name
+        ]
+        
+        result = f"📊 {account_name} - {stock_name}{code_display} 成本分析：\n\n"
+        result += f"📈 目前持股：{display_quantity} ({shares:,}股)\n"
+        result += f"💰 平均成本：{holding['avg_cost']}元/股\n"
+        result += f"💵 總投資：{holding['total_cost']:,}元\n\n"
+        result += f"📋 交易歷史：\n"
+        
+        for t in related_transactions:
+            # 智能顯示交易數量
+            t_shares = t['quantity']
+            if t_shares >= 1000 and t_shares % 1000 == 0:
+                t_display = f"{t_shares // 1000}張"
+            elif t_shares >= 1000:
+                zhang = t_shares // 1000
+                gu = t_shares % 1000
+                t_display = f"{zhang}張{gu}股"
+            else:
+                t_display = f"{t_shares}股"
+            
+            if t['type'] == '買入':
+                result += f"📈 {t['date']} 買入 {t_display} @ {t['price_per_share']}元\n"
+            elif t['type'] == '賣出':
+                profit_loss = t.get('profit_loss', 0)
+                profit_text = f" (獲利+{profit_loss:,})" if profit_loss > 0 else f" (虧損{profit_loss:,})" if profit_loss < 0 else " (損益兩平)"
+                result += f"📉 {t['date']} 賣出 {t_display} @ {t['price_per_share']}元{profit_text}\n"
+            elif t['type'] == '持有':
+                result += f"📊 {t['date']} 設定持有 {t_display} @ {t['price_per_share']}元\n"
+        
+        if self.sheets_enabled:
+            result += f"\n☁️ 資料來源：Google Sheets"
+        else:
+            result += f"\n💾 資料來源：記憶體"
+        
+        return result
+    
+    def get_account_list(self):
+        """獲取帳戶列表"""
+        if self.stock_data['accounts']:
+            account_list = list(self.stock_data['accounts'].keys())
+            result = f"👥 目前帳戶列表：\n\n" + "\n".join([f"👤 {name}" for name in account_list])
+            if self.sheets_enabled:
+                result += f"\n\n☁️ 資料來源：Google Sheets"
+            else:
+                result += f"\n\n💾 資料來源：記憶體"
+            return result
+        else:
+            return "📝 目前沒有任何帳戶"
+    
     def get_help_text(self):
         """獲取幫助訊息 - 新版"""
         return """💰 多帳戶股票記帳功能 v2.3 - 簡化輸入版：
