@@ -1,6 +1,6 @@
 """
 stock_manager.py - 獨立股票記帳模組 + Google Sheets 整合
-多帳戶股票記帳系統 v2.2 - 代號整合版
+多帳戶股票記帳系統 v2.3 - 簡化輸入版 (支援張/零股格式)
 """
 import re
 import os
@@ -532,15 +532,39 @@ class StockManager:
             result += f"   • API 服務暫時不可用\n\n"
         
         result += "💡 提示：\n"
-        result += "• 新交易請使用格式：爸爸買 台積電 2330 100 50000 0820\n"
+        result += "• 新交易請使用格式：爸爸買 台積電 2330 1張 600000 0820\n"
+        result += "• 零股交易：爸爸買 台積電 500 300000 0820\n"
         result += "• 股價資料來源：Yahoo Finance\n"
         result += "• 交易時間：週一至週五 09:00-13:30\n"
         result += "• 如持續無法取得股價，請檢查股票代號是否正確"
         
         return result
     
+    def parse_quantity_smart(self, quantity_str):
+        """智能解析數量 - 支援張/零股格式"""
+        if '張' in quantity_str:
+            # 張數格式：1張、2張、0.5張
+            num = float(quantity_str.replace('張', ''))
+            return int(num * 1000)
+        else:
+            # 純數字視為零股：100、500、300
+            return int(quantity_str)
+    
+    def format_date(self, date_str):
+        """格式化日期"""
+        if not date_str:
+            return self.get_taiwan_time().split(' ')[0]
+        
+        try:
+            year = datetime.now().year
+            month = int(date_str[:2])
+            day = int(date_str[2:])
+            return f"{year}/{month:02d}/{day:02d}"
+        except:
+            return date_str
+    
     def parse_command(self, message_text):
-        """解析股票相關指令"""
+        """解析股票相關指令 - 增強版支援張/零股格式"""
         message_text = message_text.strip()
         
         if message_text == '批量設定代號':
@@ -566,34 +590,34 @@ class StockManager:
             account, amount = match.groups()
             return {'type': 'withdraw', 'account': account.strip(), 'amount': int(amount)}
         
-        elif match := re.match(r'(.+?)持有\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)', message_text):
-            account, stock_name, stock_code, quantity, total_cost = match.groups()
+        # 持有格式 - 支援張/零股
+        elif match := re.match(r'(.+?)持有\s+(.+?)\s+(\w+)\s+(.+?)\s+(\d+)', message_text):
+            account, stock_name, stock_code, quantity_str, total_cost = match.groups()
+            quantity = self.parse_quantity_smart(quantity_str)
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'total_cost': int(total_cost)}
+                   'stock_code': stock_code.strip(), 'quantity': quantity, 'total_cost': int(total_cost)}
         
-        elif match := re.match(r'(.+?)買\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text):
-            account, stock_name, stock_code, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'buy', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        # 完整格式（包含代號）- 支援張/零股
+        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(\w+)\s+(.+?)\s+(\d+)\s+(\d{4})', message_text):
+            account, action, stock_name, stock_code, quantity_str, amount, date = match.groups()
+            quantity = self.parse_quantity_smart(quantity_str)
+            formatted_date = self.format_date(date)
+            return {'type': action, 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': formatted_date}
         
-        elif match := re.match(r'(.+?)賣\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\d{4})', message_text):
-            account, stock_name, stock_code, quantity, amount, date = match.groups()
-            try:
-                year = datetime.now().year
-                month = int(date[:2])
-                day = int(date[2:])
-                formatted_date = f"{year}/{month:02d}/{day:02d}"
-            except:
-                return None
-            return {'type': 'sell', 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': int(quantity), 'amount': int(amount), 'date': formatted_date}
+        # 簡化格式（不包含代號）- 支援張/零股
+        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(.+?)\s+(\d+)\s*(\d{4})?', message_text):
+            account, action, stock_name, quantity_str, amount, date = match.groups()
+            
+            # 檢查是否已知股票代號
+            stock_code = self.stock_data['stock_codes'].get(stock_name.strip())
+            if not stock_code:
+                return {'type': 'need_stock_code', 'stock_name': stock_name.strip(), 'message': message_text}
+            
+            quantity = self.parse_quantity_smart(quantity_str)
+            formatted_date = self.format_date(date) if date else self.get_taiwan_time().split(' ')[0]
+            return {'type': action, 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                   'stock_code': stock_code, 'quantity': quantity, 'amount': int(amount), 'date': formatted_date}
         
         elif match := re.match(r'新增帳戶\s*(.+)', message_text):
             account = match.group(1).strip()
@@ -631,11 +655,21 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 格式化數量顯示
+        if quantity >= 1000 and quantity % 1000 == 0:
+            quantity_display = f"{quantity // 1000}張"
+        elif quantity >= 1000:
+            full_lots = quantity // 1000
+            remaining = quantity % 1000
+            quantity_display = f"{full_lots}張{remaining}股"
+        else:
+            quantity_display = f"{quantity}股"
+        
         result_msg = f"📊 {account_name} 持股設定成功！\n"
         if is_new:
             result_msg += f"🆕 已建立新帳戶\n"
         result_msg += f"🏷️ {stock_name} ({stock_code})\n"
-        result_msg += f"📈 持股：{quantity}股\n"
+        result_msg += f"📈 持股：{quantity_display}\n"
         result_msg += f"💰 總成本：{total_cost:,}元\n"
         result_msg += f"💵 平均成本：{avg_cost}元/股"
         
@@ -773,8 +807,30 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 格式化數量顯示
+        if quantity >= 1000 and quantity % 1000 == 0:
+            quantity_display = f"{quantity // 1000}張"
+        elif quantity >= 1000:
+            full_lots = quantity // 1000
+            remaining = quantity % 1000
+            quantity_display = f"{full_lots}張{remaining}股"
+        else:
+            quantity_display = f"{quantity}股"
+        
         stock_info = account['stocks'][stock_name]
-        result_msg = f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 買入：{quantity}股 @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{stock_info['quantity']}股\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元"
+        
+        # 總持股顯示
+        total_quantity = stock_info['quantity']
+        if total_quantity >= 1000 and total_quantity % 1000 == 0:
+            total_display = f"{total_quantity // 1000}張"
+        elif total_quantity >= 1000:
+            full_lots = total_quantity // 1000
+            remaining = total_quantity % 1000
+            total_display = f"{full_lots}張{remaining}股"
+        else:
+            total_display = f"{total_quantity}股"
+        
+        result_msg = f"📈 {account_name} 買入成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 買入：{quantity_display} @ {price_per_share}元\n💰 實付：{amount:,}元\n📅 日期：{date}\n\n📋 持股狀況：\n📊 總持股：{total_display}\n💵 平均成本：{stock_info['avg_cost']}元/股\n💳 剩餘現金：{account['cash']:,}元"
         
         if self.sheets_enabled:
             sync_success = self.sync_to_sheets_safe()
@@ -798,7 +854,27 @@ class StockManager:
         
         holding = account['stocks'][stock_name]
         if holding['quantity'] < quantity:
-            return f"❌ 持股不足！\n📊 目前持股：{holding['quantity']}股\n📤 欲賣出：{quantity}股"
+            # 格式化持股顯示
+            if holding['quantity'] >= 1000 and holding['quantity'] % 1000 == 0:
+                holding_display = f"{holding['quantity'] // 1000}張"
+            elif holding['quantity'] >= 1000:
+                full_lots = holding['quantity'] // 1000
+                remaining = holding['quantity'] % 1000
+                holding_display = f"{full_lots}張{remaining}股"
+            else:
+                holding_display = f"{holding['quantity']}股"
+            
+            # 格式化欲賣出數量顯示
+            if quantity >= 1000 and quantity % 1000 == 0:
+                sell_display = f"{quantity // 1000}張"
+            elif quantity >= 1000:
+                full_lots = quantity // 1000
+                remaining = quantity % 1000
+                sell_display = f"{full_lots}張{remaining}股"
+            else:
+                sell_display = f"{quantity}股"
+            
+            return f"❌ 持股不足！\n📊 目前持股：{holding_display}\n📤 欲賣出：{sell_display}"
         
         price_per_share = round(amount / quantity, 2)
         sell_cost = round(holding['avg_cost'] * quantity, 2)
@@ -836,9 +912,19 @@ class StockManager:
         }
         self.stock_data['transactions'].append(transaction)
         
+        # 格式化賣出數量顯示
+        if quantity >= 1000 and quantity % 1000 == 0:
+            quantity_display = f"{quantity // 1000}張"
+        elif quantity >= 1000:
+            full_lots = quantity // 1000
+            remaining = quantity % 1000
+            quantity_display = f"{full_lots}張{remaining}股"
+        else:
+            quantity_display = f"{quantity}股"
+        
         profit_text = f"💰 獲利：+{profit_loss:,}元" if profit_loss > 0 else f"💸 虧損：{profit_loss:,}元" if profit_loss < 0 else "💫 損益兩平"
         
-        result = f"📉 {account_name} 賣出成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 賣出：{quantity}股 @ {price_per_share}元\n💰 實收：{amount:,}元\n📅 日期：{date}\n\n💹 本次交易：\n💵 成本：{sell_cost:,}元\n{profit_text}\n💳 現金餘額：{account['cash']:,}元"
+        result = f"📉 {account_name} 賣出成功！\n\n🏷️ {stock_name} ({stock_code})\n📊 賣出：{quantity_display} @ {price_per_share}元\n💰 實收：{amount:,}元\n📅 日期：{date}\n\n💹 本次交易：\n💵 成本：{sell_cost:,}元\n{profit_text}\n💳 現金餘額：{account['cash']:,}元"
         
         if self.sheets_enabled:
             sync_success = self.sync_to_sheets_safe()
@@ -850,7 +936,17 @@ class StockManager:
             result += "\n💾 已儲存到記憶體"
         
         if remaining_quantity > 0:
-            result += f"\n\n📋 剩餘持股：{remaining_quantity}股"
+            # 格式化剩餘持股顯示
+            if remaining_quantity >= 1000 and remaining_quantity % 1000 == 0:
+                remaining_display = f"{remaining_quantity // 1000}張"
+            elif remaining_quantity >= 1000:
+                full_lots = remaining_quantity // 1000
+                remaining = remaining_quantity % 1000
+                remaining_display = f"{full_lots}張{remaining}股"
+            else:
+                remaining_display = f"{remaining_quantity}股"
+            
+            result += f"\n\n📋 剩餘持股：{remaining_display}"
         else:
             result += f"\n\n✅ 已全部賣出 {stock_name}"
         
@@ -890,8 +986,20 @@ class StockManager:
             for stock_name, holding in account['stocks'].items():
                 stock_code = holding.get('stock_code', '')
                 code_display = f" ({stock_code})" if stock_code else ""
+                
+                # 格式化持股數量顯示
+                quantity = holding['quantity']
+                if quantity >= 1000 and quantity % 1000 == 0:
+                    quantity_display = f"{quantity // 1000}張"
+                elif quantity >= 1000:
+                    full_lots = quantity // 1000
+                    remaining = quantity % 1000
+                    quantity_display = f"{full_lots}張{remaining}股"
+                else:
+                    quantity_display = f"{quantity}股"
+                
                 result += f"🏷️ {stock_name}{code_display}\n"
-                result += f"   📊 {holding['quantity']}股 @ {holding['avg_cost']}元\n"
+                result += f"   📊 {quantity_display} @ {holding['avg_cost']}元\n"
                 result += f"   💰 投資成本：{holding['total_cost']:,}元\n\n"
                 total_investment += holding['total_cost']
             
@@ -906,7 +1014,7 @@ class StockManager:
     def get_all_accounts_summary(self):
         """獲取所有帳戶總覽"""
         if not self.stock_data['accounts']:
-            return "📝 目前沒有任何帳戶\n💡 輸入「爸爸入帳 100000」來建立第一個帳戶\n💡 或輸入「爸爸持有 台積電 2330 100 50000」設定現有持股"
+            return "📝 目前沒有任何帳戶\n💡 輸入「爸爸入帳 100000」來建立第一個帳戶\n💡 或輸入「爸爸持有 台積電 2330 1張 600000」設定現有持股"
         
         result = "🏦 家庭投資總覽：\n\n"
         
@@ -923,7 +1031,19 @@ class StockManager:
                 for stock_name, holding in account['stocks'].items():
                     stock_code = holding.get('stock_code', '')
                     code_display = f" ({stock_code})" if stock_code else ""
-                    result += f"   📈 {stock_name}{code_display} {holding['quantity']}股\n"
+                    
+                    # 格式化持股數量顯示
+                    quantity = holding['quantity']
+                    if quantity >= 1000 and quantity % 1000 == 0:
+                        quantity_display = f"{quantity // 1000}張"
+                    elif quantity >= 1000:
+                        full_lots = quantity // 1000
+                        remaining = quantity % 1000
+                        quantity_display = f"{full_lots}張{remaining}股"
+                    else:
+                        quantity_display = f"{quantity}股"
+                    
+                    result += f"   📈 {stock_name}{code_display} {quantity_display}\n"
                     account_investment += holding['total_cost']
                     
                     if stock_name in all_stocks:
@@ -945,7 +1065,17 @@ class StockManager:
         if all_stocks:
             result += f"\n\n📈 家庭總持股：\n"
             for stock_name, total_quantity in all_stocks.items():
-                result += f"🏷️ {stock_name}：{total_quantity}股\n"
+                # 格式化總持股數量顯示
+                if total_quantity >= 1000 and total_quantity % 1000 == 0:
+                    total_display = f"{total_quantity // 1000}張"
+                elif total_quantity >= 1000:
+                    full_lots = total_quantity // 1000
+                    remaining = total_quantity % 1000
+                    total_display = f"{full_lots}張{remaining}股"
+                else:
+                    total_display = f"{total_quantity}股"
+                
+                result += f"🏷️ {stock_name}：{total_display}\n"
         
         if self.sheets_enabled:
             result += f"\n☁️ 資料來源：Google Sheets"
@@ -974,7 +1104,18 @@ class StockManager:
         for i, t in enumerate(recent_transactions, 1):
             result += f"{i}. {t['type']} - {t['account']}\n"
             if t['stock_code']:
-                result += f"   🏷️ {t['stock_code']} {t['quantity']}股\n"
+                # 格式化交易數量顯示
+                quantity = t['quantity']
+                if quantity >= 1000 and quantity % 1000 == 0:
+                    quantity_display = f"{quantity // 1000}張"
+                elif quantity >= 1000:
+                    full_lots = quantity // 1000
+                    remaining = quantity % 1000
+                    quantity_display = f"{full_lots}張{remaining}股"
+                else:
+                    quantity_display = f"{quantity}股"
+                
+                result += f"   🏷️ {t['stock_code']} {quantity_display}\n"
                 if t.get('price_per_share'):
                     result += f"   💰 {t['amount']:,}元 @ {t['price_per_share']}元/股\n"
                 else:
@@ -1010,26 +1151,48 @@ class StockManager:
         stock_code = holding.get('stock_code', '')
         code_display = f" ({stock_code})" if stock_code else ""
         
+        # 格式化持股數量顯示
+        quantity = holding['quantity']
+        if quantity >= 1000 and quantity % 1000 == 0:
+            quantity_display = f"{quantity // 1000}張"
+        elif quantity >= 1000:
+            full_lots = quantity // 1000
+            remaining = quantity % 1000
+            quantity_display = f"{full_lots}張{remaining}股"
+        else:
+            quantity_display = f"{quantity}股"
+        
         related_transactions = [
             t for t in self.stock_data['transactions'] 
             if t['account'] == account_name and t.get('stock_code') == stock_name
         ]
         
         result = f"📊 {account_name} - {stock_name}{code_display} 成本分析：\n\n"
-        result += f"📈 目前持股：{holding['quantity']}股\n"
+        result += f"📈 目前持股：{quantity_display}\n"
         result += f"💰 平均成本：{holding['avg_cost']}元/股\n"
         result += f"💵 總投資：{holding['total_cost']:,}元\n\n"
         result += f"📋 交易歷史：\n"
         
         for t in related_transactions:
+            # 格式化交易數量顯示
+            t_quantity = t['quantity']
+            if t_quantity >= 1000 and t_quantity % 1000 == 0:
+                t_quantity_display = f"{t_quantity // 1000}張"
+            elif t_quantity >= 1000:
+                full_lots = t_quantity // 1000
+                remaining = t_quantity % 1000
+                t_quantity_display = f"{full_lots}張{remaining}股"
+            else:
+                t_quantity_display = f"{t_quantity}股"
+            
             if t['type'] == '買入':
-                result += f"📈 {t['date']} 買入 {t['quantity']}股 @ {t['price_per_share']}元\n"
+                result += f"📈 {t['date']} 買入 {t_quantity_display} @ {t['price_per_share']}元\n"
             elif t['type'] == '賣出':
                 profit_loss = t.get('profit_loss', 0)
                 profit_text = f" (獲利+{profit_loss:,})" if profit_loss > 0 else f" (虧損{profit_loss:,})" if profit_loss < 0 else " (損益兩平)"
-                result += f"📉 {t['date']} 賣出 {t['quantity']}股 @ {t['price_per_share']}元{profit_text}\n"
+                result += f"📉 {t['date']} 賣出 {t_quantity_display} @ {t['price_per_share']}元{profit_text}\n"
             elif t['type'] == '持有':
-                result += f"📊 {t['date']} 設定持有 {t['quantity']}股 @ {t['price_per_share']}元\n"
+                result += f"📊 {t['date']} 設定持有 {t_quantity_display} @ {t['price_per_share']}元\n"
         
         if self.sheets_enabled:
             result += f"\n☁️ 資料來源：Google Sheets"
@@ -1071,13 +1234,13 @@ class StockManager:
                     parsed['quantity'], parsed['total_cost']
                 )
             
-            elif parsed['type'] == 'buy':
+            elif parsed['type'] == '買':
                 return self.handle_buy(
                     parsed['account'], parsed['stock_name'], parsed['stock_code'],
                     parsed['quantity'], parsed['amount'], parsed['date']
                 )
             
-            elif parsed['type'] == 'sell':
+            elif parsed['type'] == '賣':
                 return self.handle_sell(
                     parsed['account'], parsed['stock_name'], parsed['stock_code'],
                     parsed['quantity'], parsed['amount'], parsed['date']
@@ -1118,6 +1281,9 @@ class StockManager:
             elif parsed['type'] == 'check_codes':
                 return self.get_missing_stock_codes(parsed.get('account'))
             
+            elif parsed['type'] == 'need_stock_code':
+                return f"❌ 「{parsed['stock_name']}」尚未設定股票代號\n💡 請使用完整格式：{parsed['message']} [股票代號]\n例如：{parsed['message']} 2330"
+            
         except Exception as e:
             return f"❌ 處理失敗：{str(e)}\n💡 請檢查指令格式"
         
@@ -1125,20 +1291,29 @@ class StockManager:
     
     def get_help_text(self):
         """獲取幫助訊息"""
-        return """💰 多帳戶股票記帳功能 v2.2 - 代號整合版：
+        return """💰 多帳戶股票記帳功能 v2.3 - 簡化輸入版：
 
 📋 帳戶管理：
 - 爸爸入帳 50000 - 入金
 - 媽媽提款 10000 - 提款  
 - 新增帳戶 奶奶 - 建立帳戶
 
-📊 持股設定（新格式 - 包含股票代號）：
-- 爸爸持有 台積電 2330 200 120000 - 設定現有持股
-- 媽媽持有 鴻海 2317 100 50000 - 包含股票代號
+📊 持股設定（新格式 - 支援張/零股）：
+- 爸爸持有 台積電 2330 1張 600000 - 設定現有持股（整張）
+- 媽媽持有 鴻海 2317 500 52500 - 設定現有持股（零股）
 
-📈 交易操作（新格式 - 包含股票代號）：
-- 爸爸買 台積電 2330 100 50000 0820 - 買股票
-- 媽媽賣 鴻海 2317 50 25000 0821 - 賣股票
+📈 交易操作（新格式 - 支援張/零股）：
+🔸 整張交易：
+- 爸爸買 台積電 2330 1張 600000 0820 - 買1張台積電
+- 媽媽賣 鴻海 2317 2張 210000 0821 - 賣2張鴻海
+
+🔸 零股交易：
+- 爸爸買 台積電 2330 500 300000 0820 - 買500股零股
+- 媽媽賣 鴻海 100 10500 0821 - 賣100股零股
+
+🔸 簡化格式（已設定代號後）：
+- 爸爸買 台積電 1張 600000 0820
+- 媽媽賣 鴻海 500 52500 0821
 
 📊 查詢功能：
 - 總覽 - 所有帳戶總覽
@@ -1154,22 +1329,28 @@ class StockManager:
 - 股價查詢 台積電 - 查詢即時股價
 
 📝 新格式說明：
-• 🆕 交易時必須包含股票代號：
-  - 持有：爸爸持有 股票名稱 代號 數量 總成本
-  - 買入：爸爸買 股票名稱 代號 數量 金額 日期
-  - 賣出：爸爸賣 股票名稱 代號 數量 金額 日期
+• 🆕 數量輸入方式：
+  - 整張：1張、2張、0.5張（自動轉換為股數）
+  - 零股：直接輸入數字 100、500、300（視為股數）
+• 🆕 第一次交易需包含股票代號，之後可省略
 • 日期：0820 = 8月20日，1225 = 12月25日
 • 股票代號：台股請使用4位數代號（如：2330）
 
-☁️ v2.2 新功能：
-• 🆕 股票代號自動儲存在 Google Sheets
-• 🆕 即時損益無需額外設定代號
-• 🆕 重新部署後代號不會丟失
+☁️ v2.3 新功能：
+• 🆕 支援張/零股簡化輸入格式
+• 🆕 智能數量識別（張 vs 零股）
+• 🆕 更友善的持股數量顯示
+• 🆕 股票代號記憶功能
 • ✅ Google Sheets 雲端同步
 • ✅ 支援自訂股票名稱
 • ✅ 資料永久保存
 • ✅ 即時股價查詢
-• ✅ 未實現損益計算"""
+• ✅ 未實現損益計算
+
+💡 使用範例：
+• 首次：爸爸買 台積電 2330 1張 600000 0820
+• 後續：爸爸買 台積電 500 300000 0821
+• 後續：爸爸賣 台積電 1張 650000 0825"""
 
 
 # 建立全域實例
@@ -1276,13 +1457,22 @@ def is_stock_query(message_text):
 if __name__ == "__main__":
     sm = StockManager()
     print("=== 測試持有（新格式）===")
-    print(sm.handle_command("爸爸持有 台積電 2330 200 120000"))
+    print(sm.handle_command("爸爸持有 台積電 2330 1張 600000"))
+    print()
+    print("=== 測試零股持有 ===")
+    print(sm.handle_command("媽媽持有 鴻海 2317 500 52500"))
     print()
     print("=== 測試入帳 ===")
     print(sm.handle_command("爸爸入帳 100000"))
     print()
     print("=== 測試買入（新格式）===")
-    print(sm.handle_command("爸爸買 台積電 2330 100 50000 0820"))
+    print(sm.handle_command("爸爸買 台積電 2330 1張 600000 0820"))
+    print()
+    print("=== 測試零股買入 ===")
+    print(sm.handle_command("媽媽買 鴻海 2317 300 31500 0821"))
+    print()
+    print("=== 測試簡化格式買入 ===")
+    print(sm.handle_command("爸爸買 台積電 500 300000 0822"))
     print()
     print("=== 測試查詢 ===")
     print(sm.get_account_summary("爸爸"))
