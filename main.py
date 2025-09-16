@@ -1,6 +1,7 @@
 """
 main.py - LINE Todo Reminder Bot 主程式 (完整整合版)
-v3.3 + 智能帳單提醒整合 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次生理期預測
+v3.4 + 智能對話狀態管理 + 智能帳單提醒整合 + Gemini AI + 自動帳單分析 + 生理期追蹤 + 下次生理期預測
+新增功能：對話狀態記憶、智能確認詞處理、上下文理解
 """
 from flask import Flask, request, jsonify
 import os
@@ -20,7 +21,7 @@ from stock_manager import (
     is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
 
-# 匯入 Gemini AI 模組
+# 匯入增強版 Gemini AI 模組（支援對話狀態管理）
 from gemini_analyzer import EnhancedMessageRouter
 
 # 匯入帳單分析定時任務
@@ -32,7 +33,7 @@ app = Flask(__name__)
 # 建立模組實例
 reminder_bot = ReminderBot(todo_manager)
 
-# 使用增強版訊息路由器
+# 使用增強版訊息路由器（支援對話狀態管理）
 message_router = EnhancedMessageRouter(todo_manager, reminder_bot, None)
 
 # 背景服務管理
@@ -95,9 +96,10 @@ bg_services = BackgroundServices()
 def home():
     """首頁"""
     return f"""
-    <h1>LINE Todo Reminder Bot v3.3 - 智能帳單提醒完整整合版</h1>
+    <h1>LINE Todo Reminder Bot v3.4 - 智能對話狀態管理完整整合版</h1>
     <p>🇹🇼 當前台灣時間：{get_taiwan_time()}</p>
-    <p>🚀 完整模組化架構 + 智能帳單提醒整合！</p>
+    <p>🚀 完整模組化架構 + 智能對話狀態管理！</p>
+    <p>💭 支援智能確認詞處理和上下文記憶！</p>
     <p>💹 即時損益功能！</p>
     <p>🤖 Gemini AI 智能對話！</p>
     <p>📊 帳單自動分析與智能提醒整合！</p>
@@ -106,9 +108,28 @@ def home():
     <p>📅 下次生理期預測查詢！</p>
     <p>📊 健康檢查：<a href="/health">/health</a></p>
     
-    <h2>🆕 完整整合功能測試：</h2>
+    <h2>🆕 智能對話功能測試：</h2>
     <ul>
-        <li><a href="/test/bill-sync-integration"><strong>📊 測試帳單同步整合</strong></a> - 驗證帳單分析結果自動同步到提醒系統</li>
+        <li><strong>🗣️ 單一關鍵詞理解</strong> - 「買股票」、「生理期」、「帳單」等單詞觸發</li>
+        <li><strong>💭 對話狀態記憶</strong> - 5分鐘內記住對話狀態</li>
+        <li><strong>✅ 智能確認處理</strong> - 「是的」、「好」、「確定」自動執行建議動作</li>
+        <li><strong>❌ 智能拒絕處理</strong> - 「不要」、「取消」自動清除狀態</li>
+    </ul>
+    
+    <h2>🔥 體驗流程範例：</h2>
+    <ol>
+        <li>輸入「買股票」→ 系統詢問您想做什麼</li>
+        <li>回覆「是的」→ 系統顯示股票功能說明</li>
+        <li>輸入「生理期」→ 系統顯示生理期功能選項</li>
+        <li>回覆「好」→ 系統提供詳細說明</li>
+        <li>輸入「等一下要洗碗」→ 系統建議新增待辦</li>
+        <li>回覆「確定」→ 系統自動新增到待辦清單</li>
+    </ol>
+    
+    <h2>完整整合功能測試：</h2>
+    <ul>
+        <li><a href="/test/conversation-state"><strong>💭 測試對話狀態管理</strong></a> - 驗證狀態記憶功能</li>
+        <li><a href="/test/bill-sync-integration">📊 測試帳單同步整合</a></li>
         <li><a href="/test/enhanced-reminder">📈 測試增強版提醒訊息</a></li>
         <li><a href="/test/bill-amounts">💰 測試帳單金額查詢</a></li>
     </ul>
@@ -131,7 +152,7 @@ def home():
 
 @app.route('/health')
 def health():
-    """健康檢查端點 - 更新版"""
+    """健康檢查端點 - 更新版（包含對話狀態管理）"""
     taiwan_now = get_taiwan_datetime()
     
     try:
@@ -166,6 +187,24 @@ def health():
     # 獲取 Gemini AI 狀態
     gemini_status = message_router.gemini_analyzer.enabled
     
+    # 獲取對話狀態統計
+    try:
+        state_count = len(message_router.gemini_analyzer.conversation_state.user_states)
+        conversation_state_info = {
+            'active_conversations': state_count,
+            'state_management_enabled': True,
+            'state_timeout_minutes': 5,
+            'supported_confirmations': ['是的', '是', '好', '確定', '對', '要', 'yes', 'ok'],
+            'supported_rejections': ['不', '不要', '不是', '取消', '算了', 'no'],
+            'features': ['confirmation_handling', 'context_memory', 'smart_suggestions', 'auto_state_cleanup']
+        }
+    except Exception as e:
+        conversation_state_info = {
+            'active_conversations': 0,
+            'state_management_enabled': False,
+            'error': str(e)
+        }
+    
     # 獲取帳單分析定時任務狀態
     try:
         bill_scheduler_status = bg_services.bill_scheduler.get_status() if bg_services.bill_scheduler else {'scheduler_running': False}
@@ -186,7 +225,7 @@ def health():
         'taiwan_time': get_taiwan_time(),
         'taiwan_time_hhmm': get_taiwan_time_hhmm(),
         'server_timezone': str(taiwan_now.tzinfo),
-        'version': 'v3.3_smart_bill_reminder_integration',
+        'version': 'v3.4_smart_conversation_state_management',
         
         # 模組狀態
         'modules': {
@@ -208,8 +247,12 @@ def health():
             },
             'gemini_ai': {
                 'enabled': gemini_status,
-                'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification']
+                'conversation_memory': True,
+                'smart_confirmation': True,
+                'enhanced_keyword_detection': True,
+                'features': ['natural_language_understanding', 'smart_suggestions', 'intent_classification', 'state_management', 'confirmation_handling']
             },
+            'conversation_state_manager': conversation_state_info,
             'bill_scheduler': {
                 'scheduler_running': bill_scheduler_status.get('scheduler_running', False),
                 'analysis_time': bill_scheduler_status.get('analysis_time', '03:30'),
@@ -236,7 +279,60 @@ def health():
         }
     })
 
-# ===== 測試端點 =====
+# ===== 新增測試端點 =====
+
+@app.route('/test/conversation-state')
+def test_conversation_state():
+    """測試對話狀態管理功能"""
+    try:
+        state_manager = message_router.gemini_analyzer.conversation_state
+        test_user_id = "test_user_123"
+        
+        # 測試設定狀態
+        state_manager.set_pending_action(
+            test_user_id,
+            'add_todo',
+            {'todo_text': '洗碗', 'is_monthly': False},
+            ['新增到待辦清單', '設為每月固定事項']
+        )
+        
+        # 測試獲取狀態
+        pending = state_manager.get_pending_action(test_user_id)
+        
+        # 測試確認詞檢測
+        analyzer = message_router.gemini_analyzer
+        confirmation_tests = ['是的', '好', '確定', 'yes', 'ok']
+        rejection_tests = ['不要', '取消', 'no']
+        
+        results = {
+            'state_set_successfully': pending is not None,
+            'pending_action_details': pending,
+            'confirmation_detection': {
+                word: analyzer._is_confirmation_message(word) 
+                for word in confirmation_tests
+            },
+            'rejection_detection': {
+                word: analyzer._is_rejection_message(word) 
+                for word in rejection_tests
+            },
+            'active_states_count': len(state_manager.user_states),
+            'timestamp': get_taiwan_time()
+        }
+        
+        # 清理測試狀態
+        state_manager.clear_pending_action(test_user_id)
+        
+        return jsonify({
+            'success': True,
+            'data': results
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': get_taiwan_time()
+        })
 
 @app.route('/test/bill-amounts')
 def test_bill_amounts():
@@ -296,7 +392,7 @@ def test_enhanced_reminder():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """LINE Webhook 處理 - 統一入口（包含智能帳單提醒整合）"""
+    """LINE Webhook 處理 - 統一入口（支援智能對話狀態管理）"""
     try:
         data = request.get_json()
         
@@ -308,7 +404,7 @@ def webhook():
                 
                 print(f"📨 用戶訊息: {message_text} - {get_taiwan_time()}")
                 
-                # 🔥 在這裡直接攔截帳單查詢，不經過路由器
+                # 先檢查帳單查詢（精確匹配優先）
                 bill_keywords = ['帳單查詢', '帳單總覽', '卡費查詢', '緊急帳單', '逾期帳單', '帳單狀態']
                 bank_bill_patterns = ['永豐帳單查詢', '台新帳單查詢', '國泰帳單查詢', '星展帳單查詢', '匯豐帳單查詢', '玉山帳單查詢', '聯邦帳單查詢']
                 
@@ -317,7 +413,7 @@ def webhook():
                     print(f"🔀 路由到帳單查詢: {message_text}")
                     reply_text = handle_bill_query_command(message_text, user_id)
                 else:
-                    # 其他訊息才使用路由器
+                    # 其他訊息使用增強版路由器（支援對話狀態管理）
                     reply_text = enhanced_message_router(message_text, user_id)
                 
                 # 回覆訊息
@@ -482,44 +578,31 @@ def handle_bill_query_command(message_text, user_id):
         return f"❌ 查詢失敗，請稍後再試\n🕒 {get_taiwan_time()}"
 
 def is_todo_query(message_text):
-    """檢查是否為待辦事項相關查詢"""
-    todo_keywords = [
-        '查詢', '清單', '列表', '待辦', '任務', 'todo', 
-        '提醒', '事項', '計畫', '安排'
-    ]
+    """檢查是否為待辦事項相關查詢（更嚴格的判斷）"""
+    # 精確的待辦事項指令
+    exact_todo_commands = ['清單', '每月清單']
     
-    if message_text.strip() == '查詢':
+    if message_text in exact_todo_commands:
         return True
     
-    if any(keyword in message_text for keyword in todo_keywords):
-        # 排除股票相關查詢
-        stock_exclusions = [
-            '股票', '股價', '損益', '帳戶', '交易', '成本',
-            '總覽', '即時', '代號'
-        ]
-        
-        # 排除帳單相關查詢
-        bill_exclusions = [
-            '帳單', '卡費', '繳費', '永豐', '台新', '國泰', 
-            '星展', '匯豐', '玉山', '聯邦', '緊急帳單', '逾期帳單'
-        ]
-        
-        if not any(stock_word in message_text for stock_word in stock_exclusions) and \
-           not any(bill_word in message_text for bill_word in bill_exclusions):
-            return True
+    # 只有明確包含待辦關鍵詞且不是其他功能的才歸類為待辦
+    todo_keywords = ['新增', '刪除', '完成', '每月新增', '每月刪除']
+    
+    if any(message_text.startswith(keyword) for keyword in todo_keywords):
+        return True
     
     return False
 
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合所有功能模組（包含智能帳單提醒）"""
+    """增強版訊息路由器 - 整合對話狀態管理"""
     try:
         # 生理期追蹤指令檢查（包含下次預測）
         if is_period_command(message_text):
             print(f"🔀 路由到生理期追蹤模組: {message_text}")
             return handle_period_command(message_text, user_id)
         
-        # 優先檢查待辦事項相關的查詢
-        elif is_todo_query(message_text):
+        # 優先檢查待辦事項相關的查詢（但放寬限制）
+        elif is_todo_query(message_text) and message_text not in ['查詢']:  # 排除單純的「查詢」
             print(f"🔀 路由到待辦事項模組: {message_text}")
             return message_router.route_message(message_text, user_id)
         
@@ -555,8 +638,9 @@ def enhanced_message_router(message_text, user_id):
                 account_name = message_text[:-2]
                 return get_stock_summary(account_name)
         
-        # 其他指令使用原本的 Gemini AI 路由器
+        # 其他指令使用新的 Gemini AI 路由器（支援對話狀態）
         else:
+            print(f"🔀 路由到 AI 分析器（支援對話狀態）: {message_text}")
             return message_router.route_message(message_text, user_id)
     
     except Exception as e:
@@ -632,8 +716,8 @@ def handle_period_command(message_text, user_id):
         return f"❌ 處理失敗，請稍後再試\n🕒 {get_taiwan_time()}"
 
 def initialize_app():
-    """初始化應用程式（完整整合版）"""
-    print("🚀 LINE Todo Reminder Bot v3.3 - 智能帳單提醒完整整合版 啟動中...")
+    """初始化應用程式（完整整合版 - 支援對話狀態管理）"""
+    print("🚀 LINE Todo Reminder Bot v3.4 - 智能對話狀態管理完整整合版 啟動中...")
     print(f"🇹🇼 台灣時間：{get_taiwan_time()}")
     
     # 啟動背景服務
@@ -653,6 +737,10 @@ def initialize_app():
     print("💰 股票記帳模組：✅ 已載入")
     print("💹 即時損益功能：✅ 已啟用")
     print("🤖 Gemini AI 模組：✅ 已整合")
+    print("💭 對話狀態管理：✅ 新功能已啟用 - 支援智能確認與上下文記憶")
+    print("🗣️ 智能確認詞處理：✅ 已啟用 - 支援「是的」「好」「確定」等")
+    print("🧠 上下文記憶功能：✅ 已啟用 - 5分鐘內記住對話狀態")
+    print("🔍 增強關鍵詞檢測：✅ 已啟用 - 單一詞彙觸發功能")
     print("📊 帳單分析定時任務：✅ 已啟動")
     print("💳 智能帳單提醒整合：✅ 已完成 - 帳單分析結果自動同步到提醒系統")
     print("🔔 繳費截止智能提醒：✅ 已啟用 - 顯示具體金額和緊急程度")
@@ -661,13 +749,20 @@ def initialize_app():
     print("📅 下次生理期預測：✅ 新功能已加入")
     print("🔧 完整模組化架構：✅ 完全重構並整合")
     print("=" * 70)
-    print("🎉 智能帳單提醒系統初始化完成！")
-    print("💡 特色功能：")
-    print("   • 帳單分析完成後自動同步金額到提醒系統")
-    print("   • 每日提醒自動檢查緊急帳單並優先顯示")
-    print("   • 卡費相關待辦事項自動顯示具體金額和截止日期")
-    print("   • 根據緊急程度智能標記（逾期/今日截止/即將到期）")
-    print("   • 整合生理期追蹤，提供全方位健康提醒")
+    print("🎉 智能對話狀態管理系統初始化完成！")
+    print("💡 新功能體驗：")
+    print("   1. 輸入「買股票」→ 系統會詢問您想做什麼")
+    print("   2. 回覆「是的」→ 系統會執行建議的動作")
+    print("   3. 輸入「生理期」→ 系統會顯示生理期功能選項")
+    print("   4. 回覆「好」→ 系統會提供詳細說明")
+    print("   5. 輸入「等一下要洗碗」→ 系統會建議新增待辦")
+    print("   6. 回覆「確定」→ 系統會自動新增到待辦清單")
+    print("   7. 輸入「帳單」→ 系統會顯示帳單查詢選項")
+    print("   8. 回覆「要」→ 系統會執行帳單查詢")
+    print("🔥 支援確認詞：是的、好、確定、對、要、yes、ok")
+    print("❌ 支援拒絕詞：不、不要、取消、算了、no")
+    print("⏱️ 對話狀態保持 5 分鐘，超時自動清除")
+    print("🔍 關鍵詞智能檢測：買股票、生理期、帳單、等一下要...")
     print("🔍 帳單查詢功能：")
     print("   • 輸入「帳單查詢」查看所有帳單狀態")
     print("   • 輸入「緊急帳單」查看需要優先處理的帳單")
