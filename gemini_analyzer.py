@@ -7,6 +7,7 @@ import google.generativeai as genai
 import json
 import os
 import time
+import re
 from typing import Dict, Any, Optional
 from utils.time_utils import get_taiwan_time_hhmm, get_taiwan_time
 
@@ -14,8 +15,8 @@ class ConversationState:
     """對話狀態管理器"""
     
     def __init__(self):
-        self.user_states = {}  # {user_id: {action_type, details, options, timestamp}}
-        self.state_timeout = 300  # 5分鐘後自動清除狀態
+        self.user_states = {}
+        self.state_timeout = 300
     
     def set_pending_action(self, user_id: str, action_type: str, details: Dict[str, Any], options: list = None):
         """設定待確認的動作"""
@@ -33,7 +34,6 @@ class ConversationState:
             return None
         
         state = self.user_states[user_id]
-        # 檢查是否超時
         if time.time() - state['timestamp'] > self.state_timeout:
             self.clear_pending_action(user_id)
             return None
@@ -54,7 +54,6 @@ class GeminiAnalyzer:
     """Gemini API 訊息分析器（增強版）"""
     
     def __init__(self):
-        # 設定 Gemini API
         api_key = os.getenv('GEMINI_API_KEY')
         if api_key:
             try:
@@ -69,20 +68,17 @@ class GeminiAnalyzer:
             self.enabled = False
             print("⚠️ GEMINI_API_KEY 未設定，將使用傳統關鍵字匹配")
         
-        # 新增對話狀態管理
         self.conversation_state = ConversationState()
     
     def analyze_message(self, message_text: str, user_id: str = None) -> Dict[str, Any]:
         """分析用戶訊息，返回意圖和參數（支援對話狀態）"""
         
-        # 優先檢查是否為確認類訊息
         if user_id and self._is_confirmation_message(message_text):
             pending = self.conversation_state.get_pending_action(user_id)
             if pending:
                 print(f"✅ 檢測到確認訊息，處理待確認動作: {pending['action_type']}")
                 return self._handle_confirmation_response(message_text, pending, user_id)
         
-        # 檢查是否為拒絕類訊息
         if user_id and self._is_rejection_message(message_text):
             if self.conversation_state.has_pending_action(user_id):
                 self.conversation_state.clear_pending_action(user_id)
@@ -102,9 +98,7 @@ class GeminiAnalyzer:
             prompt = self._create_analysis_prompt(message_text)
             response = self.model.generate_content(prompt)
             
-            # 嘗試解析 JSON 回應
             try:
-                # 清理回應文字，移除可能的 markdown 格式
                 response_text = response.text.strip()
                 if response_text.startswith('```json'):
                     response_text = response_text[7:]
@@ -115,9 +109,7 @@ class GeminiAnalyzer:
                 print(f"🤖 Gemini 分析: 訊息='{message_text}' → 意圖={result.get('intent')} 置信度={result.get('confidence')}")
                 return result
             except json.JSONDecodeError as e:
-                # 如果 JSON 解析失敗，降級到關鍵字匹配
                 print(f"⚠️ Gemini JSON 解析失敗: {e}")
-                print(f"📄 原始回應: {response.text[:200]}")
                 return self._fallback_analysis(message_text, user_id)
                 
         except Exception as e:
@@ -147,10 +139,8 @@ class GeminiAnalyzer:
         action_type = pending_action['action_type']
         details = pending_action['details']
         
-        # 清除待確認狀態
         self.conversation_state.clear_pending_action(user_id)
         
-        # 根據動作類型返回執行指令
         if action_type == 'add_todo':
             return {
                 "intent": "todo",
@@ -203,7 +193,6 @@ class GeminiAnalyzer:
             }
         
         else:
-            # 預設處理
             return {
                 "intent": "system",
                 "action": "confirmation_received",
@@ -279,15 +268,13 @@ class GeminiAnalyzer:
         message_lower = message_text.lower().strip()
         print(f"🔍 降級分析: {message_text}")
         
-        # 單一關鍵詞檢測 - 提高置信度
-        
         # 股票相關 - 擴大關鍵詞範圍
         if any(keyword in message_text for keyword in ['買股票', '股票', '股價', '買賣', '投資', '台積電', '鴻海']):
             print("💰 匹配到股票關鍵字")
             return {
                 "intent": "stock",
                 "action": "stock_purchase_intent",
-                "confidence": 0.9,  # 提高置信度
+                "confidence": 0.9,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": None
             }
@@ -298,7 +285,7 @@ class GeminiAnalyzer:
             return {
                 "intent": "period",
                 "action": "period_query_intent",
-                "confidence": 0.9,  # 提高置信度
+                "confidence": 0.9,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": None
             }
@@ -309,7 +296,7 @@ class GeminiAnalyzer:
             return {
                 "intent": "bill",
                 "action": "bill_query_intent",
-                "confidence": 0.9,  # 提高置信度
+                "confidence": 0.9,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": None
             }
@@ -375,7 +362,7 @@ class GeminiAnalyzer:
             return {
                 "intent": "chat",
                 "action": "general_chat",
-                "confidence": 0.6,  # 提高置信度讓更多訊息被處理
+                "confidence": 0.6,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": self._suggest_command(message_text)
             }
@@ -404,16 +391,13 @@ class EnhancedMessageRouter:
         self.reminder_bot = reminder_bot
         self.gemini_analyzer = GeminiAnalyzer()
         
-        # 導入原有的路由邏輯需要的模組
         from stock_manager import (
             handle_stock_command, get_stock_summary, get_stock_transactions,
             get_stock_cost_analysis, get_stock_account_list, get_stock_help,
             is_stock_command, is_stock_query, get_stock_realtime_pnl
         )
         from utils.time_utils import is_valid_time_format
-        import re
         
-        # 保存引用以便使用
         self.handle_stock_command = handle_stock_command
         self.get_stock_summary = get_stock_summary
         self.get_stock_transactions = get_stock_transactions
@@ -424,27 +408,22 @@ class EnhancedMessageRouter:
         self.is_stock_query = is_stock_query
         self.get_stock_realtime_pnl = get_stock_realtime_pnl
         self.is_valid_time_format = is_valid_time_format
-        self.re = re
     
     def route_message(self, message_text, user_id):
         """智能路由訊息（增強版 - 支援對話狀態）"""
         message_text = message_text.strip()
         
-        # 設定用戶ID
         self.reminder_bot.set_user_id(user_id)
         
         print(f"🎯 路由分析開始: '{message_text}'")
         
-        # 使用 Gemini 分析訊息（傳入 user_id 支援對話狀態）
         analysis = self.gemini_analyzer.analyze_message(message_text, user_id)
         
-        # 先檢查是否為精確匹配的指令（高優先級）
         if self._is_exact_command(message_text):
             print("✅ 精確指令匹配，使用原邏輯")
             return self._handle_original_logic(message_text, user_id)
         
-        # 降低置信度閾值，讓更多訊息被 AI 處理
-        confidence_threshold = 0.4  # 從 0.5 降到 0.4
+        confidence_threshold = 0.4
         
         if analysis.get('confidence', 0) >= confidence_threshold:
             print(f"🤖 使用 AI 處理 (置信度: {analysis.get('confidence')})")
@@ -452,7 +431,6 @@ class EnhancedMessageRouter:
             if ai_response:
                 return ai_response
         
-        # 否則使用原有的精確匹配邏輯
         print("📋 使用原邏輯處理")
         return self._handle_original_logic(message_text, user_id)
     
@@ -462,11 +440,9 @@ class EnhancedMessageRouter:
         action = analysis.get('action')
         params = analysis.get('parameters', {})
         suggested_command = analysis.get('suggested_command')
-        extracted_info = params.get('extracted_info', '')
         
         print(f"🧠 AI 處理: intent={intent}, action={action}")
         
-        # 處理執行動作（確認後的動作）
         if action == 'execute_add_todo':
             todo_text = params.get('todo_text')
             is_monthly = params.get('is_monthly', False)
@@ -487,7 +463,6 @@ class EnhancedMessageRouter:
             return f"🩸 生理期追蹤功能：\n\n📝 記錄功能：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n\n🔍 查詢功能：\n• 生理期查詢 - 查看狀態\n• 下次生理期 - 預測下次時間\n\n⚙️ 設定功能：\n• 生理期設定 28天 提前5天"
         
         elif action == 'show_bill_query':
-            # 直接執行帳單查詢
             from main import handle_bill_query_command
             return handle_bill_query_command("帳單查詢", user_id)
         
@@ -497,9 +472,7 @@ class EnhancedMessageRouter:
         elif action == 'confirmation_received':
             return params.get('message', '好的，我來為您處理')
         
-        # 根據意圖提供智能建議並設定待確認狀態
         elif intent == 'stock' and action == 'stock_purchase_intent':
-            # 設定待確認狀態
             self.gemini_analyzer.conversation_state.set_pending_action(
                 user_id, 
                 'stock_purchase',
@@ -510,7 +483,6 @@ class EnhancedMessageRouter:
             return f"💰 您想要使用股票功能嗎？\n\n可以做什麼：\n📊 查看帳戶總覽\n💹 查詢股價\n📈 記錄股票交易\n📋 查看即時損益\n\n📝 回覆「是的」查看詳細說明\n🔍 或直接輸入「總覽」查看帳戶"
         
         elif intent == 'period' and action == 'period_query_intent':
-            # 設定待確認狀態
             self.gemini_analyzer.conversation_state.set_pending_action(
                 user_id,
                 'period_record', 
@@ -521,7 +493,6 @@ class EnhancedMessageRouter:
             return f"🩸 您想要使用生理期追蹤功能嗎？\n\n可以做什麼：\n📝 記錄生理期開始/結束\n🔍 查詢週期狀態\n📅 預測下次生理期\n⚙️ 設定提醒偏好\n\n📝 回覆「是的」查看詳細說明\n📊 或直接輸入「生理期查詢」查看狀態"
         
         elif intent == 'bill' and action == 'bill_query_intent':
-            # 設定待確認狀態  
             self.gemini_analyzer.conversation_state.set_pending_action(
                 user_id,
                 'bill_query',
@@ -534,7 +505,6 @@ class EnhancedMessageRouter:
         elif intent == 'reminder':
             if '明天' in message_text:
                 task = self._extract_task_from_reminder(message_text)
-                # 設定待確認狀態
                 self.gemini_analyzer.conversation_state.set_pending_action(
                     user_id,
                     'add_reminder',
@@ -544,8 +514,7 @@ class EnhancedMessageRouter:
                 
                 return f"⏰ 您想提醒明天的事情：{task}\n\n建議方式：\n📋 加入待辦清單\n⏰ 設定時間提醒（如：明天09:00{task}）\n\n📝 回覆「是的」加入待辦清單"
             
-            elif '/' in message_text:  # 日期格式
-                # 設定待確認狀態
+            elif '/' in message_text:
                 self.gemini_analyzer.conversation_state.set_pending_action(
                     user_id,
                     'add_reminder', 
@@ -557,7 +526,6 @@ class EnhancedMessageRouter:
             
             elif any(word in message_text for word in ['記得', '別忘了', '提醒我']):
                 task = self._extract_task_from_reminder(message_text)
-                # 設定待確認狀態
                 self.gemini_analyzer.conversation_state.set_pending_action(
                     user_id,
                     'add_reminder',
@@ -571,7 +539,6 @@ class EnhancedMessageRouter:
             if action == 'add_todo_suggestion':
                 task = self._extract_todo_content(message_text)
                 if task:
-                    # 設定待確認狀態
                     self.gemini_analyzer.conversation_state.set_pending_action(
                         user_id,
                         'add_todo',
@@ -584,7 +551,6 @@ class EnhancedMessageRouter:
                     return f"📝 這似乎是待辦事項！\n\n您說：{message_text}\n\n✅ 要新增到待辦清單嗎？\n回覆「是的」即可新增"
         
         elif intent == 'chat':
-            # 一般對話 - 提供友善回應和建議
             response = f"😊 您說：{message_text}\n🇹🇼 當前時間：{get_taiwan_time_hhmm()}"
             
             if suggested_command:
@@ -594,7 +560,7 @@ class EnhancedMessageRouter:
             
             return response
         
-        return None  # 如果沒有特殊處理，返回 None 讓原邏輯處理
+        return None
     
     def _extract_stock_name(self, message_text):
         """從訊息中提取股票名稱"""
@@ -616,13 +582,12 @@ class EnhancedMessageRouter:
     
     def _extract_todo_content(self, message_text):
         """從自然語言中提取待辦內容"""
-        # 更智能的提取
         if '等一下要' in message_text:
             return message_text.replace('等一下要', '').strip()
         elif '等等要' in message_text:
             return message_text.replace('等等要', '').strip()
         elif '要' in message_text and '/' in message_text:
-            return message_text  # 保持日期格式
+            return message_text
         
         for prefix in ['要做', '要', '需要', '記得', '別忘了', '記住']:
             if prefix in message_text:
@@ -630,59 +595,63 @@ class EnhancedMessageRouter:
                 if len(parts) > 1:
                     content = parts[1].strip()
                     return self._clean_task_text(content)
-        return message_text  # 如果沒找到特殊前綴，返回整句
+        return message_text
     
     def _clean_task_text(self, text):
         """清理任務文字"""
-        # 清理常見的結尾詞
         for suffix in ['啊', '哦', '喔', '！', '。', '的事', '這件事']:
             text = text.rstrip(suffix)
         return text.strip()
     
     def _is_exact_command(self, message_text):
-        """檢查是否為精確的現有指令（放寬限制）"""
+        """檢查是否為精確的現有指令"""
         exact_commands = [
             '總覽', '交易記錄', '帳戶列表', '股票幫助', '查詢時間', 
             '清單', '每月清單', '幫助', 'help', '說明', '測試',
             '即時股價查詢', '即時損益'
         ]
         
-        # 移除 '查詢' 讓它能被 AI 處理
         if message_text in exact_commands:
             return True
-            
-        # 檢查特定格式的指令
-        patterns = [
-            r'^新增 .+',
-            r'^刪除 \d+',  
-            r'^完成 \d+',
-            r'^每月新增 .+',
-            r'^每月刪除 \d+',
-            r'^早上時間 \d{1,2}:\d{2}',
-            r'^晚上時間 \d{1,2}:\d{2}',
-            r'^\d{1,2}:\d{2}.+',
-            r'.+(分鐘後|小時後|秒後)',
-            r'^股價查詢 .+',
-            r'^估價查詢 .+',
-            r'^設定代號 .+',
-            r'^成本查詢 .+ .+',
-            r'^交易記錄 .+',
-            r'^即時損益 .+',
-            r'^記錄生理期 .+',
-            r'^生理期結束 .+',
-            r'^帳單查詢,
-            r'^緊急帳單
+        
+        # 使用簡單的字串檢查避免正則表達式問題
+        simple_patterns = [
+            ('新增 ', message_text.startswith('新增 ')),
+            ('刪除 ', message_text.startswith('刪除 ')),
+            ('完成 ', message_text.startswith('完成 ')),
+            ('每月新增 ', message_text.startswith('每月新增 ')),
+            ('每月刪除 ', message_text.startswith('每月刪除 ')),
+            ('早上時間 ', message_text.startswith('早上時間 ')),
+            ('晚上時間 ', message_text.startswith('晚上時間 ')),
+            ('股價查詢 ', message_text.startswith('股價查詢 ')),
+            ('估價查詢 ', message_text.startswith('估價查詢 ')),
+            ('設定代號 ', message_text.startswith('設定代號 ')),
+            ('成本查詢 ', message_text.startswith('成本查詢 ')),
+            ('交易記錄 ', message_text.startswith('交易記錄 ')),
+            ('即時損益 ', message_text.startswith('即時損益 ')),
+            ('記錄生理期 ', message_text.startswith('記錄生理期 ')),
+            ('生理期結束 ', message_text.startswith('生理期結束 '))
         ]
         
-        for pattern in patterns:
-            if self.re.match(pattern, message_text):
+        for pattern_name, matches in simple_patterns:
+            if matches:
                 return True
-                
+        
+        # 檢查時間格式
+        time_pattern_match = re.match(r'^\d{1,2}:\d{2}.+', message_text)
+        if time_pattern_match:
+            return True
+        
+        # 檢查時間後綴
+        time_suffix_keywords = ['分鐘後', '小時後', '秒後']
+        if any(keyword in message_text for keyword in time_suffix_keywords):
+            return True
+        
         return self.is_stock_command(message_text)
     
     def _handle_original_logic(self, message_text, user_id):
-        """原有的精確匹配邏輯（完整版）"""
-        # === 股票功能路由 ===
+        """原有的精確匹配邏輯"""
+        
         if self.is_stock_command(message_text):
             return self.handle_stock_command(message_text)
         
@@ -740,7 +709,6 @@ class EnhancedMessageRouter:
         elif message_text == '股票幫助':
             return self.get_stock_help()
         
-        # === 提醒功能路由 ===
         elif message_text == '查詢時間':
             return self.reminder_bot.get_time_settings()
         
@@ -761,10 +729,9 @@ class EnhancedMessageRouter:
         elif any(keyword in message_text for keyword in ['分鐘後', '小時後', '秒後']):
             return self.reminder_bot.add_short_reminder(message_text, user_id)
         
-        elif self.re.match(r'^\d{1,2}:\d{2}.+', message_text):
+        elif re.match(r'^\d{1,2}:\d{2}.+', message_text):
             return self.reminder_bot.add_time_reminder(message_text, user_id)
         
-        # === 待辦事項功能路由 ===
         elif message_text.startswith('新增 '):
             todo_text = message_text[3:].strip()
             return self.todo_manager.add_todo(todo_text)
@@ -791,7 +758,6 @@ class EnhancedMessageRouter:
             index_str = message_text[5:].strip()
             return self.todo_manager.delete_monthly_todo(index_str)
         
-        # === 系統功能 ===
         elif message_text in ['幫助', 'help', '說明']:
             return self.get_help_message()
         
