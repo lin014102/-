@@ -1,15 +1,57 @@
 """
-gemini_analyzer.py - Gemini API 訊息分析器 (修正版)
+gemini_analyzer.py - Gemini API 訊息分析器 (增強版 - 支援對話狀態)
 整合到 LINE Todo Reminder Bot v3.0
+新增功能：對話狀態管理、智能確認詞處理、上下文記憶
 """
 import google.generativeai as genai
 import json
 import os
+import time
 from typing import Dict, Any, Optional
 from utils.time_utils import get_taiwan_time_hhmm, get_taiwan_time
 
+class ConversationState:
+    """對話狀態管理器"""
+    
+    def __init__(self):
+        self.user_states = {}  # {user_id: {action_type, details, options, timestamp}}
+        self.state_timeout = 300  # 5分鐘後自動清除狀態
+    
+    def set_pending_action(self, user_id: str, action_type: str, details: Dict[str, Any], options: list = None):
+        """設定待確認的動作"""
+        self.user_states[user_id] = {
+            'action_type': action_type,
+            'details': details,
+            'options': options or [],
+            'timestamp': time.time()
+        }
+        print(f"💭 設定用戶 {user_id} 的待確認動作: {action_type}")
+    
+    def get_pending_action(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """獲取待確認的動作"""
+        if user_id not in self.user_states:
+            return None
+        
+        state = self.user_states[user_id]
+        # 檢查是否超時
+        if time.time() - state['timestamp'] > self.state_timeout:
+            self.clear_pending_action(user_id)
+            return None
+        
+        return state
+    
+    def clear_pending_action(self, user_id: str):
+        """清除待確認的動作"""
+        if user_id in self.user_states:
+            print(f"🧹 清除用戶 {user_id} 的待確認動作")
+            del self.user_states[user_id]
+    
+    def has_pending_action(self, user_id: str) -> bool:
+        """檢查是否有待確認的動作"""
+        return self.get_pending_action(user_id) is not None
+
 class GeminiAnalyzer:
-    """Gemini API 訊息分析器"""
+    """Gemini API 訊息分析器（增強版）"""
     
     def __init__(self):
         # 設定 Gemini API
@@ -26,12 +68,35 @@ class GeminiAnalyzer:
         else:
             self.enabled = False
             print("⚠️ GEMINI_API_KEY 未設定，將使用傳統關鍵字匹配")
+        
+        # 新增對話狀態管理
+        self.conversation_state = ConversationState()
     
-    def analyze_message(self, message_text: str) -> Dict[str, Any]:
-        """分析用戶訊息，返回意圖和參數"""
+    def analyze_message(self, message_text: str, user_id: str = None) -> Dict[str, Any]:
+        """分析用戶訊息，返回意圖和參數（支援對話狀態）"""
+        
+        # 🔥 優先檢查是否為確認類訊息
+        if user_id and self._is_confirmation_message(message_text):
+            pending = self.conversation_state.get_pending_action(user_id)
+            if pending:
+                print(f"✅ 檢測到確認訊息，處理待確認動作: {pending['action_type']}")
+                return self._handle_confirmation_response(message_text, pending, user_id)
+        
+        # 🔥 檢查是否為拒絕類訊息
+        if user_id and self._is_rejection_message(message_text):
+            if self.conversation_state.has_pending_action(user_id):
+                self.conversation_state.clear_pending_action(user_id)
+                return {
+                    "intent": "system",
+                    "action": "cancel_action",
+                    "confidence": 1.0,
+                    "parameters": {"message": "好的，已取消操作"},
+                    "suggested_command": None
+                }
+        
         if not self.enabled:
             print("📝 Gemini 未啟用，使用降級分析")
-            return self._fallback_analysis(message_text)
+            return self._fallback_analysis(message_text, user_id)
         
         try:
             prompt = self._create_analysis_prompt(message_text)
@@ -53,14 +118,102 @@ class GeminiAnalyzer:
                 # 如果 JSON 解析失敗，降級到關鍵字匹配
                 print(f"⚠️ Gemini JSON 解析失敗: {e}")
                 print(f"📄 原始回應: {response.text[:200]}")
-                return self._fallback_analysis(message_text)
+                return self._fallback_analysis(message_text, user_id)
                 
         except Exception as e:
             print(f"❌ Gemini API 錯誤: {e}")
-            return self._fallback_analysis(message_text)
+            return self._fallback_analysis(message_text, user_id)
+    
+    def _is_confirmation_message(self, message_text: str) -> bool:
+        """檢查是否為確認類訊息"""
+        confirmation_words = [
+            '是的', '是', '好', '確定', '對', '要', 'yes', 'ok', 'y',
+            '沒錯', '正確', '可以', '同意', '執行', '開始', '繼續'
+        ]
+        message_lower = message_text.lower().strip()
+        return message_lower in confirmation_words or any(word in message_lower for word in confirmation_words)
+    
+    def _is_rejection_message(self, message_text: str) -> bool:
+        """檢查是否為拒絕類訊息"""
+        rejection_words = [
+            '不', '不要', '不是', '取消', '算了', 'no', 'n',
+            '不用', '不對', '錯了', '停止', '結束'
+        ]
+        message_lower = message_text.lower().strip()
+        return message_lower in rejection_words or any(word in message_lower for word in rejection_words)
+    
+    def _handle_confirmation_response(self, message_text: str, pending_action: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+        """處理確認回應"""
+        action_type = pending_action['action_type']
+        details = pending_action['details']
+        
+        # 清除待確認狀態
+        self.conversation_state.clear_pending_action(user_id)
+        
+        # 根據動作類型返回執行指令
+        if action_type == 'add_todo':
+            return {
+                "intent": "todo",
+                "action": "execute_add_todo",
+                "confidence": 1.0,
+                "parameters": {
+                    "todo_text": details['todo_text'],
+                    "is_monthly": details.get('is_monthly', False)
+                },
+                "suggested_command": f"新增 {details['todo_text']}"
+            }
+        
+        elif action_type == 'add_reminder':
+            return {
+                "intent": "reminder",
+                "action": "execute_add_reminder", 
+                "confidence": 1.0,
+                "parameters": {
+                    "reminder_text": details['reminder_text'],
+                    "reminder_type": details.get('reminder_type', 'time')
+                },
+                "suggested_command": details['reminder_text']
+            }
+        
+        elif action_type == 'stock_purchase':
+            return {
+                "intent": "stock",
+                "action": "show_stock_purchase_help",
+                "confidence": 1.0,
+                "parameters": {"show_help": True},
+                "suggested_command": None
+            }
+        
+        elif action_type == 'period_record':
+            return {
+                "intent": "period",
+                "action": "show_period_help",
+                "confidence": 1.0,
+                "parameters": {"show_help": True},
+                "suggested_command": None
+            }
+        
+        elif action_type == 'bill_query':
+            return {
+                "intent": "bill",
+                "action": "show_bill_query",
+                "confidence": 1.0,
+                "parameters": {"show_overview": True},
+                "suggested_command": "帳單查詢"
+            }
+        
+        else:
+            # 預設處理
+            return {
+                "intent": "system",
+                "action": "confirmation_received",
+                "confidence": 1.0,
+                "parameters": {"message": "好的，我來為您處理"},
+                "suggested_command": None
+            }
     
     def _create_analysis_prompt(self, message_text: str) -> str:
-        """建立分析提示詞"""
+        """建立分析提示詞（增強版）"""
         return f"""
 請分析以下用戶訊息，並回傳 JSON 格式的結果。
 
@@ -81,18 +234,29 @@ class GeminiAnalyzer:
 3. 股票記帳 (stock)：
    - 股票交易：「爸爸買 2330 100 50000 0820」
    - 股票查詢：「我想買台積電」、「台積電多少錢」
+   - 關鍵詞：「買股票」、「股票」、「股價」
 
-4. 系統功能 (system)：幫助、測試等
+4. 生理期追蹤 (period)：
+   - 關鍵詞：「生理期」、「月經」、「經期」、「週期」
+   - 記錄：「記錄生理期」、「生理期開始」
+   - 查詢：「生理期查詢」、「下次生理期」
 
-分析規則：
+5. 帳單查詢 (bill)：
+   - 關鍵詞：「帳單」、「卡費」、「繳費」
+   - 查詢：「帳單查詢」、「緊急帳單」
+
+6. 系統功能 (system)：幫助、測試等
+
+🔥 重要分析規則：
+- 單一關鍵詞也要識別：「買股票」→ stock, 「生理期」→ period, 「帳單」→ bill
 - 如果包含「等一下」「要」「記得」「別忘了」→ 很可能是待辦事項
 - 如果包含「明天」「後天」「下週」→ 很可能是提醒功能
 - 如果包含日期格式「8/28」「12/25」→ 很可能是提醒功能
-- 如果包含股票相關詞彙→ 股票功能
+- 提高單一關鍵詞的置信度，不要因為訊息簡短就降低置信度
 
 請回傳 JSON 格式：
 {{
-    "intent": "todo|reminder|stock|system|chat",
+    "intent": "todo|reminder|stock|period|bill|system|chat",
     "action": "具體動作描述",
     "confidence": 0.0-1.0,
     "parameters": {{
@@ -102,21 +266,56 @@ class GeminiAnalyzer:
 }}
 
 範例分析：
+- "買股票" → {{"intent": "stock", "confidence": 0.9, "action": "stock_purchase_intent"}}
+- "生理期" → {{"intent": "period", "confidence": 0.9, "action": "period_query_intent"}}  
+- "帳單" → {{"intent": "bill", "confidence": 0.9, "action": "bill_query_intent"}}
 - "等一下要洗碗" → {{"intent": "todo", "confidence": 0.85, "suggested_command": "新增 洗碗"}}
-- "8/28要開會" → {{"intent": "reminder", "confidence": 0.9, "suggested_command": "新增 8/28開會"}}
-- "記得明天放假" → {{"intent": "reminder", "confidence": 0.9}}
-- "我想買台積電" → {{"intent": "stock", "confidence": 0.8}}
 
 請只回傳純 JSON，不要包含任何其他文字或 markdown 格式。
 """
     
-    def _fallback_analysis(self, message_text: str) -> Dict[str, Any]:
-        """降級分析（關鍵字匹配）"""
+    def _fallback_analysis(self, message_text: str, user_id: str = None) -> Dict[str, Any]:
+        """降級分析（關鍵字匹配）- 增強版"""
         message_lower = message_text.lower().strip()
         print(f"🔍 降級分析: {message_text}")
         
+        # 🔥 單一關鍵詞檢測 - 提高置信度
+        
+        # 股票相關 - 擴大關鍵詞範圍
+        if any(keyword in message_text for keyword in ['買股票', '股票', '股價', '買賣', '投資', '台積電', '鴻海']):
+            print("💰 匹配到股票關鍵字")
+            return {
+                "intent": "stock",
+                "action": "stock_purchase_intent",
+                "confidence": 0.9,  # 提高置信度
+                "parameters": {"extracted_info": message_text},
+                "suggested_command": None
+            }
+        
+        # 生理期相關 - 新增檢測
+        elif any(keyword in message_text for keyword in ['生理期', '月經', '經期', '週期', 'MC']):
+            print("🩸 匹配到生理期關鍵字")
+            return {
+                "intent": "period",
+                "action": "period_query_intent",
+                "confidence": 0.9,  # 提高置信度
+                "parameters": {"extracted_info": message_text},
+                "suggested_command": None
+            }
+        
+        # 帳單相關 - 新增檢測
+        elif any(keyword in message_text for keyword in ['帳單', '卡費', '繳費', '信用卡', '銀行']):
+            print("💳 匹配到帳單關鍵字")
+            return {
+                "intent": "bill",
+                "action": "bill_query_intent",
+                "confidence": 0.9,  # 提高置信度
+                "parameters": {"extracted_info": message_text},
+                "suggested_command": None
+            }
+        
         # 待辦事項相關 - 優先檢查
-        if any(keyword in message_text for keyword in ['等一下要', '等等要', '記得', '別忘了', '要做', '待辦']):
+        elif any(keyword in message_text for keyword in ['等一下要', '等等要', '記得', '別忘了', '要做', '待辦']):
             print("📝 匹配到待辦關鍵字")
             return {
                 "intent": "todo",
@@ -143,17 +342,6 @@ class GeminiAnalyzer:
             return {
                 "intent": "reminder", 
                 "action": "add_reminder",
-                "confidence": 0.8,
-                "parameters": {"extracted_info": message_text},
-                "suggested_command": None
-            }
-        
-        # 股票相關
-        elif any(keyword in message_text for keyword in ['買', '賣', '股票', '股價', '損益', '入帳', '總覽', '台積電', '鴻海']):
-            print("💰 匹配到股票關鍵字")
-            return {
-                "intent": "stock",
-                "action": "stock_command",
                 "confidence": 0.8,
                 "parameters": {"extracted_info": message_text},
                 "suggested_command": None
@@ -209,7 +397,7 @@ class GeminiAnalyzer:
 
 
 class EnhancedMessageRouter:
-    """增強版訊息路由器 - 整合 Gemini AI"""
+    """增強版訊息路由器 - 整合對話狀態管理"""
     
     def __init__(self, todo_mgr, reminder_bot, stock_mgr):
         self.todo_manager = todo_mgr
@@ -239,7 +427,7 @@ class EnhancedMessageRouter:
         self.re = re
     
     def route_message(self, message_text, user_id):
-        """智能路由訊息"""
+        """智能路由訊息（增強版 - 支援對話狀態）"""
         message_text = message_text.strip()
         
         # 設定用戶ID
@@ -247,8 +435,8 @@ class EnhancedMessageRouter:
         
         print(f"🎯 路由分析開始: '{message_text}'")
         
-        # 🚀 使用 Gemini 分析訊息
-        analysis = self.gemini_analyzer.analyze_message(message_text)
+        # 🚀 使用 Gemini 分析訊息（傳入 user_id 支援對話狀態）
+        analysis = self.gemini_analyzer.analyze_message(message_text, user_id)
         
         # 先檢查是否為精確匹配的指令（高優先級）
         if self._is_exact_command(message_text):
@@ -256,7 +444,7 @@ class EnhancedMessageRouter:
             return self._handle_original_logic(message_text, user_id)
         
         # 🔥 降低置信度閾值，讓更多訊息被 AI 處理
-        confidence_threshold = 0.5  # 從 0.7 降到 0.5
+        confidence_threshold = 0.4  # 從 0.5 降到 0.4
         
         if analysis.get('confidence', 0) >= confidence_threshold:
             print(f"🤖 使用 AI 處理 (置信度: {analysis.get('confidence')})")
@@ -268,45 +456,8 @@ class EnhancedMessageRouter:
         print("📋 使用原邏輯處理")
         return self._handle_original_logic(message_text, user_id)
     
-    def _is_exact_command(self, message_text):
-        """檢查是否為精確的現有指令"""
-        exact_commands = [
-            '總覽', '交易記錄', '帳戶列表', '股票幫助', '查詢時間', 
-            '查詢', '清單', '每月清單', '幫助', 'help', '說明', '測試',
-            '即時股價查詢', '即時損益'
-        ]
-        
-        if message_text in exact_commands:
-            return True
-            
-        # 檢查特定格式的指令
-        patterns = [
-            r'^新增 .+',
-            r'^刪除 \d+',  
-            r'^完成 \d+',
-            r'^每月新增 .+',
-            r'^每月刪除 \d+',
-            r'^早上時間 \d{1,2}:\d{2}',
-            r'^晚上時間 \d{1,2}:\d{2}',
-            r'^\d{1,2}:\d{2}.+',
-            r'.+(分鐘後|小時後|秒後)',
-            r'^.+查詢$',
-            r'^股價查詢 .+',
-            r'^估價查詢 .+',
-            r'^設定代號 .+',
-            r'^成本查詢 .+ .+',
-            r'^交易記錄 .+',
-            r'^即時損益 .+'
-        ]
-        
-        for pattern in patterns:
-            if self.re.match(pattern, message_text):
-                return True
-                
-        return self.is_stock_command(message_text)
-    
     def _handle_ai_analyzed_message(self, analysis, message_text, user_id):
-        """處理 AI 分析後的訊息"""
+        """處理 AI 分析後的訊息（增強版 - 支援對話狀態）"""
         intent = analysis.get('intent')
         action = analysis.get('action')
         params = analysis.get('parameters', {})
@@ -315,37 +466,122 @@ class EnhancedMessageRouter:
         
         print(f"🧠 AI 處理: intent={intent}, action={action}")
         
-        # 根據意圖提供智能建議
-        if intent == 'stock':
-            if '買' in message_text or '購買' in message_text:
-                return f"💰 您想要買股票嗎？\n\n請使用完整格式：\n📝 帳戶名 買 股票代號 張數 金額 日期\n💡 例如：爸爸 買 2330 100 50000 0820\n\n❓ 需要查詢股價嗎？\n🔍 輸入「股價查詢 台積電」\n\n📚 輸入「股票幫助」查看完整說明"
+        # 🔥 處理執行動作（確認後的動作）
+        if action == 'execute_add_todo':
+            todo_text = params.get('todo_text')
+            is_monthly = params.get('is_monthly', False)
             
-            elif any(word in message_text for word in ['股價', '多少錢', '價格']):
-                stock_name = self._extract_stock_name(message_text)
-                if stock_name:
-                    return f"💹 您想查詢 {stock_name} 的股價嗎？\n\n請使用：\n🔍 股價查詢 {stock_name}\n📊 估價查詢 {stock_name}\n\n💡 記得先設定代號：\n⚙️ 設定代號 {stock_name} [股票代號]"
-                else:
-                    return "💹 股價查詢功能：\n\n使用方式：\n• 股價查詢 台積電\n• 估價查詢 鴻海\n• 股價 中華電\n\n💡 記得先用「設定代號 股票名稱 代號」設定股票代號"
+            if is_monthly:
+                return self.todo_manager.add_monthly_todo(todo_text)
+            else:
+                return self.todo_manager.add_todo(todo_text)
+        
+        elif action == 'execute_add_reminder':
+            reminder_text = params.get('reminder_text')
+            return self.reminder_bot.add_time_reminder(reminder_text, user_id)
+        
+        elif action == 'show_stock_purchase_help':
+            return f"💰 股票交易說明：\n\n📝 基本格式：\n帳戶名 買 股票代號 張數 金額 日期\n💡 例如：爸爸 買 2330 100 50000 0820\n\n🔍 其他功能：\n• 總覽 - 查看所有帳戶\n• 股價查詢 台積電\n• 即時損益\n\n📚 輸入「股票幫助」查看完整說明"
+        
+        elif action == 'show_period_help':
+            return f"🩸 生理期追蹤功能：\n\n📝 記錄功能：\n• 記錄生理期 YYYY/MM/DD\n• 生理期結束 YYYY/MM/DD\n\n🔍 查詢功能：\n• 生理期查詢 - 查看狀態\n• 下次生理期 - 預測下次時間\n\n⚙️ 設定功能：\n• 生理期設定 28天 提前5天"
+        
+        elif action == 'show_bill_query':
+            # 直接執行帳單查詢
+            from main import handle_bill_query_command
+            return handle_bill_query_command("帳單查詢", user_id)
+        
+        elif action == 'cancel_action':
+            return params.get('message', '好的，已取消操作')
+        
+        elif action == 'confirmation_received':
+            return params.get('message', '好的，我來為您處理')
+        
+        # 🔥 根據意圖提供智能建議並設定待確認狀態
+        elif intent == 'stock' and action == 'stock_purchase_intent':
+            # 設定待確認狀態
+            self.gemini_analyzer.conversation_state.set_pending_action(
+                user_id, 
+                'stock_purchase',
+                {'intent': 'stock_help'},
+                ['查看股票功能說明', '查詢股價', '查看帳戶總覽']
+            )
+            
+            return f"💰 您想要使用股票功能嗎？\n\n可以做什麼：\n📊 查看帳戶總覽\n💹 查詢股價\n📈 記錄股票交易\n📋 查看即時損益\n\n📝 回覆「是的」查看詳細說明\n🔍 或直接輸入「總覽」查看帳戶"
+        
+        elif intent == 'period' and action == 'period_query_intent':
+            # 設定待確認狀態
+            self.gemini_analyzer.conversation_state.set_pending_action(
+                user_id,
+                'period_record', 
+                {'intent': 'period_help'},
+                ['查看生理期功能說明', '記錄生理期', '查詢狀態']
+            )
+            
+            return f"🩸 您想要使用生理期追蹤功能嗎？\n\n可以做什麼：\n📝 記錄生理期開始/結束\n🔍 查詢週期狀態\n📅 預測下次生理期\n⚙️ 設定提醒偏好\n\n📝 回覆「是的」查看詳細說明\n📊 或直接輸入「生理期查詢」查看狀態"
+        
+        elif intent == 'bill' and action == 'bill_query_intent':
+            # 設定待確認狀態  
+            self.gemini_analyzer.conversation_state.set_pending_action(
+                user_id,
+                'bill_query',
+                {'intent': 'bill_overview'},
+                ['查看帳單總覽', '查看緊急帳單', '查看特定銀行']
+            )
+            
+            return f"💳 您想要查詢帳單嗎？\n\n可以查詢：\n📊 所有銀行帳單總覽\n🚨 緊急/即將到期帳單\n🏦 特定銀行帳單狀態\n\n📝 回覆「是的」查看帳單總覽\n🔍 或直接輸入「帳單查詢」"
         
         elif intent == 'reminder':
             if '明天' in message_text:
                 task = self._extract_task_from_reminder(message_text)
-                return f"⏰ 明天的提醒功能開發中！\n\n您想提醒：{task}\n\n🔧 目前支援：\n• 30分鐘後{task}\n• 19:00{task}（當日時間提醒）\n• 新增 明天{task}（加入待辦清單）"
+                # 設定待確認狀態
+                self.gemini_analyzer.conversation_state.set_pending_action(
+                    user_id,
+                    'add_reminder',
+                    {'reminder_text': f"明天{task}", 'reminder_type': 'todo'},
+                    ['加入待辦清單', '設定時間提醒']
+                )
+                
+                return f"⏰ 您想提醒明天的事情：{task}\n\n建議方式：\n📋 加入待辦清單\n⏰ 設定時間提醒（如：明天09:00{task}）\n\n📝 回覆「是的」加入待辦清單"
             
             elif '/' in message_text:  # 日期格式
-                return f"📅 您想設定日期提醒嗎？\n\n目前的替代方案：\n📋 新增 {message_text}（加入待辦清單）\n⏰ 或使用當日時間提醒：19:00{message_text}"
+                # 設定待確認狀態
+                self.gemini_analyzer.conversation_state.set_pending_action(
+                    user_id,
+                    'add_reminder', 
+                    {'reminder_text': message_text, 'reminder_type': 'todo'},
+                    ['加入待辦清單', '設定時間提醒']
+                )
+                
+                return f"📅 您想設定日期提醒：{message_text}\n\n建議方式：\n📋 加入待辦清單\n⏰ 設定當日時間提醒\n\n📝 回覆「是的」加入待辦清單"
             
             elif any(word in message_text for word in ['記得', '別忘了', '提醒我']):
                 task = self._extract_task_from_reminder(message_text)
-                return f"📝 您想設定提醒：{task}\n\n請選擇方式：\n⏰ 30分鐘後{task}\n🕐 19:00{task}\n📋 新增 {task}（加入待辦清單）"
+                # 設定待確認狀態
+                self.gemini_analyzer.conversation_state.set_pending_action(
+                    user_id,
+                    'add_reminder',
+                    {'reminder_text': task, 'reminder_type': 'time'},
+                    ['設定時間提醒', '加入待辦清單']
+                )
+                
+                return f"📝 您想設定提醒：{task}\n\n建議方式：\n⏰ 30分鐘後{task}\n🕐 19:00{task}\n📋 新增到待辦清單\n\n📝 回覆「是的」設定時間提醒"
         
         elif intent == 'todo':
             if action == 'add_todo_suggestion':
                 task = self._extract_todo_content(message_text)
                 if task:
-                    return f"📝 您想新增待辦事項嗎？\n\n建議內容：{task}\n\n✅ 請回覆「新增 {task}」確認新增\n📅 或回覆「每月新增 {task}」設為每月固定事項"
+                    # 設定待確認狀態
+                    self.gemini_analyzer.conversation_state.set_pending_action(
+                        user_id,
+                        'add_todo',
+                        {'todo_text': task, 'is_monthly': False},
+                        ['新增到待辦清單', '設為每月固定事項']
+                    )
+                    
+                    return f"📝 您想新增待辦事項：{task}\n\n📝 回覆「是的」確認新增\n📅 或回覆「每月」設為每月固定事項"
                 else:
-                    return f"📝 這似乎是待辦事項！\n\n您說：{message_text}\n\n✅ 要新增到待辦清單嗎？\n回覆「新增 {message_text}」即可新增"
+                    return f"📝 這似乎是待辦事項！\n\n您說：{message_text}\n\n✅ 要新增到待辦清單嗎？\n回覆「是的」即可新增"
         
         elif intent == 'chat':
             # 一般對話 - 提供友善回應和建議
@@ -403,10 +639,49 @@ class EnhancedMessageRouter:
             text = text.rstrip(suffix)
         return text.strip()
     
-    def _handle_original_logic(self, message_text, user_id):
-        """原有的精確匹配邏輯"""
-        # 這裡包含你原本 MessageRouter 的所有邏輯
+    def _is_exact_command(self, message_text):
+        """檢查是否為精確的現有指令（放寬限制）"""
+        exact_commands = [
+            '總覽', '交易記錄', '帳戶列表', '股票幫助', '查詢時間', 
+            '清單', '每月清單', '幫助', 'help', '說明', '測試',
+            '即時股價查詢', '即時損益'
+        ]
         
+        # 移除 '查詢' 讓它能被 AI 處理
+        if message_text in exact_commands:
+            return True
+            
+        # 檢查特定格式的指令
+        patterns = [
+            r'^新增 .+',
+            r'^刪除 \d+',  
+            r'^完成 \d+',
+            r'^每月新增 .+',
+            r'^每月刪除 \d+',
+            r'^早上時間 \d{1,2}:\d{2}',
+            r'^晚上時間 \d{1,2}:\d{2}',
+            r'^\d{1,2}:\d{2}.+',
+            r'.+(分鐘後|小時後|秒後)',
+            r'^股價查詢 .+',
+            r'^估價查詢 .+',
+            r'^設定代號 .+',
+            r'^成本查詢 .+ .+',
+            r'^交易記錄 .+',
+            r'^即時損益 .+',
+            r'^記錄生理期 .+',
+            r'^生理期結束 .+',
+            r'^帳單查詢,
+            r'^緊急帳單
+        ]
+        
+        for pattern in patterns:
+            if self.re.match(pattern, message_text):
+                return True
+                
+        return self.is_stock_command(message_text)
+    
+    def _handle_original_logic(self, message_text, user_id):
+        """原有的精確匹配邏輯（完整版）"""
         # === 股票功能路由 ===
         if self.is_stock_command(message_text):
             return self.handle_stock_command(message_text)
@@ -556,18 +831,33 @@ class EnhancedMessageRouter:
 - 設定代號 台積電 2330 - 設定股票代號
 - 股票幫助 - 股票功能詳細說明
 
+💳 帳單查詢：
+- 帳單查詢 - 查看所有帳單
+- 緊急帳單 - 查看即將到期帳單
+- [銀行名稱]帳單查詢 - 查看特定銀行
+
+🩸 生理期追蹤：
+- 記錄生理期 YYYY/MM/DD - 記錄開始
+- 生理期結束 YYYY/MM/DD - 記錄結束
+- 生理期查詢 - 查看狀態
+- 下次生理期 - 預測下次時間
+
 🤖 AI 智能功能：
 - 自然語言理解，例如：
-- 「我想買台積電」
-- 「記得明天開會」
-- 「等一下要洗碗」
-- 「8/28要開會」
+- 「買股票」→ 顯示股票功能
+- 「生理期」→ 顯示生理期功能
+- 「帳單」→ 顯示帳單查詢
+- 「記得明天開會」→ 智能提醒建議
+- 「等一下要洗碗」→ 待辦事項建議
+- 確認詞：「是的」「好」「確定」
 
-🚀 v3.0 + AI：模組化架構 + 智能對話！"""
+🚀 v3.0 + AI：模組化架構 + 智能對話 + 狀態記憶！"""
     
     def get_system_status(self):
         """獲取系統狀態"""
         ai_status = "✅ 已啟用" if self.gemini_analyzer.enabled else "❌ 未啟用"
+        state_count = len(self.gemini_analyzer.conversation_state.user_states)
+        
         return f"""✅ 系統狀態檢查
 🇹🇼 當前台灣時間：{get_taiwan_time()}
 
@@ -577,9 +867,10 @@ class EnhancedMessageRouter:
 💰 股票記帳模組：✅ 已載入
 💹 即時損益功能：✅ 已啟用
 🤖 Gemini AI：{ai_status}
+💭 對話狀態管理：✅ 已啟用 (活躍用戶: {state_count})
 
-🔧 架構：完全模組化 + AI
-🚀 版本：v3.0 + Gemini
+🔧 架構：完全模組化 + AI + 智能對話
+🚀 版本：v3.0 + Gemini + State Management
 
 💡 輸入「幫助」查看功能列表"""
     
@@ -593,6 +884,7 @@ class EnhancedMessageRouter:
 💹 輸入「即時損益」查看股票損益
 
 🤖 提示：您可以用自然語言跟我對話！
-例如：「我想買台積電」、「記得明天開會」、「等一下要洗碗」"""
+例如：「買股票」、「生理期」、「帳單」、「記得明天開會」、「等一下要洗碗」
+確認時回覆：「是的」「好」「確定」"""
         
         return basic_response
