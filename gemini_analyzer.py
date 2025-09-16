@@ -75,14 +75,14 @@ class GeminiAnalyzer:
     def analyze_message(self, message_text: str, user_id: str = None) -> Dict[str, Any]:
         """分析用戶訊息，返回意圖和參數（支援對話狀態）"""
         
-        # 🔥 優先檢查是否為確認類訊息
+        # 優先檢查是否為確認類訊息
         if user_id and self._is_confirmation_message(message_text):
             pending = self.conversation_state.get_pending_action(user_id)
             if pending:
                 print(f"✅ 檢測到確認訊息，處理待確認動作: {pending['action_type']}")
                 return self._handle_confirmation_response(message_text, pending, user_id)
         
-        # 🔥 檢查是否為拒絕類訊息
+        # 檢查是否為拒絕類訊息
         if user_id and self._is_rejection_message(message_text):
             if self.conversation_state.has_pending_action(user_id):
                 self.conversation_state.clear_pending_action(user_id)
@@ -247,7 +247,7 @@ class GeminiAnalyzer:
 
 6. 系統功能 (system)：幫助、測試等
 
-🔥 重要分析規則：
+重要分析規則：
 - 單一關鍵詞也要識別：「買股票」→ stock, 「生理期」→ period, 「帳單」→ bill
 - 如果包含「等一下」「要」「記得」「別忘了」→ 很可能是待辦事項
 - 如果包含「明天」「後天」「下週」→ 很可能是提醒功能
@@ -279,7 +279,7 @@ class GeminiAnalyzer:
         message_lower = message_text.lower().strip()
         print(f"🔍 降級分析: {message_text}")
         
-        # 🔥 單一關鍵詞檢測 - 提高置信度
+        # 單一關鍵詞檢測 - 提高置信度
         
         # 股票相關 - 擴大關鍵詞範圍
         if any(keyword in message_text for keyword in ['買股票', '股票', '股價', '買賣', '投資', '台積電', '鴻海']):
@@ -435,7 +435,7 @@ class EnhancedMessageRouter:
         
         print(f"🎯 路由分析開始: '{message_text}'")
         
-        # 🚀 使用 Gemini 分析訊息（傳入 user_id 支援對話狀態）
+        # 使用 Gemini 分析訊息（傳入 user_id 支援對話狀態）
         analysis = self.gemini_analyzer.analyze_message(message_text, user_id)
         
         # 先檢查是否為精確匹配的指令（高優先級）
@@ -443,7 +443,7 @@ class EnhancedMessageRouter:
             print("✅ 精確指令匹配，使用原邏輯")
             return self._handle_original_logic(message_text, user_id)
         
-        # 🔥 降低置信度閾值，讓更多訊息被 AI 處理
+        # 降低置信度閾值，讓更多訊息被 AI 處理
         confidence_threshold = 0.4  # 從 0.5 降到 0.4
         
         if analysis.get('confidence', 0) >= confidence_threshold:
@@ -466,7 +466,7 @@ class EnhancedMessageRouter:
         
         print(f"🧠 AI 處理: intent={intent}, action={action}")
         
-        # 🔥 處理執行動作（確認後的動作）
+        # 處理執行動作（確認後的動作）
         if action == 'execute_add_todo':
             todo_text = params.get('todo_text')
             is_monthly = params.get('is_monthly', False)
@@ -497,7 +497,7 @@ class EnhancedMessageRouter:
         elif action == 'confirmation_received':
             return params.get('message', '好的，我來為您處理')
         
-        # 🔥 根據意圖提供智能建議並設定待確認狀態
+        # 根據意圖提供智能建議並設定待確認狀態
         elif intent == 'stock' and action == 'stock_purchase_intent':
             # 設定待確認狀態
             self.gemini_analyzer.conversation_state.set_pending_action(
