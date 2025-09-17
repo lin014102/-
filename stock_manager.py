@@ -597,16 +597,27 @@ class StockManager:
             return {'type': 'holding', 'account': account.strip(), 'stock_name': stock_name.strip(), 
                    'stock_code': stock_code.strip(), 'quantity': quantity, 'total_cost': int(total_cost)}
         
-        # 完整格式（包含代號）- 支援張/零股
-        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(\w+)\s+(.+?)\s+(\d+)\s+(\d{4})', message_text):
-            account, action, stock_name, stock_code, quantity_str, amount, date = match.groups()
-            quantity = self.parse_quantity_smart(quantity_str)
-            formatted_date = self.format_date(date)
-            return {'type': action, 'account': account.strip(), 'stock_name': stock_name.strip(), 
-                   'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': formatted_date}
+        # 完整格式（包含代號）- 優先匹配更具體的格式
+        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(.+?)\s+(\w+)\s+(\d+)\s+(\d{4})', message_text):
+            account, action, stock_name, quantity_str, stock_code, amount, date = match.groups()
+            
+            # 判斷哪個是股票代號 - 股票代號通常是4位數字或包含字母
+            if stock_code.isdigit() and len(stock_code) == 4:
+                # stock_code 位置是股票代號
+                quantity = self.parse_quantity_smart(quantity_str)
+                formatted_date = self.format_date(date)
+                return {'type': action, 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                       'stock_code': stock_code.strip(), 'quantity': quantity, 'amount': int(amount), 'date': formatted_date}
+            elif quantity_str.isdigit() and len(quantity_str) == 4:
+                # quantity_str 位置是股票代號，stock_code 位置是數量
+                quantity = self.parse_quantity_smart(stock_code)  # 實際上是數量
+                actual_stock_code = quantity_str  # 實際上是股票代號
+                formatted_date = self.format_date(date)
+                return {'type': action, 'account': account.strip(), 'stock_name': stock_name.strip(), 
+                       'stock_code': actual_stock_code, 'quantity': quantity, 'amount': int(amount), 'date': formatted_date}
         
         # 簡化格式（不包含代號）- 支援張/零股
-        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(.+?)\s+(\d+)\s*(\d{4})?', message_text):
+        elif match := re.match(r'(.+?)(買|賣)\s+(.+?)\s+(\d+)\s+(\d+)\s*(\d{4})?', message_text):
             account, action, stock_name, quantity_str, amount, date = match.groups()
             
             # 檢查是否已知股票代號
