@@ -60,6 +60,7 @@ class ReminderBot:
         self.last_reminders = {
             'daily_morning_date': None,
             'daily_evening_date': None,
+            'morning_todo_preview_date': None,    # 新增：早上預告明天
             'dated_todo_preview_date': None,      # 前一天晚上預告
             'dated_todo_morning_date': None,      # 當天早上提醒
             'dated_todo_evening_date': None       # 當天晚上提醒
@@ -591,6 +592,11 @@ class ReminderBot:
                         self.last_reminders.get('dated_todo_preview_date') != today_date):
                         self.send_dated_todo_preview(user_id, taiwan_now)
                         self.last_reminders['dated_todo_preview_date'] = today_date
+                    # 4.5 檢查每月提醒 - 早上也預告明天（新增）
+                    if (current_time == self.user_settings['morning_time'] and 
+                       self.last_reminders.get('morning_todo_preview_date') != today_date):
+                       self.send_dated_todo_preview(user_id, taiwan_now)
+                       self.last_reminders['morning_todo_preview_date'] = today_date        
                     
                     # 5. 檢查每月提醒 - 當天早上提醒
                     if (current_time == self.user_settings['morning_time'] and 
