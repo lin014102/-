@@ -691,12 +691,15 @@ class ReminderBot:
         return bank_name
     
     def get_bill_amount(self, bank_name, target_month=None):
-        """取得指定銀行的最新卡費金額"""
+        """取得指定銀行的最新卡費金額（排除已繳納）"""
         try:
             normalized_bank = self._normalize_bank_name(bank_name)
             
             if self.use_mongodb:
-                query = {'bank_name': normalized_bank}
+                query = {
+                    'bank_name': normalized_bank,
+                    'paid': {'$ne': True}
+                }
                 if target_month:
                     query['month'] = target_month
                 
@@ -711,9 +714,14 @@ class ReminderBot:
                     }
             else:
                 if normalized_bank in self._bill_amounts:
-                    months = sorted(self._bill_amounts[normalized_bank].keys(), reverse=True)
-                    if months:
-                        latest_data = self._bill_amounts[normalized_bank][months[0]]
+                    unpaid_months = {
+                        month: data for month, data in self._bill_amounts[normalized_bank].items()
+                        if not data.get('paid', False)
+                    }
+                    
+                    if unpaid_months:
+                        months = sorted(unpaid_months.keys(), reverse=True)
+                        latest_data = unpaid_months[months[0]]
                         return {
                             'amount': latest_data['amount'],
                             'due_date': latest_data['due_date'],
@@ -722,10 +730,133 @@ class ReminderBot:
                         }
             
             return None
-            
+                
         except Exception as e:
             print(f"❌ 取得卡費金額失敗: {e}")
             return None
+    
+    def mark_bill_as_paid(self, bank_name, target_month=None):
+        """標記帳單為已繳納"""
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            taiwan_now = get_taiwan_datetime()
+            
+            if self.use_mongodb:
+                query = {'bank_name': normalized_bank}
+                if target_month:
+                    query['month'] = target_month
+                else:
+                    latest_bill = self.bill_amounts_collection.find_one(
+                        {'bank_name': normalized_bank},
+                        sort=[('updated_at', -1)]
+                    )
+                    if latest_bill:
+                        query['month'] = latest_bill['month']
+                
+                result = self.bill_amounts_collection.update_many(
+                    query,
+                    {'$set': {
+                        'paid': True,
+                        'paid_at': taiwan_now.isoformat()
+                    }}
+                )
+                
+                if result.modified_count > 0:
+                    month_text = f"{target_month} 的" if target_month else ""
+                    return f"✅ 已標記 {normalized_bank} {month_text}帳單為已繳納\n💡 此帳單將不再出現在提醒中"
+                else:
+                    return f"❌ 找不到 {normalized_bank} 的帳單記錄"
+            else:
+                if normalized_bank in self._bill_amounts:
+                    if target_month:
+                        if target_month in self._bill_amounts[normalized_bank]:
+                            self._bill_amounts[normalized_bank][target_month]['paid'] = True
+                            self._bill_amounts[normalized_bank][target_month]['paid_at'] = taiwan_now.isoformat()
+                            return f"✅ 已標記 {normalized_bank} {target_month} 的帳單為已繳納"
+                        else:
+                            return f"❌ 找不到該月份的記錄"
+                    else:
+                        for month in self._bill_amounts[normalized_bank]:
+                            self._bill_amounts[normalized_bank][month]['paid'] = True
+                            self._bill_amounts[normalized_bank][month]['paid_at'] = taiwan_now.isoformat()
+                        return f"✅ 已標記 {normalized_bank} 所有帳單為已繳納"
+                else:
+                    return f"❌ 找不到 {normalized_bank} 的帳單記錄"
+                    
+        except Exception as e:
+            print(f"❌ 標記帳單失敗: {e}")
+            return "❌ 標記失敗，請稍後再試"
+    
+    def unmark_bill_paid(self, bank_name, target_month=None):
+        """取消已繳納標記"""
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            
+            if self.use_mongodb:
+                query = {'bank_name': normalized_bank}
+                if target_month:
+                    query['month'] = target_month
+                
+                result = self.bill_amounts_collection.update_many(
+                    query,
+                    {'$set': {'paid': False}}
+                )
+                
+                if result.modified_count > 0:
+                    return f"✅ 已取消 {normalized_bank} 的已繳納標記\n💡 此帳單將重新出現在提醒中"
+                else:
+                    return f"❌ 找不到該帳單記錄"
+            else:
+                if normalized_bank in self._bill_amounts:
+                    if target_month:
+                        if target_month in self._bill_amounts[normalized_bank]:
+                            self._bill_amounts[normalized_bank][target_month]['paid'] = False
+                            return f"✅ 已取消 {normalized_bank} {target_month} 的已繳納標記"
+                    else:
+                        for month in self._bill_amounts[normalized_bank]:
+                            self._bill_amounts[normalized_bank][month]['paid'] = False
+                        return f"✅ 已取消 {normalized_bank} 所有帳單的已繳納標記"
+                return f"❌ 找不到該帳單記錄"
+                    
+        except Exception as e:
+            print(f"❌ 取消標記失敗: {e}")
+            return "❌ 取消標記失敗，請稍後再試"
+    
+    def delete_bill_amount(self, bank_name, target_month=None):
+        """刪除帳單記錄"""
+        try:
+            normalized_bank = self._normalize_bank_name(bank_name)
+            
+            if self.use_mongodb:
+                query = {'bank_name': normalized_bank}
+                if target_month:
+                    query['month'] = target_month
+                
+                result = self.bill_amounts_collection.delete_many(query)
+                deleted_count = result.deleted_count
+                
+                if deleted_count > 0:
+                    month_text = f"{target_month} 的" if target_month else "所有"
+                    return f"✅ 已刪除 {normalized_bank} {month_text}帳單記錄 ({deleted_count} 筆)"
+                else:
+                    return f"❌ 找不到 {normalized_bank} 的帳單記錄"
+            else:
+                if normalized_bank in self._bill_amounts:
+                    if target_month:
+                        if target_month in self._bill_amounts[normalized_bank]:
+                            del self._bill_amounts[normalized_bank][target_month]
+                            return f"✅ 已刪除 {normalized_bank} {target_month} 的帳單記錄"
+                        else:
+                            return f"❌ 找不到該月份的記錄"
+                    else:
+                        del self._bill_amounts[normalized_bank]
+                        return f"✅ 已刪除 {normalized_bank} 所有帳單記錄"
+                else:
+                    return f"❌ 找不到 {normalized_bank} 的帳單記錄"
+                    
+        except Exception as e:
+            print(f"❌ 刪除帳單記錄失敗: {e}")
+            return "❌ 刪除失敗，請稍後再試"
     
     # ===== 生理期追蹤功能 =====
     
