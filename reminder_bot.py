@@ -572,6 +572,12 @@ class ReminderBot:
                 
                 # 2. 檢查時間提醒
                 self.check_and_send_time_reminders()
+                # 🆕 3. 檢查股票價格提醒（加這段）
+                try:
+                    from stock_notifier import check_stock_alerts
+                    check_stock_alerts()
+                except Exception as e:
+                    print(f"⚠️ 股票提醒檢查失敗: {e}")
                 
                 # 3. 檢查每日提醒
                 if user_id:
