@@ -368,72 +368,86 @@ class StockAnalyzer:
         # 生成建議
         suggestions = self.generate_suggestions(buy_signals, sell_signals, sr, current_price)
         
-        # 格式化輸出
+        # 格式化輸出 - 白話版
         display_name = stock_name if stock_name else stock_code
         result = f"📊 {display_name} ({stock_code}) 技術分析\n\n"
         result += f"💹 目前價格：{current_price:.2f}元\n\n"
         
-        # 支撐位
-        result += "🟢 支撐位分析：\n"
+        # 支撐位 - 白話版
+        result += "🟢 支撐位（可能跌不下去的價位）\n"
         if sr['supports']:
+            labels = ["👈 優先買點", "備用買點", "最後防線"]
             for i, support in enumerate(sr['supports'][:3], 1):
                 diff = ((current_price - support) / support) * 100
                 strength = "⭐⭐⭐" if i == 1 else "⭐⭐" if i == 2 else "⭐"
-                result += f"{strength} {support:.2f}元 (距離 {diff:.1f}%)\n"
+                label = labels[i-1] if i <= len(labels) else ""
+                result += f"{strength} {support:.0f}元 ({diff:.1f}%) {label}\n"
         else:
             result += "暫無明確支撐位\n"
         
-        result += "\n🔴 壓力位分析：\n"
+        # 壓力位 - 白話版
+        result += "\n🔴 壓力位（可能漲不上去的價位）\n"
         if sr['resistances']:
             for i, resistance in enumerate(sr['resistances'][:3], 1):
                 diff = ((resistance - current_price) / current_price) * 100
                 strength = "⭐⭐⭐" if i == 1 else "⭐⭐" if i == 2 else "⭐"
-                result += f"{strength} {resistance:.2f}元 (距離 {diff:.1f}%)\n"
+                label = "👈 建議先賣" if i == 1 else ""
+                result += f"{strength} {resistance:.0f}元 (+{diff:.1f}%) {label}\n"
         else:
             result += "暫無明確壓力位\n"
         
-        # 技術指標
-        result += f"\n📈 技術指標：\n"
-        if indicators.get('rsi'):
-            rsi_status = "超買" if indicators['rsi'] > 70 else "超賣" if indicators['rsi'] < 30 else "中性"
-            result += f"RSI：{indicators['rsi']:.1f} ({rsi_status})\n"
-        if indicators.get('k') and indicators.get('d'):
-            kd_status = "超買" if indicators['k'] > 80 else "超賣" if indicators['k'] < 20 else "中性"
-            result += f"KD：K={indicators['k']:.1f}, D={indicators['d']:.1f} ({kd_status})\n"
+        # 技術狀態 - 白話版
+        result += f"\n📈 技術狀態\n"
         
-        # 建議操作
-        result += f"\n💡 操作建議：\n"
+        # 判斷趨勢
+        if indicators.get('rsi') and indicators.get('k'):
+            rsi = indicators['rsi']
+            k = indicators['k']
+            
+            if rsi > 70 or k > 80:
+                result += "- 最近漲很快，有點過熱\n"
+                if rsi > 75 and k > 85:
+                    result += "- 短期買盤強，但小心回檔"
+                else:
+                    result += "- 建議觀望，等回檔再進場"
+            elif rsi < 30 or k < 20:
+                result += "- 跌很深了，可能快止跌\n"
+                result += "- 可以開始注意買點"
+            else:
+                result += "- 目前處於正常範圍\n"
+                result += "- 可以耐心等待機會"
+            
+            result += f" (RSI {rsi:.1f} / KD {k:.1f}"
+            if rsi > 70 or k > 80:
+                result += " 偏高)\n"
+            elif rsi < 30 or k < 20:
+                result += " 偏低)\n"
+            else:
+                result += " 正常)\n"
+        
+        # RSI/KD 說明
+        result += "\n💬 RSI、KD 是什麼？\n"
+        result += "看股票「漲太快或跌太快」的指標\n"
+        result += "> 70-80 = 漲太快，要小心\n"
+        result += "< 20-30 = 跌太深，可能反彈\n"
+        
+        # 操作建議 - 白話版
+        result += f"\n💡 操作建議\n"
         action_text = {
-            'buy': '🟢 建議買進',
-            'sell': '🔴 建議賣出',
-            'consider_buy': '🟡 可考慮逢低買進',
-            'consider_sell': '🟡 可考慮逢高賣出',
-            'hold': '⚪ 觀望為主'
+            'buy': '🟢 建議買進\n逢低可以分批進場',
+            'sell': '🔴 建議賣出\n有賺先獲利，等回檔再買',
+            'consider_buy': '🟡 可考慮買進\n等跌到支撐再買',
+            'consider_sell': '🟡 可考慮賣出\n漲到壓力可先賣一些',
+            'hold': '⚪ 建議觀望\n等更明確的訊號'
         }
-        result += f"{action_text.get(suggestions['action'], '⚪ 觀望為主')}\n\n"
-        
-        # 買點
-        if suggestions['buy_points']:
-            result += "💰 建議買點：\n"
-            for bp in suggestions['buy_points']:
-                result += f"• {bp['price']}元\n"
-                for reason in bp['reasons'][:2]:
-                    result += f"  - {reason}\n"
-        
-        # 賣點
-        if suggestions['sell_points']:
-            result += "\n🎯 建議賣點：\n"
-            for sp in suggestions['sell_points']:
-                result += f"• {sp['price']}元\n"
-                for reason in sp['reasons'][:2]:
-                    result += f"  - {reason}\n"
+        result += f"{action_text.get(suggestions['action'], '⚪ 建議觀望')}\n"
         
         # 停損
         if suggestions['stop_loss']:
-            result += f"\n🛑 建議停損：{suggestions['stop_loss']}元\n"
+            result += f"\n🛑 停損：{suggestions['stop_loss']:.0f}元\n"
         
-        result += f"\n⏰ 分析時間：{datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M')}"
-        result += "\n⚠️ 本資訊僅供參考，非投資建議"
+        result += f"\n⏰ {datetime.now(TAIWAN_TZ).strftime('%Y/%m/%d %H:%M')}"
+        result += "\n⚠️ 僅供參考，非投資建議"
         
         return result
     
