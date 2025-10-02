@@ -20,7 +20,12 @@ from stock_manager import (
     get_stock_cost_analysis, get_stock_account_list, get_stock_help,
     is_stock_command, is_stock_query, get_stock_realtime_pnl
 )
-
+# 匯入股票分析和提醒模組
+from stock_analyzer import analyze_stock, quick_analyze_stock
+from stock_notifier import (
+    add_stock_price_alert, add_stock_technical_alert, 
+    get_stock_alerts, delete_stock_alert, check_stock_alerts
+)
 # 匯入增強版 Gemini AI 模組（支援對話狀態管理）
 from gemini_analyzer import EnhancedMessageRouter
 
@@ -650,6 +655,163 @@ def handle_bill_query_command(message_text, user_id):
         print(f"❌ 處理帳單查詢指令失敗: {e}")
         return f"❌ 查詢失敗，請稍後再試\n🕒 {get_taiwan_time()}"
 
+def is_stock_analysis_command(message_text):
+    """檢查是否為股票分析指令"""
+    analysis_keywords = [
+        '分析', '技術分析', '支撐', '壓力', '買點', '賣點',
+        '提醒', '到價提醒', '設定提醒', '提醒列表', '刪除提醒', '持股分析'
+    ]
+    
+    for keyword in analysis_keywords:
+        if keyword in message_text:
+            return True
+    
+    if re.match(r'分析\s+\w+', message_text):
+        return True
+    if re.match(r'提醒\s+\w+\s+\d+', message_text):
+        return True
+    
+    return False
+
+
+def handle_stock_analysis_command(message_text, user_id):
+    """處理股票分析相關指令"""
+    try:
+        # 1. 技術分析
+        if match := re.match(r'(?:分析|技術分析)\s+(.+)', message_text):
+            stock_input = match.group(1).strip()
+            from stock_manager import stock_manager
+            
+            stock_code = stock_manager.stock_data['stock_codes'].get(stock_input)
+            
+            if stock_code:
+                return analyze_stock(stock_code, stock_input)
+            elif stock_input.isdigit() and len(stock_input) == 4:
+                return analyze_stock(stock_input)
+            else:
+                return f"❌ 找不到「{stock_input}」的股票代號\n💡 請使用：分析 2330 或 分析 台積電"
+        
+        # 2. 支撐壓力查詢
+        elif match := re.match(r'(?:支撐|壓力|買點|賣點)\s+(.+)', message_text):
+            stock_input = match.group(1).strip()
+            from stock_manager import stock_manager
+            
+            stock_code = stock_manager.stock_data['stock_codes'].get(stock_input)
+            if not stock_code:
+                stock_code = stock_input if stock_input.isdigit() else None
+            
+            if stock_code:
+                analysis = quick_analyze_stock(stock_code, stock_input)
+                if analysis:
+                    result = f"📊 {stock_input} 快速分析\n\n"
+                    result += f"💹 目前價格：{analysis['current_price']}元\n"
+                    if analysis['support']:
+                        result += f"🟢 最近支撐：{analysis['support']}元\n"
+                    if analysis['resistance']:
+                        result += f"🔴 最近壓力：{analysis['resistance']}元\n"
+                    result += f"\n💡 輸入「分析 {stock_input}」查看完整分析"
+                    return result
+                else:
+                    return f"❌ 無法分析 {stock_input}"
+            else:
+                return f"❌ 找不到股票代號"
+        
+        # 3. 價格提醒設定
+        elif match := re.match(r'提醒\s+(.+?)\s+(\d+(?:\.\d+)?)', message_text):
+            stock_input = match.group(1).strip()
+            target_price = float(match.group(2))
+            from stock_manager import stock_manager
+            stock_code = stock_manager.stock_data['stock_codes'].get(stock_input)
+            
+            if not stock_code:
+                stock_code = stock_input if stock_input.isdigit() else None
+            
+            if stock_code:
+                current_price = stock_manager.get_stock_price(stock_code)
+                if current_price:
+                    alert_type = 'above' if target_price > current_price else 'below'
+                    return add_stock_price_alert(user_id, stock_code, stock_input, target_price, alert_type)
+                else:
+                    return "❌ 無法取得目前股價，請稍後再試"
+            else:
+                return f"❌ 找不到「{stock_input}」的股票代號"
+        
+        # 4. 技術分析自動提醒
+        elif match := re.match(r'(?:設定提醒|自動提醒)\s+(.+)', message_text):
+            stock_input = match.group(1).strip()
+            from stock_manager import stock_manager
+            stock_code = stock_manager.stock_data['stock_codes'].get(stock_input)
+            if not stock_code:
+                stock_code = stock_input if stock_input.isdigit() else None
+            
+            if stock_code:
+                return add_stock_technical_alert(user_id, stock_code, stock_input)
+            else:
+                return f"❌ 找不到「{stock_input}」的股票代號"
+        
+        # 5. 提醒列表
+        elif '提醒列表' in message_text:
+            return get_stock_alerts(user_id)
+        
+        # 6. 刪除提醒
+        elif match := re.match(r'刪除提醒\s+(.+)', message_text):
+            stock_input = match.group(1).strip()
+            from stock_manager import stock_manager
+            stock_code = stock_manager.stock_data['stock_codes'].get(stock_input)
+            if not stock_code:
+                stock_code = stock_input if stock_input.isdigit() else None
+            
+            if stock_code:
+                return delete_stock_alert(user_id, stock_code)
+            else:
+                return f"❌ 找不到「{stock_input}」的股票代號"
+        
+        # 7. 持股分析
+        elif match := re.match(r'持股分析(?:\s+(.+))?', message_text):
+            account_name = match.group(1).strip() if match.group(1) else None
+            from stock_manager import stock_manager
+            
+            if account_name and account_name not in stock_manager.stock_data['accounts']:
+                return f"❌ 帳戶「{account_name}」不存在"
+            
+            accounts_to_check = {account_name: stock_manager.stock_data['accounts'][account_name]} if account_name else stock_manager.stock_data['accounts']
+            
+            result = f"📊 {'持股技術分析' if not account_name else f'{account_name} 持股技術分析'}：\n\n"
+            
+            for acc_name, account in accounts_to_check.items():
+                if not account['stocks']:
+                    continue
+                
+                result += f"👤 {acc_name}：\n"
+                for stock_name, holding in account['stocks'].items():
+                    stock_code = holding.get('stock_code')
+                    if stock_code:
+                        analysis = quick_analyze_stock(stock_code, stock_name)
+                        if analysis:
+                            cost = holding['avg_cost']
+                            current = analysis['current_price']
+                            pnl_pct = ((current - cost) / cost) * 100
+                            
+                            result += f"\n📈 {stock_name} ({stock_code})\n"
+                            result += f"   💰 成本：{cost}元 | 現價：{current}元\n"
+                            result += f"   {'🟢' if pnl_pct > 0 else '🔴'} 損益：{pnl_pct:+.1f}%\n"
+                            
+                            if analysis['support']:
+                                result += f"   🟢 支撐：{analysis['support']}元\n"
+                            if analysis['resistance']:
+                                result += f"   🔴 壓力：{analysis['resistance']}元\n"
+                result += "\n"
+            
+            result += "💡 輸入「分析 股票名稱」查看完整技術分析"
+            return result
+        
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"❌ 處理股票分析指令失敗: {e}")
+        return "❌ 處理失敗，請稍後再試"
+
 def is_todo_query(message_text):
     """檢查是否為待辦事項相關查詢（更嚴格的判斷）"""
     # 精確的待辦事項指令
@@ -667,8 +829,14 @@ def is_todo_query(message_text):
     return False
 
 def enhanced_message_router(message_text, user_id):
-    """增強版訊息路由器 - 整合對話狀態管理"""
+    """增強版訊息路由器 - 整合對話狀態管理"""   
     try:
+        # 🆕 優先檢查股票分析指令（加這段）
+        if is_stock_analysis_command(message_text):
+            print(f"🔀 路由到股票分析模組: {message_text}")
+            result = handle_stock_analysis_command(message_text, user_id)
+            if result:
+                return result
         # 生理期追蹤指令檢查（包含下次預測）
         if is_period_command(message_text):
             print(f"🔀 路由到生理期追蹤模組: {message_text}")
