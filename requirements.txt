@@ -17,3 +17,5 @@ PyMuPDF>=1.24.0
 yfinance
 pandas
 numpy
+requests
+pytz
