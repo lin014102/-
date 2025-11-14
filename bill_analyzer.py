@@ -390,8 +390,7 @@ class BillAnalyzer:
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "responseMimeType": "application/json",  # 確保 JSON 格式輸出
-                    "temperature": 0.1,
-                    "maxOutputTokens": 4000
+                    "temperature": 0.3
                 },
                 "safetySettings": [  # 降低安全過濾
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
