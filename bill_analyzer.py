@@ -16,7 +16,6 @@ import logging
 from datetime import datetime
 import re
 import tempfile
-import google.generativeai as genai
 
 class BillAnalyzer:
     def __init__(self):
@@ -51,9 +50,6 @@ class BillAnalyzer:
             if not self.gemini_api_key:
                 raise ValueError("GEMINI_API_KEY not found")
             
-            # 設定 Gemini
-            genai.configure(api_key=self.gemini_api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
             
             self.logger.info("API 設定完成")
             
@@ -371,39 +367,58 @@ class BillAnalyzer:
         return "未知銀行"
     
     def analyze_with_gemini(self, text, bank_name, document_type):
-        """使用 Gemini 分析文字"""
+        """使用 Gemini REST API 分析文字"""
         self.logger.info(f"開始 Gemini 分析，文件類型: {document_type}")
-        
+    
         try:
             if document_type == "交割憑單":
                 prompt = self.create_trading_analysis_prompt(text)
             else:
                 prompt = self.create_bill_analysis_prompt(text, bank_name)
-            
+        
             # 輸出 prompt 到日誌 (調試用)
             self.logger.info(f"Gemini Prompt 長度: {len(prompt)}")
+        
+            # 使用 REST API 呼叫 Gemini
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "X-goog-api-key": self.gemini_api_key
+            }
+        
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",  # 確保 JSON 格式輸出
+                    "temperature": 0.1,
+                    "maxOutputTokens": 4000
+                },
+                "safetySettings": [  # 降低安全過濾
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                ]
+            }
+        
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+        
+            # 檢查是否有候選回應
+            if 'candidates' in result and result['candidates']:
+                generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
             
-            # 使用 Gemini API
-            response = self.gemini_model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    max_output_tokens=4000,
-                )
-            )
-            
-            if response and response.text:
                 # 輸出原始回應到日誌 (調試用)
-                self.logger.info(f"Gemini 原始回應: {response.text[:1000]}...")
-                return self.parse_json_response(response.text)
+                self.logger.info(f"Gemini 原始回應: {generated_text[:1000]}...")
+                return self.parse_json_response(generated_text)
             else:
-                self.logger.error("Gemini 回應為空")
+                self.logger.error("Gemini 回應為空或被過濾")
                 return None
-                
+            
         except Exception as e:
             self.logger.error(f"Gemini 分析失敗: {e}")
             return None
-    
     def create_trading_analysis_prompt(self, text):
         """建立交割憑單分析提示詞"""
         return f"""
