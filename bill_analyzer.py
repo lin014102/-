@@ -380,7 +380,7 @@ class BillAnalyzer:
             self.logger.info(f"Gemini Prompt 長度: {len(prompt)}")
         
             # 使用 REST API 呼叫 Gemini
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
             headers = {
                 "Content-Type": "application/json",
                 "X-goog-api-key": self.gemini_api_key
