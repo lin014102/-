@@ -39,8 +39,8 @@ class BillScheduler:
             raise
         
         # 定時任務設定
-        self.analysis_time = "15:10"  # 每日分析時間
-        self.notification_time = "15:15"  # 每日推播時間
+        self.analysis_time = "16:45"  # 每日分析時間
+        self.notification_time = "16:50"  # 每日推播時間
         
         # 防重複執行標記
         self.last_analysis_date = None
@@ -71,14 +71,14 @@ class BillScheduler:
                 
                 self.logger.debug(f"定時任務檢查 - 台灣時間: {taiwan_now.strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                # 檢查是否需要執行帳單分析 (15:10)
+                # 檢查是否需要執行帳單分析 (16:45)
                 if (current_time == self.analysis_time and 
                     self.last_analysis_date != today_date):
                     self.logger.info("開始執行每日帳單分析任務")
                     self._run_daily_analysis()
                     self.last_analysis_date = today_date
                 
-                # 檢查是否需要執行推播任務 (15:15)
+                # 檢查是否需要執行推播任務 (16:50)
                 elif (current_time == self.notification_time and 
                       self.last_notification_date != today_date):
                     self.logger.info("開始執行每日推播任務")
