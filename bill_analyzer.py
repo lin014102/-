@@ -390,14 +390,9 @@ class BillAnalyzer:
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "responseMimeType": "application/json",  # 確保 JSON 格式輸出
-                    "temperature": 0.3
-                },
-                "safetySettings": [  # 降低安全過濾
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-                ]
+                
+                }
+                
             }
         
             response = requests.post(url, headers=headers, json=payload, timeout=60)
