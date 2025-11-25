@@ -86,7 +86,8 @@ class BillAnalyzer:
             
             # 3. OCR 處理
             ocr_results = []
-            for image_path in temp_image_paths:
+            for idx, image_path in enumerate(temp_image_paths):
+                self.logger.info(f"處理第 {idx + 1}/{len(temp_image_paths)} 頁")
                 ocr_result = self.ocr_with_vision_api(image_path)
                 if ocr_result:
                     ocr_results.append(ocr_result)
@@ -102,7 +103,7 @@ class BillAnalyzer:
             # 5. 清理中文空格
             cleaned_text = self.clean_chinese_spacing(processed_text)
             
-            self.logger.info(f"OCR 處理完成，文字長度: {len(cleaned_text)}")
+            self.logger.info(f"OCR 處理完成，文字長度: {len(cleaned_text)} 字元")
             
             # 6. 識別文件類型
             document_type = self.identify_document_type(cleaned_text, filename)
@@ -110,13 +111,18 @@ class BillAnalyzer:
             # 7. 識別銀行
             bank_name = bank_config.get('name', '') or self.identify_bank(cleaned_text)
             
-            # 8. LLM 分析（採用第一份代碼的策略）
-            analysis_result = self.gemini_analyze(cleaned_text, bank_name, document_type)
+            # 🆕 8. 根據文字長度決定分析策略
+            if len(cleaned_text) > 20000:
+                self.logger.warning(f"文字過長 ({len(cleaned_text)} 字元)，採用分頁分析策略")
+                analysis_result = self.analyze_by_pages(ocr_results, bank_name, document_type)
+            else:
+                # 8. LLM 分析（採用第一份代碼的策略）
+                analysis_result = self.gemini_analyze(cleaned_text, bank_name, document_type)
             
             if not analysis_result:
                 raise Exception("LLM 分析失敗")
             
-            self.logger.info(f"帳單分析成功: {filename}")
+            self.logger.info(f"✅ 帳單分析成功: {filename}")
             return {
                 'success': True,
                 'data': {
@@ -128,7 +134,7 @@ class BillAnalyzer:
             }
             
         except Exception as e:
-            self.logger.error(f"帳單分析失敗 {filename}: {e}")
+            self.logger.error(f"❌ 帳單分析失敗 {filename}: {e}")
             return {
                 'success': False,
                 'error': str(e)
@@ -385,9 +391,13 @@ class BillAnalyzer:
     def gemini_analyze(self, text, bank_name, document_type):
         """
         使用 Gemini 2.5 分析文字 - 採用第一份代碼的成功策略
-        包含：簡潔 prompt + 重試機制 + 強硬語氣
+        包含：簡潔 prompt + 重試機制 + 強硬語氣 + 文字長度優化
         """
         self.logger.info(f"開始 Gemini 分析，文件類型: {document_type}")
+        
+        # 🆕 檢查並縮減文字長度（避免超時）
+        text = self.truncate_text_if_needed(text, max_chars=15000)
+        self.logger.info(f"處理後文字長度: {len(text)} 字元")
         
         # 根據文件類型選擇 prompt
         if document_type == "交割憑單":
@@ -411,7 +421,11 @@ class BillAnalyzer:
         max_retries = 5
         for retry in range(max_retries):
             try:
-                response = requests.post(url, headers=headers, json=payload, timeout=60)
+                # 🆕 增加 timeout 到 120 秒，並分段處理
+                timeout_seconds = 120 if retry < 2 else 180
+                self.logger.info(f"第 {retry + 1} 次嘗試，timeout: {timeout_seconds} 秒")
+                
+                response = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
                 response.raise_for_status()
                 resp_json = response.json()
                 
@@ -428,19 +442,51 @@ class BillAnalyzer:
                 # 標準化格式
                 result = self.normalize_response(result)
                 
-                self.logger.info(f"Gemini 分析成功（第 {retry + 1} 次嘗試）")
+                self.logger.info(f"✅ Gemini 分析成功（第 {retry + 1} 次嘗試）")
                 return result
                 
-            except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError) as e:
-                self.logger.warning(f"Gemini API 第 {retry + 1} 次嘗試失敗: {e}")
+            except requests.exceptions.Timeout as e:
+                self.logger.warning(f"⏱️ Gemini API 第 {retry + 1} 次嘗試超時: {e}")
                 if retry < max_retries - 1:
                     wait_time = 2 ** retry
                     self.logger.info(f"等待 {wait_time} 秒後重試...")
                     time.sleep(wait_time)
                 else:
-                    self.logger.error("Gemini 分析失敗，已達最大重試次數")
+                    self.logger.error("❌ Gemini 分析失敗：超時次數過多")
+                    
+            except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError) as e:
+                self.logger.warning(f"❌ Gemini API 第 {retry + 1} 次嘗試失敗: {e}")
+                if retry < max_retries - 1:
+                    wait_time = 2 ** retry
+                    self.logger.info(f"等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
+                else:
+                    self.logger.error("❌ Gemini 分析失敗，已達最大重試次數")
         
         return None
+    
+    def truncate_text_if_needed(self, text, max_chars=15000):
+        """
+        如果文字太長，智慧截斷以避免超時
+        保留開頭（銀行資訊）和中間重要部分（交易明細）
+        """
+        if len(text) <= max_chars:
+            return text
+        
+        self.logger.warning(f"文字過長 ({len(text)} 字元)，進行智慧截斷至 {max_chars} 字元")
+        
+        # 保留前 30% (銀行資訊、帳單資訊)
+        head_size = int(max_chars * 0.3)
+        head = text[:head_size]
+        
+        # 保留後 70% (交易明細)
+        tail_size = max_chars - head_size
+        tail = text[-tail_size:]
+        
+        truncated = head + "\n\n[... 中間部分已省略 ...]\n\n" + tail
+        
+        self.logger.info(f"截斷完成: {len(truncated)} 字元")
+        return truncated
     
     def create_trading_prompt(self, text):
         """建立交割憑單分析提示詞 - 簡潔版"""
@@ -629,3 +675,133 @@ JSON結構（必須嚴格遵守）：
                     self.logger.info(f"清理暫存檔案: {os.path.basename(file_path)}")
                 except Exception as e:
                     self.logger.error(f"清理暫存檔案失敗: {e}")
+    
+    def analyze_by_pages(self, ocr_results, bank_name, document_type):
+        """
+        分頁分析策略：當文字太長時，分頁處理後合併結果
+        """
+        self.logger.info("採用分頁分析策略")
+        
+        try:
+            # 第一頁通常包含帳單基本資訊
+            first_page_text = self.extract_page_text(ocr_results[0]) if ocr_results else ""
+            first_page_text = self.clean_chinese_spacing(first_page_text)
+            
+            # 分析第一頁獲取基本資訊
+            self.logger.info("分析第一頁 - 基本資訊")
+            base_result = self.gemini_analyze(first_page_text, bank_name, document_type)
+            
+            if not base_result:
+                raise Exception("第一頁分析失敗")
+            
+            # 如果只有一頁，直接返回
+            if len(ocr_results) == 1:
+                return base_result
+            
+            # 處理後續頁面的交易明細
+            all_transactions = base_result.get('transactions', [])
+            
+            # 每次處理 2-3 頁
+            page_batch_size = 2
+            for i in range(1, len(ocr_results), page_batch_size):
+                batch_end = min(i + page_batch_size, len(ocr_results))
+                self.logger.info(f"分析第 {i+1}-{batch_end} 頁 - 交易明細")
+                
+                # 合併這幾頁的文字
+                batch_text = ""
+                for j in range(i, batch_end):
+                    page_text = self.extract_page_text(ocr_results[j])
+                    batch_text += f"\n=== 第 {j+1} 頁 ===\n{page_text}"
+                
+                batch_text = self.clean_chinese_spacing(batch_text)
+                
+                # 只提取交易明細
+                batch_result = self.gemini_analyze_transactions_only(batch_text, bank_name)
+                
+                if batch_result and 'transactions' in batch_result:
+                    all_transactions.extend(batch_result['transactions'])
+                    self.logger.info(f"從第 {i+1}-{batch_end} 頁提取 {len(batch_result['transactions'])} 筆交易")
+            
+            # 更新完整結果
+            base_result['transactions'] = all_transactions
+            self.logger.info(f"✅ 分頁分析完成，共 {len(all_transactions)} 筆交易")
+            
+            return base_result
+            
+        except Exception as e:
+            self.logger.error(f"❌ 分頁分析失敗: {e}")
+            return None
+    
+    def extract_page_text(self, ocr_result):
+        """從單一頁面的 OCR 結果提取文字"""
+        try:
+            if not ocr_result or 'responses' not in ocr_result:
+                return ""
+            
+            response = ocr_result['responses'][0]
+            
+            if 'fullTextAnnotation' in response and 'text' in response['fullTextAnnotation']:
+                return response['fullTextAnnotation']['text']
+            
+            return ""
+            
+        except Exception as e:
+            self.logger.error(f"提取頁面文字失敗: {e}")
+            return ""
+    
+    def gemini_analyze_transactions_only(self, text, bank_name):
+        """
+        只提取交易明細的 Gemini 分析（用於分頁處理）
+        """
+        prompt_text = f"""
+分析以下信用卡帳單頁面，只提取交易明細：
+
+{text}
+
+【嚴格要求】
+1. 只回傳交易明細的 JSON 格式
+2. 不可使用 markdown 標記
+3. 直接以 {{ 開始
+
+JSON 格式：
+{{
+  "transactions": [
+    {{
+      "date": "YYYY/MM/DD",
+      "merchant": "商家名稱",
+      "amount": 數字,
+      "currency": "TWD"
+    }}
+  ]
+}}
+
+立即回傳JSON：
+"""
+        
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": self.gemini_api_key
+        }
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt_text}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            resp_json = response.json()
+            
+            if 'candidates' in resp_json and resp_json['candidates']:
+                generated_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                json_text = self.clean_json_response(generated_text)
+                result = json.loads(json_text)
+                return self.normalize_response(result)
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"交易明細分析失敗: {e}")
+            return None
