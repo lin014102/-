@@ -1,7 +1,6 @@
 """
-信用卡帳單分析器 - 雲端版本 (修正版)
-整合 Google Vision OCR + Gemini LLM 進行帳單解析
-修正日期顯示 null 和商家名稱截斷問題
+信用卡帳單分析器 - 改進版
+採用第一份代碼的成功策略：簡潔 prompt + 重試機制 + Gemini 2.5
 """
 
 import os
@@ -13,6 +12,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 import io
 import logging
+import time
 from datetime import datetime
 import re
 import tempfile
@@ -24,8 +24,8 @@ class BillAnalyzer:
         
         # 處理設定
         self.settings = {
-            "dpi": 300,  # 提高解析度，改善 OCR 品質
-            "remove_last_page": True,  # 是否移除最後一頁
+            "dpi": 300,
+            "remove_last_page": True,
         }
         
         # 銀行識別規則
@@ -50,7 +50,6 @@ class BillAnalyzer:
             if not self.gemini_api_key:
                 raise ValueError("GEMINI_API_KEY not found")
             
-            
             self.logger.info("API 設定完成")
             
         except Exception as e:
@@ -59,7 +58,7 @@ class BillAnalyzer:
     
     def analyze_pdf(self, pdf_content, bank_config, filename):
         """
-        分析 PDF 帳單的完整流程 - 完整圖像處理版本
+        分析 PDF 帳單的完整流程
         
         Args:
             pdf_content: PDF 檔案內容 (bytes)
@@ -95,33 +94,27 @@ class BillAnalyzer:
             if not ocr_results:
                 raise Exception("OCR 處理失敗")
             
-            # 4. 處理 OCR 結果
-            processed_text = self.process_ocr_results(ocr_results)
-            if not processed_text['raw_text']:
+            # 4. 處理 OCR 結果 - 採用座標重組方式
+            processed_text = self.process_ocr_with_coordinates(ocr_results)
+            if not processed_text:
                 raise Exception("文字處理失敗")
             
-            # 輸出 OCR 原始結果到日誌 (調試用)
-            self.logger.info(f"OCR 原始結果長度: {len(processed_text['raw_text'])}")
-            self.logger.info(f"OCR 原始結果前500字元: {processed_text['raw_text'][:500]}")
+            # 5. 清理中文空格
+            cleaned_text = self.clean_chinese_spacing(processed_text)
             
-            # 5. 識別文件類型
-            document_type = self.identify_document_type(processed_text['raw_text'], filename)
+            self.logger.info(f"OCR 處理完成，文字長度: {len(cleaned_text)}")
             
-            # 6. 識別銀行
-            bank_name = bank_config.get('name', '') or self.identify_bank(processed_text['raw_text'])
+            # 6. 識別文件類型
+            document_type = self.identify_document_type(cleaned_text, filename)
             
-            # 7. LLM 分析
-            analysis_result = self.analyze_with_gemini(
-                processed_text['raw_text'], 
-                bank_name, 
-                document_type
-            )
+            # 7. 識別銀行
+            bank_name = bank_config.get('name', '') or self.identify_bank(cleaned_text)
+            
+            # 8. LLM 分析（採用第一份代碼的策略）
+            analysis_result = self.gemini_analyze(cleaned_text, bank_name, document_type)
             
             if not analysis_result:
                 raise Exception("LLM 分析失敗")
-            
-            # 輸出 LLM 分析結果到日誌 (調試用)
-            self.logger.info(f"LLM 分析結果: {json.dumps(analysis_result, ensure_ascii=False, indent=2)}")
             
             self.logger.info(f"帳單分析成功: {filename}")
             return {
@@ -130,7 +123,7 @@ class BillAnalyzer:
                     'document_type': document_type,
                     'bank_name': bank_name,
                     'analysis_result': analysis_result,
-                    'raw_text_length': len(processed_text['raw_text'])
+                    'raw_text_length': len(cleaned_text)
                 }
             }
             
@@ -162,14 +155,12 @@ class BillAnalyzer:
             return None
     
     def pdf_to_images(self, pdf_path, password=""):
-        """將PDF轉換成圖片 - 完整功能版本"""
+        """將PDF轉換成圖片"""
         try:
             self.logger.info(f"開始轉換 PDF: {pdf_path}")
             
-            # 開啟 PDF
             pdf_document = fitz.open(pdf_path)
             
-            # 如果有密碼保護，嘗試解鎖
             if pdf_document.needs_pass:
                 if not pdf_document.authenticate(password):
                     raise Exception("PDF 密碼錯誤")
@@ -178,25 +169,20 @@ class BillAnalyzer:
             images = []
             page_count = pdf_document.page_count
             
-            # 決定要處理的頁面範圍
+            # 決定要處理的頁面範圍（移除最後一頁）
             end_page = page_count - 1 if self.settings["remove_last_page"] and page_count > 1 else page_count
             
             self.logger.info(f"PDF 共 {page_count} 頁，處理前 {end_page} 頁")
             
-            # 轉換每一頁
             temp_dir = tempfile.gettempdir()
             for page_num in range(end_page):
                 page = pdf_document[page_num]
-                
-                # 設定轉換參數 - 提高解析度
                 mat = fitz.Matrix(self.settings["dpi"]/72, self.settings["dpi"]/72)
                 pix = page.get_pixmap(matrix=mat)
                 
-                # 轉換成 PIL Image
                 img_data = pix.tobytes("png")
                 image = Image.open(io.BytesIO(img_data))
                 
-                # 儲存暫存圖片
                 temp_path = os.path.join(temp_dir, f"page_{page_num + 1}_{datetime.now().timestamp()}.png")
                 image.save(temp_path, "PNG", quality=95)
                 images.append(temp_path)
@@ -222,130 +208,160 @@ class BillAnalyzer:
             self.logger.info(f"開始 OCR 處理: {os.path.basename(image_path)}")
             
             url = f"https://vision.googleapis.com/v1/images:annotate?key={self.vision_api_key}"
-            
-            # 將圖片轉成 base64
             image_base64 = self.image_to_base64(image_path)
             
-            # 請求 body
             request_body = {
-                "requests": [
-                    {
-                        "image": {
-                            "content": image_base64
-                        },
-                        "features": [
-                            {
-                                "type": "DOCUMENT_TEXT_DETECTION",
-                                "maxResults": 1
-                            }
-                        ],
-                        "imageContext": {
-                            "languageHints": ["zh-TW", "en"]
-                        }
-                    }
-                ]
+                "requests": [{
+                    "image": {"content": image_base64},
+                    "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                    "imageContext": {"languageHints": ["zh-TW", "en"]}
+                }]
             }
             
-            # 發送請求
             headers = {"Content-Type": "application/json"}
-            response = requests.post(url, headers=headers, json=request_body, timeout=30)
+            response = requests.post(url, headers=headers, json=request_body, timeout=60)
             
             if response.status_code == 200:
                 result = response.json()
                 self.logger.info(f"OCR 處理成功: {os.path.basename(image_path)}")
                 return result
             else:
-                self.logger.error(f"Vision API 請求失敗: {response.status_code} - {response.text}")
+                self.logger.error(f"Vision API 請求失敗: {response.status_code}")
                 return None
                 
         except Exception as e:
             self.logger.error(f"OCR 處理失敗: {e}")
             return None
     
-    def process_ocr_results(self, ocr_results):
-        """處理 OCR 結果，重組文字"""
-        self.logger.info("處理 OCR 結果")
+    def is_chinese_char(self, char):
+        """判斷是否為中文字符"""
+        if not char:
+            return False
+        return '\u4e00' <= char[0] <= '\u9fff'
+    
+    def merge_words_intelligently(self, words):
+        """智慧合併單詞，減少不必要的空格"""
+        if not words:
+            return ""
         
-        all_text = ""
-        structured_data = []
+        result = []
+        i = 0
         
+        while i < len(words):
+            current_word = words[i]
+            
+            if len(current_word) == 1 and self.is_chinese_char(current_word):
+                combined = current_word
+                j = i + 1
+                
+                while j < len(words) and len(words[j]) <= 2:
+                    if self.is_chinese_char(words[j]) or words[j].isalpha():
+                        combined += words[j]
+                        j += 1
+                    else:
+                        break
+                
+                result.append(combined)
+                i = j
+            else:
+                result.append(current_word)
+                i += 1
+        
+        return ' '.join(result)
+    
+    def process_ocr_with_coordinates(self, ocr_results):
+        """處理OCR結果，依據座標重組段落（採用第一份代碼的方法）"""
         try:
+            processed_text = ""
+            
             for page_idx, result in enumerate(ocr_results):
-                if not result or 'responses' not in result:
+                if not result or 'responses' not in result or not result['responses']:
                     continue
                 
                 response = result['responses'][0]
                 
-                # 取得完整文字
-                if 'fullTextAnnotation' in response:
-                    page_text = response['fullTextAnnotation']['text']
-                    all_text += f"\n=== 第 {page_idx + 1} 頁 ===\n{page_text}\n"
+                if "fullTextAnnotation" not in response:
+                    continue
                 
-                # 取得結構化資料（包含座標）
-                if 'textAnnotations' in response:
-                    for annotation in response['textAnnotations'][1:]:  # 跳過第一個（全文）
-                        text_info = {
-                            'text': annotation['description'],
-                            'confidence': annotation.get('confidence', 0),
-                            'vertices': annotation['boundingPoly']['vertices'] if 'boundingPoly' in annotation else []
-                        }
-                        structured_data.append(text_info)
-            
-            # 根據座標重新排序（由上到下，由左到右）
-            if structured_data:
-                structured_data.sort(key=lambda x: (
-                    x['vertices'][0]['y'] if x['vertices'] else 0,  # Y座標
-                    x['vertices'][0]['x'] if x['vertices'] else 0   # X座標
-                ))
+                full_text = response["fullTextAnnotation"]
                 
-                # 重組為段落
-                reorganized_text = self.reorganize_by_coordinates(structured_data)
-                all_text += f"\n=== 座標重組文字 ===\n{reorganized_text}"
+                if "pages" in full_text:
+                    for page in full_text["pages"]:
+                        blocks = []
+                        
+                        if "blocks" in page:
+                            for block in page["blocks"]:
+                                if "paragraphs" in block:
+                                    for paragraph in block["paragraphs"]:
+                                        if "boundingBox" in paragraph:
+                                            vertices = paragraph["boundingBox"]["vertices"]
+                                            y_coord = vertices[0].get("y", 0)
+                                            x_coord = vertices[0].get("x", 0)
+                                        else:
+                                            y_coord = 0
+                                            x_coord = 0
+                                        
+                                        paragraph_text = ""
+                                        if "words" in paragraph:
+                                            words = []
+                                            for word in paragraph["words"]:
+                                                if "symbols" in word:
+                                                    word_text = ""
+                                                    for symbol in word["symbols"]:
+                                                        if "text" in symbol:
+                                                            word_text += symbol["text"]
+                                                    if word_text.strip():
+                                                        words.append(word_text.strip())
+                                            
+                                            if words:
+                                                paragraph_text = self.merge_words_intelligently(words)
+                                        
+                                        blocks.append({
+                                            "text": paragraph_text.strip(),
+                                            "y": y_coord,
+                                            "x": x_coord
+                                        })
+                        
+                        blocks.sort(key=lambda b: (b["y"], b["x"]))
+                        
+                        page_text = ""
+                        for block in blocks:
+                            if block["text"]:
+                                page_text += block["text"] + "\n"
+                        
+                        if page_text:
+                            processed_text += f"\n=== 第 {page_idx + 1} 頁 ===\n{page_text}"
             
-            self.logger.info("OCR 結果處理完成")
-            return {
-                'raw_text': all_text,
-                'structured_data': structured_data
-            }
+            # 基本預處理
+            lines = processed_text.split('\n')
+            cleaned_lines = []
+            
+            for line in lines:
+                line = line.strip()
+                if line and len(line) > 1:
+                    cleaned_lines.append(line)
+            
+            return '\n'.join(cleaned_lines)
             
         except Exception as e:
-            self.logger.error(f"OCR 結果處理失敗: {e}")
-            return {'raw_text': all_text, 'structured_data': []}
-    
-    def reorganize_by_coordinates(self, structured_data):
-        """根據座標重組文字為段落"""
-        if not structured_data:
+            self.logger.error(f"座標處理失敗: {e}")
             return ""
-        
-        # 按Y座標分組（同一行）
-        lines = {}
-        for item in structured_data:
-            if not item['vertices']:
-                continue
-                
-            y_coord = item['vertices'][0]['y']
-            # 容許一定的Y座標誤差，歸為同一行
-            line_key = round(y_coord / 15) * 15  # 每15像素為一個群組
-            
-            if line_key not in lines:
-                lines[line_key] = []
-            lines[line_key].append(item)
-        
-        # 組合每一行的文字
-        result_lines = []
-        for y_coord in sorted(lines.keys()):
-            line_items = sorted(lines[y_coord], key=lambda x: x['vertices'][0]['x'] if x['vertices'] else 0)
-            line_text = ' '.join([item['text'] for item in line_items])
-            result_lines.append(line_text)
-        
-        return '\n'.join(result_lines)
+    
+    def clean_chinese_spacing(self, text):
+        """清理中文詞彙間不必要的空格"""
+        try:
+            cleaned = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', text)
+            cleaned = re.sub(r'\s+', ' ', cleaned)
+            return cleaned
+        except Exception as e:
+            self.logger.error(f"清理中文空格失敗: {e}")
+            return text
     
     def identify_document_type(self, text, filename):
         """識別文件類型"""
         text_upper = text.upper()
         filename_upper = filename.upper()
         
-        # 交割憑單關鍵字
         trading_keywords = ['交割', '憑單', '成交', '買進', '賣出', '證券', 'TRADING']
         
         if any(keyword in text_upper or keyword in filename_upper for keyword in trading_keywords):
@@ -366,244 +382,165 @@ class BillAnalyzer:
         self.logger.warning("無法識別銀行，使用通用格式")
         return "未知銀行"
     
-    def analyze_with_gemini(self, text, bank_name, document_type):
-        """使用 Gemini REST API 分析文字"""
+    def gemini_analyze(self, text, bank_name, document_type):
+        """
+        使用 Gemini 2.5 分析文字 - 採用第一份代碼的成功策略
+        包含：簡潔 prompt + 重試機制 + 強硬語氣
+        """
         self.logger.info(f"開始 Gemini 分析，文件類型: {document_type}")
-    
-        try:
-            if document_type == "交割憑單":
-                prompt = self.create_trading_analysis_prompt(text)
-            else:
-                prompt = self.create_bill_analysis_prompt(text, bank_name)
         
-            # 輸出 prompt 到日誌 (調試用)
-            self.logger.info(f"Gemini Prompt 長度: {len(prompt)}")
+        # 根據文件類型選擇 prompt
+        if document_type == "交割憑單":
+            prompt_text = self.create_trading_prompt(text)
+        else:
+            prompt_text = self.create_bill_prompt(text, bank_name)
         
-            # 使用 REST API 呼叫 Gemini
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-            headers = {
-                "Content-Type": "application/json",
-                "X-goog-api-key": self.gemini_api_key
-            }
+        # 使用 Gemini 2.5 Flash
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": self.gemini_api_key
+        }
         
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",  # 確保 JSON 格式輸出
-                
-                }
-                
-            }
+        payload = {
+            "contents": [{"parts": [{"text": prompt_text}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
         
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            result = response.json()
-        
-            # 檢查是否有候選回應
-            if 'candidates' in result and result['candidates']:
-                generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
-            
-                # 輸出原始回應到日誌 (調試用)
-                self.logger.info(f"Gemini 原始回應: {generated_text[:1000]}...")
-                return self.parse_json_response(generated_text)
-            else:
-                self.logger.error("Gemini 回應為空或被過濾")
-                return None
-            
-        except Exception as e:
-            self.logger.error(f"Gemini 分析失敗: {e}")
-            return None
-    def create_trading_analysis_prompt(self, text):
-        """建立交割憑單分析提示詞"""
-        return f"""
-請分析以下交割憑單內容，並以JSON格式回傳結構化資料。
-
-如果憑單中包含多筆交易記錄，請回傳JSON陣列格式。
-如果只有一筆交易記錄，請回傳單一JSON物件格式。
-
-單筆交易的JSON格式：
-{{
-    "category": "類別",
-    "stock_code": "股票代碼",
-    "stock_name": "股票名稱", 
-    "quantity": "數量",
-    "price": "成交價",
-    "amount": "價金",
-    "commission": "手續費",
-    "tax": "交易稅",
-    "total_amount": "應付金額"
-}}
-
-注意事項:
-1. 類別請填入"買進"或"賣出"
-2. 金額請保留原始格式（包含逗號和貨幣符號）
-3. 股票代碼通常是4-6位數字，如果找不到就填null
-4. 數量請填入實際股數（數字）
-
-交割憑單內容:
-{text}
-
-請務必回傳有效的JSON格式，不要包含其他說明文字或markdown語法。
-"""
-    
-    def create_bill_analysis_prompt(self, text, bank_name):
-        """建立信用卡帳單分析提示詞 - 修正版"""
-        return f"""
-請分析以下{bank_name}信用卡帳單內容，並以JSON格式回傳結構化資料。
-
-請嚴格按照以下JSON格式回傳：
-
-{{
-    "bank_name": "{bank_name}",
-    "card_type": "信用卡類型",
-    "statement_period": "帳單期間",
-    "statement_date": "結帳日",
-    "payment_due_date": "繳款截止日", 
-    "previous_balance": "上期應繳總金額",
-    "payment_received": "已繳款金額",
-    "current_charges": "本期金額合計",
-    "total_amount_due": "本期應繳總金額",
-    "minimum_payment": "本期最低應繳金額",
-    "transactions": [
-        {{
-            "date": "YYYY/MM/DD",
-            "merchant": "完整商家名稱", 
-            "amount": "金額"
-        }}
-    ]
-}}
-
-重要格式要求:
-1. 日期必須轉換為西元年格式 YYYY/MM/DD
-   - 民國114年 = 西元2025年
-   - 民國113年 = 西元2024年
-   - 格式如 "08/21 07/20" 請取後面日期並轉換：07/20 → 2025/07/20
-   - 格式如 "08/21" 請轉換為：2025/08/21
-
-2. 商家名稱處理規則:
-   - 保持完整商家名稱，不要截斷
-   - 不要在商家名稱前加入 "null" 或其他前綴
-   - 移除多餘的空格和符號
-   - 如果是外幣交易，保留完整的商家名稱和地區資訊
-
-3. 金額處理:
-   - 保留原始格式（包含逗號和負號）
-   - 退款金額請加上負號 "-"
-   - 不要包含貨幣符號除非原始資料有
-
-4. 其他要求:
-   - 找不到的欄位填入null
-   - 交易明細請按時間順序排列
-   - 繳款截止日期也要轉換為西元年格式
-
-特別注意聯邦銀行帳單格式:
-- 交易記錄格式通常為: "入帳日 消費日 商家名稱 金額"
-- 有些記錄前面會有 "+" 號表示外幣交易
-- 國外交易會有手續費記錄
-
-帳單內容:
-{text}
-
-請務必回傳有效的JSON格式，不要包含其他說明文字或markdown語法。
-"""
-    
-    def parse_json_response(self, content):
-        """解析 LLM 回應中的 JSON 內容 - 增強版"""
-        try:
-            # 移除可能的 markdown 語法
-            content = content.strip()
-            if content.startswith('```json'):
-                content = content[7:]
-            if content.startswith('```'):
-                content = content[3:]
-            if content.endswith('```'):
-                content = content[:-3]
-            
-            content = content.strip()
-            
-            # 嘗試直接解析 JSON
-            analysis_result = json.loads(content)
-            
-            # 後處理：確保日期格式正確
-            analysis_result = self.post_process_analysis_result(analysis_result)
-            
-            self.logger.info("JSON 解析成功")
-            return analysis_result
-                
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON 解析失敗: {e}")
-            self.logger.error(f"原始內容: {content[:500]}...")
-            
-            # 嘗試提取 JSON 部分
+        # 重試機制（採用第一份代碼的策略）
+        max_retries = 5
+        for retry in range(max_retries):
             try:
-                json_start_obj = content.find('{')
-                json_start_arr = content.find('[')
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+                response.raise_for_status()
+                resp_json = response.json()
                 
-                if json_start_obj >= 0 and (json_start_arr < 0 or json_start_obj < json_start_arr):
-                    json_start = json_start_obj
-                    json_end = content.rfind('}') + 1
-                elif json_start_arr >= 0:
-                    json_start = json_start_arr
-                    json_end = content.rfind(']') + 1
-                else:
-                    return None
+                # 檢查回應
+                if 'candidates' not in resp_json or not resp_json['candidates']:
+                    raise Exception("Gemini 回應為空")
                 
-                if json_start >= 0 and json_end > json_start:
-                    json_str = content[json_start:json_end]
-                    analysis_result = json.loads(json_str)
-                    analysis_result = self.post_process_analysis_result(analysis_result)
-                    self.logger.info("從混合內容中成功解析 JSON")
-                    return analysis_result
+                generated_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
                 
-            except json.JSONDecodeError:
-                self.logger.error("無法從內容中提取有效的 JSON")
-            
-            return None
-    
-    def post_process_analysis_result(self, result):
-        """後處理分析結果，確保格式正確"""
-        try:
-            if not result:
+                # 清理並解析 JSON
+                json_text = self.clean_json_response(generated_text)
+                result = json.loads(json_text)
+                
+                # 標準化格式
+                result = self.normalize_response(result)
+                
+                self.logger.info(f"Gemini 分析成功（第 {retry + 1} 次嘗試）")
                 return result
-            
-            # 處理交易明細中的日期和商家名稱
-            if 'transactions' in result and isinstance(result['transactions'], list):
-                for transaction in result['transactions']:
-                    # 修正日期格式
-                    if 'date' in transaction and transaction['date']:
-                        transaction['date'] = self.normalize_date(transaction['date'])
-                    
-                    # 清理商家名稱
-                    if 'merchant' in transaction and transaction['merchant']:
-                        merchant = transaction['merchant']
-                        # 移除 null 前綴
-                        if merchant.startswith('null '):
-                            merchant = merchant[5:]
-                        # 清理多餘空格
-                        merchant = ' '.join(merchant.split())
-                        transaction['merchant'] = merchant
-            
-            # 處理繳款截止日期
-            if 'payment_due_date' in result and result['payment_due_date']:
-                result['payment_due_date'] = self.normalize_date(result['payment_due_date'])
-            
-            # 處理結帳日期
-            if 'statement_date' in result and result['statement_date']:
-                result['statement_date'] = self.normalize_date(result['statement_date'])
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"後處理分析結果失敗: {e}")
-            return result
+                
+            except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError) as e:
+                self.logger.warning(f"Gemini API 第 {retry + 1} 次嘗試失敗: {e}")
+                if retry < max_retries - 1:
+                    wait_time = 2 ** retry
+                    self.logger.info(f"等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
+                else:
+                    self.logger.error("Gemini 分析失敗，已達最大重試次數")
+        
+        return None
+    
+    def create_trading_prompt(self, text):
+        """建立交割憑單分析提示詞 - 簡潔版"""
+        return f"""
+分析以下交割憑單內容並提取重要資訊：
+
+{text}
+
+【嚴格要求】
+1. 只能回傳純JSON格式，禁止任何解釋文字
+2. 不可使用markdown標記如```json```
+3. 直接以{{開始，以}}結束
+4. 禁止回傳任何"以下是"、"根據"等開頭語句
+
+單筆交易JSON結構：
+{{
+  "category": "類別",
+  "stock_code": "股票代碼",
+  "stock_name": "股票名稱",
+  "quantity": 數字,
+  "price": 數字,
+  "amount": 數字,
+  "commission": 數字,
+  "tax": 數字,
+  "total_amount": 數字
+}}
+
+多筆交易回傳陣列格式：[{{}}, {{}}, ...]
+
+立即回傳JSON，不要任何其他內容：
+"""
+    
+    def create_bill_prompt(self, text, bank_name):
+        """建立信用卡帳單分析提示詞 - 簡潔強硬版（採用第一份代碼風格）"""
+        return f"""
+分析以下信用卡帳單內容並提取重要資訊：
+
+{text}
+
+【嚴格要求】
+1. 只能回傳純JSON格式，禁止任何解釋文字
+2. 不可使用markdown標記如```json```
+3. 直接以{{開始，以}}結束
+4. 所有日期格式統一為：YYYY/MM/DD（西元年）
+5. 民國年請轉換：114年=2025年，113年=2024年
+6. 禁止回傳任何"以下是"、"根據"等開頭語句
+
+JSON結構（必須嚴格遵守）：
+{{
+  "bank_name": "銀行名稱",
+  "card_type": "卡片類型或null",
+  "statement_period": "帳單期間或null",
+  "statement_date": "YYYY/MM/DD或null",
+  "payment_due_date": "YYYY/MM/DD或null",
+  "previous_balance": 數字或null,
+  "payment_received": 數字或null,
+  "current_charges": 數字或null,
+  "total_amount_due": 數字或null,
+  "minimum_payment": 數字或null,
+  "transactions": [
+    {{
+      "date": "YYYY/MM/DD",
+      "merchant": "完整商家名稱",
+      "amount": 數字,
+      "currency": "TWD"
+    }}
+  ]
+}}
+
+立即回傳JSON，不要任何其他內容：
+"""
+    
+    def clean_json_response(self, generated_text):
+        """清理 JSON 回應（採用第一份代碼的方法）"""
+        json_text = generated_text.strip()
+        
+        # 移除 markdown 標記
+        if json_text.startswith('```json'):
+            json_text = json_text[7:]
+        elif json_text.startswith('```'):
+            json_text = json_text[3:]
+        if json_text.endswith('```'):
+            json_text = json_text[:-3]
+        
+        # 尋找 JSON 開始和結束
+        json_start = json_text.find('{')
+        json_end = json_text.rfind('}')
+        
+        if json_start >= 0 and json_end > json_start:
+            json_text = json_text[json_start:json_end + 1]
+        
+        return json_text.strip()
     
     def normalize_date(self, date_str):
-        """標準化日期格式為西元年 YYYY/MM/DD"""
+        """標準化日期格式為 YYYY/MM/DD"""
+        if not date_str or date_str == "null":
+            return None
+        
         try:
-            if not date_str or date_str.lower() == 'null':
-                return None
-            
-            # 處理 114/09/24 格式 (民國年)
+            # 民國年格式 114/MM/DD
             if re.match(r'^\d{3}/\d{1,2}/\d{1,2}$', date_str):
                 parts = date_str.split('/')
                 year = int(parts[0]) + 1911
@@ -611,14 +548,14 @@ class BillAnalyzer:
                 day = parts[2].zfill(2)
                 return f"{year}/{month}/{day}"
             
-            # 處理 08/21 格式 (假設是2025年)
+            # MM/DD 格式（假設 2025 年）
             elif re.match(r'^\d{1,2}/\d{1,2}$', date_str):
                 parts = date_str.split('/')
                 month = parts[0].zfill(2)
                 day = parts[1].zfill(2)
                 return f"2025/{month}/{day}"
             
-            # 處理已經是西元年格式
+            # 已經是 YYYY/MM/DD 格式
             elif re.match(r'^\d{4}/\d{1,2}/\d{1,2}$', date_str):
                 parts = date_str.split('/')
                 year = parts[0]
@@ -626,37 +563,62 @@ class BillAnalyzer:
                 day = parts[2].zfill(2)
                 return f"{year}/{month}/{day}"
             
-            # 其他格式嘗試解析
-            else:
-                # 嘗試找到日期模式
-                date_patterns = [
-                    r'(\d{3})/(\d{1,2})/(\d{1,2})',  # 民國年
-                    r'(\d{1,2})/(\d{1,2})',          # MM/DD
-                    r'(\d{4})/(\d{1,2})/(\d{1,2})',  # 西元年
-                ]
-                
-                for pattern in date_patterns:
-                    match = re.search(pattern, date_str)
-                    if match:
-                        groups = match.groups()
-                        if len(groups) == 3:
-                            year, month, day = groups
-                            if len(year) == 3:  # 民國年
-                                year = int(year) + 1911
-                            month = month.zfill(2)
-                            day = day.zfill(2)
-                            return f"{year}/{month}/{day}"
-                        elif len(groups) == 2:  # MM/DD
-                            month, day = groups
-                            month = month.zfill(2)
-                            day = day.zfill(2)
-                            return f"2025/{month}/{day}"
-                
-                return date_str  # 無法解析，回傳原始值
-                
-        except Exception as e:
-            self.logger.error(f"日期格式化失敗: {e} - 原始日期: {date_str}")
             return date_str
+            
+        except Exception as e:
+            self.logger.error(f"日期標準化失敗: {e}")
+            return date_str
+    
+    def normalize_currency(self, currency_str):
+        """標準化幣別"""
+        if not currency_str:
+            return "TWD"
+        
+        currency_map = {
+            'TW': 'TWD',
+            'JP': 'JPY',
+            'US': 'USD',
+            'tw': 'TWD',
+            'jp': 'JPY',
+            'us': 'USD'
+        }
+        return currency_map.get(currency_str, currency_str)
+    
+    def normalize_response(self, data):
+        """標準化回應格式（採用第一份代碼的方法）"""
+        try:
+            if not data:
+                return data
+            
+            # 處理日期欄位
+            date_fields = ['payment_due_date', 'statement_date']
+            for field in date_fields:
+                if field in data and data[field]:
+                    data[field] = self.normalize_date(data[field])
+            
+            # 處理交易明細
+            if 'transactions' in data and isinstance(data['transactions'], list):
+                for transaction in data['transactions']:
+                    if 'date' in transaction and transaction['date']:
+                        transaction['date'] = self.normalize_date(transaction['date'])
+                    
+                    if 'currency' in transaction and transaction['currency']:
+                        transaction['currency'] = self.normalize_currency(transaction['currency'])
+                    else:
+                        transaction['currency'] = 'TWD'
+                    
+                    # 清理商家名稱
+                    if 'merchant' in transaction and transaction['merchant']:
+                        merchant = transaction['merchant'].strip()
+                        if merchant.startswith('null '):
+                            merchant = merchant[5:]
+                        transaction['merchant'] = ' '.join(merchant.split())
+            
+            return data
+            
+        except Exception as e:
+            self.logger.error(f"標準化回應失敗: {e}")
+            return data
     
     def cleanup_temp_files(self, file_paths):
         """清理暫存檔案"""
