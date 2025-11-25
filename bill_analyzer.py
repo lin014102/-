@@ -414,7 +414,10 @@ class BillAnalyzer:
         
         payload = {
             "contents": [{"parts": [{"text": prompt_text}]}],
-            "generationConfig": {"responseMimeType": "application/json"}
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.1  # 降低溫度，提高穩定性
+            }
         }
         
         # 重試機制（採用第一份代碼的策略）
@@ -431,13 +434,26 @@ class BillAnalyzer:
                 
                 # 檢查回應
                 if 'candidates' not in resp_json or not resp_json['candidates']:
+                    self.logger.error("Gemini 回應為空或被過濾")
+                    self.logger.error(f"完整回應: {resp_json}")
                     raise Exception("Gemini 回應為空")
                 
                 generated_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                self.logger.info(f"收到 Gemini 回應，長度: {len(generated_text)} 字元")
                 
                 # 清理並解析 JSON
                 json_text = self.clean_json_response(generated_text)
-                result = json.loads(json_text)
+                
+                # 🆕 嘗試解析前先驗證
+                try:
+                    result = json.loads(json_text)
+                except json.JSONDecodeError as json_err:
+                    self.logger.error(f"JSON 解析失敗: {json_err}")
+                    self.logger.error(f"問題 JSON 片段: {json_text[max(0, json_err.pos-100):json_err.pos+100]}")
+                    
+                    # 🆕 嘗試修復常見的 JSON 問題
+                    json_text = self.repair_json(json_text)
+                    result = json.loads(json_text)
                 
                 # 標準化格式
                 result = self.normalize_response(result)
@@ -454,7 +470,17 @@ class BillAnalyzer:
                 else:
                     self.logger.error("❌ Gemini 分析失敗：超時次數過多")
                     
-            except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError) as e:
+            except json.JSONDecodeError as e:
+                self.logger.error(f"❌ Gemini API 第 {retry + 1} 次嘗試失敗：JSON 解析錯誤")
+                self.logger.error(f"錯誤詳情: {e}")
+                if retry < max_retries - 1:
+                    wait_time = 2 ** retry
+                    self.logger.info(f"等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
+                else:
+                    self.logger.error("❌ Gemini 分析失敗，已達最大重試次數")
+                    
+            except (requests.exceptions.RequestException, KeyError) as e:
                 self.logger.warning(f"❌ Gemini API 第 {retry + 1} 次嘗試失敗: {e}")
                 if retry < max_retries - 1:
                     wait_time = 2 ** retry
@@ -464,6 +490,26 @@ class BillAnalyzer:
                     self.logger.error("❌ Gemini 分析失敗，已達最大重試次數")
         
         return None
+    
+    def repair_json(self, json_text):
+        """
+        嘗試修復常見的 JSON 格式問題
+        """
+        self.logger.info("嘗試修復 JSON 格式...")
+        
+        # 1. 移除尾部逗號（trailing comma）
+        json_text = re.sub(r',\s*}', '}', json_text)
+        json_text = re.sub(r',\s*]', ']', json_text)
+        
+        # 2. 修復未閉合的字串（簡單情況）
+        # 這個比較複雜，暫時跳過
+        
+        # 3. 移除註解（如果有）
+        json_text = re.sub(r'//.*?\n', '\n', json_text)
+        json_text = re.sub(r'/\*.*?\*/', '', json_text, flags=re.DOTALL)
+        
+        self.logger.info("JSON 修復完成")
+        return json_text
     
     def truncate_text_if_needed(self, text, max_chars=15000):
         """
@@ -520,7 +566,7 @@ class BillAnalyzer:
 """
     
     def create_bill_prompt(self, text, bank_name):
-        """建立信用卡帳單分析提示詞 - 簡潔強硬版（採用第一份代碼風格）"""
+        """建立信用卡帳單分析提示詞 - 完全採用第一份代碼的成功策略"""
         return f"""
 分析以下信用卡帳單內容並提取重要資訊：
 
@@ -530,28 +576,30 @@ class BillAnalyzer:
 1. 只能回傳純JSON格式，禁止任何解釋文字
 2. 不可使用markdown標記如```json```
 3. 直接以{{開始，以}}結束
-4. 所有日期格式統一為：YYYY/MM/DD（西元年）
-5. 民國年請轉換：114年=2025年，113年=2024年
+4. 所有日期格式統一為：114/MM/DD
+5. 所有幣別統一為：TWD、JPY、USD等標準格式
 6. 禁止回傳任何"以下是"、"根據"等開頭語句
 
 JSON結構（必須嚴格遵守）：
 {{
   "bank_name": "銀行名稱",
-  "card_type": "卡片類型或null",
-  "statement_period": "帳單期間或null",
-  "statement_date": "YYYY/MM/DD或null",
-  "payment_due_date": "YYYY/MM/DD或null",
-  "previous_balance": 數字或null,
-  "payment_received": 數字或null,
-  "current_charges": 數字或null,
-  "total_amount_due": 數字或null,
-  "minimum_payment": 數字或null,
-  "transactions": [
+  "statement_period": "114/07",
+  "total_amount_twd": 數字或null,
+  "total_amount_foreign": 數字或null,
+  "foreign_currency": "幣別或null",
+  "due_date": "114/MM/DD或null",
+  "statement_date": "114/MM/DD或null",
+  "cards": [
     {{
-      "date": "YYYY/MM/DD",
-      "merchant": "完整商家名稱",
-      "amount": 數字,
-      "currency": "TWD"
+      "card_name": "完整卡片名稱",
+      "transactions": [
+        {{
+          "date": "114/MM/DD",
+          "amount": 數字,
+          "currency": "TWD",
+          "merchant": "商家名稱"
+        }}
+      ]
     }}
   ]
 }}
@@ -560,8 +608,11 @@ JSON結構（必須嚴格遵守）：
 """
     
     def clean_json_response(self, generated_text):
-        """清理 JSON 回應（採用第一份代碼的方法）"""
+        """清理 JSON 回應（增強版 - 處理多種格式問題）"""
         json_text = generated_text.strip()
+        
+        self.logger.info(f"原始回應長度: {len(json_text)} 字元")
+        self.logger.debug(f"原始回應前 500 字元: {json_text[:500]}")
         
         # 移除 markdown 標記
         if json_text.startswith('```json'):
@@ -571,12 +622,32 @@ JSON結構（必須嚴格遵守）：
         if json_text.endswith('```'):
             json_text = json_text[:-3]
         
-        # 尋找 JSON 開始和結束
-        json_start = json_text.find('{')
-        json_end = json_text.rfind('}')
+        json_text = json_text.strip()
         
-        if json_start >= 0 and json_end > json_start:
-            json_text = json_text[json_start:json_end + 1]
+        # 尋找 JSON 開始和結束（支援物件和陣列）
+        json_start_obj = json_text.find('{')
+        json_start_arr = json_text.find('[')
+        json_end_obj = json_text.rfind('}')
+        json_end_arr = json_text.rfind(']')
+        
+        # 判斷是物件還是陣列
+        if json_start_obj >= 0 and (json_start_arr < 0 or json_start_obj < json_start_arr):
+            # JSON 物件
+            if json_end_obj > json_start_obj:
+                json_text = json_text[json_start_obj:json_end_obj + 1]
+        elif json_start_arr >= 0:
+            # JSON 陣列
+            if json_end_arr > json_start_arr:
+                json_text = json_text[json_start_arr:json_end_arr + 1]
+        
+        # 移除可能的 BOM 標記
+        json_text = json_text.replace('\ufeff', '')
+        
+        # 移除控制字符
+        json_text = ''.join(char for char in json_text if ord(char) >= 32 or char in '\n\r\t')
+        
+        self.logger.info(f"清理後 JSON 長度: {len(json_text)} 字元")
+        self.logger.debug(f"清理後 JSON 前 500 字元: {json_text[:500]}")
         
         return json_text.strip()
     
@@ -631,40 +702,108 @@ JSON結構（必須嚴格遵守）：
         return currency_map.get(currency_str, currency_str)
     
     def normalize_response(self, data):
-        """標準化回應格式（採用第一份代碼的方法）"""
+        """標準化回應格式 - 處理第一份代碼的 JSON 結構"""
         try:
             if not data:
                 return data
             
-            # 處理日期欄位
-            date_fields = ['payment_due_date', 'statement_date']
+            # 🆕 處理第一份代碼的結構（cards 格式）
+            if 'cards' in data and isinstance(data['cards'], list):
+                for card in data['cards']:
+                    if 'transactions' in card and isinstance(card['transactions'], list):
+                        for transaction in card['transactions']:
+                            # 處理日期：114/MM/DD → YYYY/MM/DD
+                            if 'date' in transaction and transaction['date']:
+                                transaction['date'] = self.convert_roc_to_ad(transaction['date'])
+                            
+                            # 處理幣別
+                            if 'currency' in transaction and transaction['currency']:
+                                transaction['currency'] = self.normalize_currency(transaction['currency'])
+                            else:
+                                transaction['currency'] = 'TWD'
+                            
+                            # 清理商家名稱
+                            if 'merchant' in transaction and transaction['merchant']:
+                                merchant = transaction['merchant'].strip()
+                                if merchant.startswith('null '):
+                                    merchant = merchant[5:]
+                                transaction['merchant'] = ' '.join(merchant.split())
+            
+            # 處理日期欄位（帳單資訊）
+            date_fields = ['due_date', 'statement_date']
             for field in date_fields:
                 if field in data and data[field]:
-                    data[field] = self.normalize_date(data[field])
+                    data[field] = self.convert_roc_to_ad(data[field])
             
-            # 處理交易明細
+            # 🆕 如果有 transactions 欄位（第二份代碼的格式），也處理
             if 'transactions' in data and isinstance(data['transactions'], list):
                 for transaction in data['transactions']:
                     if 'date' in transaction and transaction['date']:
-                        transaction['date'] = self.normalize_date(transaction['date'])
+                        transaction['date'] = self.convert_roc_to_ad(transaction['date'])
                     
                     if 'currency' in transaction and transaction['currency']:
                         transaction['currency'] = self.normalize_currency(transaction['currency'])
                     else:
                         transaction['currency'] = 'TWD'
                     
-                    # 清理商家名稱
                     if 'merchant' in transaction and transaction['merchant']:
                         merchant = transaction['merchant'].strip()
                         if merchant.startswith('null '):
                             merchant = merchant[5:]
                         transaction['merchant'] = ' '.join(merchant.split())
             
+            # 處理 payment_due_date（第二份代碼的欄位）
+            if 'payment_due_date' in data and data['payment_due_date']:
+                data['payment_due_date'] = self.convert_roc_to_ad(data['payment_due_date'])
+            
             return data
             
         except Exception as e:
             self.logger.error(f"標準化回應失敗: {e}")
             return data
+    
+    def convert_roc_to_ad(self, date_str):
+        """
+        轉換民國年到西元年
+        114/MM/DD → 2025/MM/DD
+        """
+        if not date_str or date_str == "null":
+            return None
+        
+        try:
+            # 已經是西元年格式 (YYYY/MM/DD)
+            if re.match(r'^\d{4}/\d{1,2}/\d{1,2}$', date_str):
+                parts = date_str.split('/')
+                year = parts[0]
+                month = parts[1].zfill(2)
+                day = parts[2].zfill(2)
+                return f"{year}/{month}/{day}"
+            
+            # 民國年格式 (114/MM/DD 或 114/MM)
+            if re.match(r'^\d{3}/\d{1,2}(/\d{1,2})?$', date_str):
+                parts = date_str.split('/')
+                year = int(parts[0]) + 1911
+                month = parts[1].zfill(2)
+                
+                if len(parts) == 3:
+                    day = parts[2].zfill(2)
+                    return f"{year}/{month}/{day}"
+                else:
+                    # 只有年月，回傳 YYYY/MM 格式
+                    return f"{year}/{month}"
+            
+            # MM/DD 格式（假設 2025 年）
+            if re.match(r'^\d{1,2}/\d{1,2}$', date_str):
+                parts = date_str.split('/')
+                month = parts[0].zfill(2)
+                day = parts[1].zfill(2)
+                return f"2025/{month}/{day}"
+            
+            return date_str
+            
+        except Exception as e:
+            self.logger.error(f"日期轉換失敗: {e} - 原始日期: {date_str}")
+            return date_str
     
     def cleanup_temp_files(self, file_paths):
         """清理暫存檔案"""
