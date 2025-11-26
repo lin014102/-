@@ -364,15 +364,39 @@ class BillAnalyzer:
             return text
     
     def identify_document_type(self, text, filename):
-        """識別文件類型"""
+        """識別文件類型 - 改進版：優先識別信用卡帳單"""
         text_upper = text.upper()
         filename_upper = filename.upper()
         
-        trading_keywords = ['交割', '憑單', '成交', '買進', '賣出', '證券', 'TRADING']
+        # 信用卡帳單關鍵字（優先判斷）
+        credit_card_keywords = [
+            '信用卡', 'CREDIT CARD', '應繳金額', '繳款期限', 
+            '本期應繳', '最低應繳', '帳單期間', '消費明細',
+            '國內消費', '國外消費', '循環信用', '預借現金'
+        ]
         
-        if any(keyword in text_upper or keyword in filename_upper for keyword in trading_keywords):
+        # 交割憑單關鍵字
+        trading_keywords = [
+            '交割憑單', '股票', '證券', '委託單號', 
+            '成交價格', '股數', '證交稅'
+        ]
+        
+        # 計算匹配分數
+        credit_score = sum(1 for keyword in credit_card_keywords 
+                          if keyword in text_upper or keyword in filename_upper)
+        trading_score = sum(1 for keyword in trading_keywords 
+                           if keyword in text_upper or keyword in filename_upper)
+        
+        # 根據分數判斷
+        if credit_score > trading_score:
+            self.logger.info(f"識別為信用卡帳單（分數: {credit_score} vs {trading_score}）")
+            return "信用卡帳單"
+        elif trading_score > 0:
+            self.logger.info(f"識別為交割憑單（分數: {trading_score} vs {credit_score}）")
             return "交割憑單"
         else:
+            # 預設為信用卡帳單
+            self.logger.info("無法明確識別，預設為信用卡帳單")
             return "信用卡帳單"
     
     def identify_bank(self, text):
@@ -566,7 +590,7 @@ class BillAnalyzer:
 """
     
     def create_bill_prompt(self, text, bank_name):
-        """建立信用卡帳單分析提示詞 - 完全採用第一份代碼的成功策略"""
+        """建立信用卡帳單分析提示詞 - 採用詳細格式（第二份代碼）"""
         return f"""
 分析以下信用卡帳單內容並提取重要資訊：
 
@@ -576,33 +600,56 @@ class BillAnalyzer:
 1. 只能回傳純JSON格式，禁止任何解釋文字
 2. 不可使用markdown標記如```json```
 3. 直接以{{開始，以}}結束
-4. 所有日期格式統一為：114/MM/DD
-5. 所有幣別統一為：TWD、JPY、USD等標準格式
-6. 禁止回傳任何"以下是"、"根據"等開頭語句
+4. 所有日期格式統一為：114/MM/DD（民國年格式）
+5. 禁止回傳任何"以下是"、"根據"等開頭語句
 
 JSON結構（必須嚴格遵守）：
 {{
   "bank_name": "銀行名稱",
-  "statement_period": "114/07",
-  "total_amount_twd": 數字或null,
-  "total_amount_foreign": 數字或null,
-  "foreign_currency": "幣別或null",
-  "due_date": "114/MM/DD或null",
-  "statement_date": "114/MM/DD或null",
-  "cards": [
+  "card_type": "信用卡類型",
+  "statement_period": "114年MM月",
+  "statement_date": "114/MM/DD",
+  "payment_due_date": "114/MM/DD",
+  "previous_balance": "上期應繳總金額（字串，保留逗號）",
+  "payment_received": "已繳款金額（字串，保留逗號和負號）",
+  "current_charges": "本期金額合計（字串，保留逗號）",
+  "total_amount_due": "本期應繳總金額（字串，保留逗號和元）",
+  "minimum_payment": "本期最低應繳金額（字串，保留逗號和元）",
+  "transactions": [
     {{
-      "card_name": "完整卡片名稱",
-      "transactions": [
-        {{
-          "date": "114/MM/DD",
-          "amount": 數字,
-          "currency": "TWD",
-          "merchant": "商家名稱"
-        }}
-      ]
+      "date": "MM/DD",
+      "merchant": "完整商家名稱",
+      "amount": "金額（字串，保留逗號）",
+      "category": "類別（如：餐飲、購物、繳款、現金回饋、分期消費等）"
     }}
   ]
 }}
+
+重要格式要求:
+1. 日期格式：
+   - statement_date 和 payment_due_date 使用：114/MM/DD
+   - transactions 中的 date 使用：MM/DD
+   - statement_period 使用：114年MM月
+
+2. 金額格式：
+   - 保留原始格式（包含逗號）
+   - 退款、回饋等負數請加上負號 "-"
+   - total_amount_due 和 minimum_payment 要加上 "元"
+   - 範例："2,202"、"-21"、"4,269 元"
+
+3. 商家名稱：
+   - 保持完整商家名稱，不要截斷
+   - 移除多餘的空格
+   - 如果是分期付款，保留完整描述（如："南都汽車股份有限公司安南服務 分03期之第02期"）
+
+4. 交易類別（category）：
+   - 根據交易性質分類：餐飲、購物、交通、娛樂、繳款、現金回饋、分期消費、利息等
+   - 如果無法判斷，填入 "其他"
+
+5. 其他要求:
+   - 找不到的欄位填入空字串 "" 或 "0"
+   - 交易明細請按日期順序排列
+   - 金額中的空格要移除（如 "4, 269" → "4,269"）
 
 立即回傳JSON，不要任何其他內容：
 """
