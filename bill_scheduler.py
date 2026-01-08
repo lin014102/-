@@ -225,13 +225,13 @@ class BillScheduler:
             self.logger.info(f"已發送失敗通知，共 {len(failed_files)} 個檔案")
             for file_info in failed_files:
                 try:
-                self.sheets_handler.update_notification_status(
-                    file_info['row_index'], 
-                    '已通知失敗'
-                )
-                self.logger.info(f"已標記為已通知失敗: {file_info['filename']}")
-            except Exception as e:
-                self.logger.error(f"更新通知狀態失敗 {file_info['filename']}: {e}")
+                    self.sheets_handler.update_notification_status(
+                        file_info['row_index'], 
+                        '已通知失敗'
+                    )
+                    self.logger.info(f"已標記為已通知失敗: {file_info['filename']}")
+                except Exception as e:
+                    self.logger.error(f"更新通知狀態失敗 {file_info['filename']}: {e}")
         except Exception as e:
             self.logger.error(f"發送失敗通知錯誤: {e}")
     
