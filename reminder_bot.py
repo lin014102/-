@@ -196,13 +196,11 @@ class ReminderBot:
                     message += f"{'='*20}\n\n"
                 
                 # 待辦事項列表（增強版顯示）
-                for i, todo in enumerate(pending_todos[:5], 1):
+                for i, todo in enumerate(pending_todos, 1):
                     date_info = f" 📅{todo.get('target_date', '')}" if todo.get('has_date') else ""
                     enhanced_content = self._enhance_todo_with_bill_amount(todo["content"])
                     message += f'{i}. ⭕ {enhanced_content}{date_info}\n'
-                
-                if len(pending_todos) > 5:
-                    message += f'\n...還有 {len(pending_todos) - 5} 項未完成\n'
+            
                 
                 # 已完成事項
                 if completed_todos:
