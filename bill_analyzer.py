@@ -590,7 +590,8 @@ class BillAnalyzer:
 """
     
     def create_bill_prompt(self, text, bank_name):
-        """建立信用卡帳單分析提示詞 - 採用詳細格式（第二份代碼）"""
+        from datetime import datetime
+        roc_year = datetime.now().year - 1911  # 自動計算民國年
         return f"""
 分析以下信用卡帳單內容並提取重要資訊：
 
@@ -600,16 +601,16 @@ class BillAnalyzer:
 1. 只能回傳純JSON格式，禁止任何解釋文字
 2. 不可使用markdown標記如```json```
 3. 直接以{{開始，以}}結束
-4. 所有日期格式統一為：114/MM/DD（民國年格式）
+4. 所有日期格式統一為：{roc_year}/MM/DD（民國年格式）
 5. 禁止回傳任何"以下是"、"根據"等開頭語句
 
 JSON結構（必須嚴格遵守）：
 {{
   "bank_name": "銀行名稱",
   "card_type": "信用卡類型",
-  "statement_period": "114年MM月",
-  "statement_date": "114/MM/DD",
-  "payment_due_date": "114/MM/DD",
+  "statement_period": "{roc_year}年MM月",
+  "statement_date": "{roc_year}/MM/DD",
+  "payment_due_date": "{roc_year}/MM/DD",
   "previous_balance": "上期應繳總金額（字串，保留逗號）",
   "payment_received": "已繳款金額（字串，保留逗號和負號）",
   "current_charges": "本期金額合計（字串，保留逗號）",
@@ -627,9 +628,9 @@ JSON結構（必須嚴格遵守）：
 
 重要格式要求:
 1. 日期格式：
-   - statement_date 和 payment_due_date 使用：114/MM/DD
+   - statement_date 和 payment_due_date 使用：{roc_year}/MM/DD  
    - transactions 中的 date 使用：MM/DD
-   - statement_period 使用：114年MM月
+   - statement_period 使用：{roc_year}年MM月
 
 2. 金額格式：
    - 保留原始格式（包含逗號）
