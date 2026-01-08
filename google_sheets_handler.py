@@ -161,22 +161,26 @@ class GoogleSheetsHandler:
             if not values:
                 return []
             
-            # 找出狀態為「解析失敗」的檔案
+            # 找出狀態為「解析失敗」的檔案且推播狀態不是「已推播」的檔案
             failed_files = []
             for i, row in enumerate(values[1:], start=2):
                 if len(row) >= 7 and row[6] == '解析失敗':  # G欄：處理狀態
-                    failed_files.append({
-                        'row_index': i,
-                        'download_date': row[0],            # A欄：下載日期
-                        'sender': row[1],                   # B欄：寄件者
-                        'subject': row[2],                  # C欄：標題
-                        'filename': row[3],                 # D欄：檔名
-                        'file_id': row[4],                  # E欄：Drive File ID
-                        'institution_name': row[5] if len(row) > 5 else '',  # F欄：機構名稱
-                        'status': row[6]                    # G欄：處理狀態
-                    })
+                    # 🆕 檢查推播狀態
+                    notification_status = row[9] if len(row) > 9 else ''  # J欄：推播狀態
+                    # 🆕 只加入未推播的失敗檔案
+                    if notification_status != '已推播':
+                        failed_files.append({
+                            'row_index': i,
+                            'download_date': row[0],            # A欄：下載日期
+                            'sender': row[1],                   # B欄：寄件者
+                            'subject': row[2],                  # C欄：標題
+                            'filename': row[3],                 # D欄：檔名
+                            'file_id': row[4],                  # E欄：Drive File ID
+                            'institution_name': row[5] if len(row) > 5 else '',  # F欄：機構名稱
+                            'status': row[6]                    # G欄：處理狀態
+                        })
             
-            self.logger.info(f"找到 {len(failed_files)} 個失敗檔案")
+            self.logger.info(f"找到 {len(failed_files)} 個未推播的失敗檔案")
             return failed_files
             
         except Exception as e:
