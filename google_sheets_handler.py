@@ -168,7 +168,7 @@ class GoogleSheetsHandler:
                     # 🆕 檢查推播狀態
                     notification_status = row[9] if len(row) > 9 else ''  # J欄：推播狀態
                     # 🆕 只加入未推播的失敗檔案
-                    if notification_status != '已推播':
+                    if notification_status not in ('已通知失敗', '已推播'):
                         failed_files.append({
                             'row_index': i,
                             'download_date': row[0],            # A欄：下載日期
