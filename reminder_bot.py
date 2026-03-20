@@ -68,7 +68,29 @@ class ReminderBot:
         self.reminder_thread = None
     
     # ===== 智能帳單提醒功能 =====
-    
+    def _send_standalone_bill_reminder(self, user_id):
+        """
+        獨立帳單到期提醒
+        完全不依賴待辦清單，只要有緊急帳單就發送
+        """
+        try:
+            urgent_bills = self.check_urgent_bill_payments(user_id)
+        
+            if not urgent_bills:
+                print(f"✅ 無緊急帳單，跳過獨立帳單提醒 - {get_taiwan_time()}")
+                return
+            bill_reminder = self.format_bill_reminders(urgent_bills)
+        
+            message = "💳 帳單繳費提醒\n\n"
+            message += bill_reminder
+            message += f"\n💡 回覆「帳單查詢」查看詳情\n"
+            message += f"🕒 {get_taiwan_time_hhmm()}"
+        
+            send_push_message(user_id, message)
+            print(f"✅ 已發送獨立帳單提醒 ({len(urgent_bills)} 項) - {get_taiwan_time()}")
+        
+        except Exception as e:
+            print(f"❌ 發送獨立帳單提醒失敗: {e}")
     def check_urgent_bill_payments(self, user_id):
         """檢查緊急的帳單繳費提醒"""
         try:
@@ -412,17 +434,15 @@ class ReminderBot:
             
             # 3. 獲取今天的每月事項（用於顯示）
             monthly_items = self.todo_manager.get_monthly_items_for_day(current_day)
+            urgent_bills = self.check_urgent_bill_payments(user_id)
+            bill_reminder = self.format_bill_reminders(urgent_bills)
             
-            if today_todos or monthly_items:
+            if today_todos or monthly_items or urgent_bills:
                 time_icon = '🌅' if time_period == 'morning' else '🌙'
                 time_text = '早安' if time_period == 'morning' else '晚安'
                 
                 message = f"{time_icon} {time_text}！今天有重要事項需要處理：\n\n"
-                
-                # 檢查緊急帳單
-                urgent_bills = self.check_urgent_bill_payments(user_id)
-                bill_reminder = self.format_bill_reminders(urgent_bills)
-                
+            
                 if bill_reminder:
                     message += f"{bill_reminder}\n"
                     message += f"{'='*20}\n\n"
@@ -590,6 +610,12 @@ class ReminderBot:
                           self.last_reminders['daily_evening_date'] != today_date):
                         self.send_daily_reminder(user_id, current_time)
                         self.last_reminders['daily_evening_date'] = today_date
+                    
+                   # 在早上提醒後另外發一則帳單提醒
+                    if (current_time == self.user_settings['morning_time'] and
+                        self.last_reminders.get('bill_reminder_date') != today_date):
+                        self._send_standalone_bill_reminder(user_id)
+                        self.last_reminders['bill_reminder_date'] = today_date          
                     
                     # 4. 檢查每月提醒 - 前一天晚上預告
                     if (current_time == self.user_settings['evening_time'] and 
