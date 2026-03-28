@@ -682,6 +682,12 @@ class ReminderBot:
             }
             
             if self.use_mongodb:
+                existing = self.bill_amounts_collection.find_one(
+                    {'bank_name': normalized_bank, 'month': month_key}
+                )
+                if existing and existing.get('paid') == True:
+                    print(f"⚠️ {normalized_bank} {month_key} 已標記繳納，跳過更新")
+                    return True  # 已繳納就不覆蓋，直接返回
                 self.bill_amounts_collection.update_one(
                     {'bank_name': normalized_bank, 'month': month_key},
                     {'$set': bill_data},
@@ -726,9 +732,12 @@ class ReminderBot:
             normalized_bank = self._normalize_bank_name(bank_name)
             
             if self.use_mongodb:
+                taiwan_now = get_taiwan_datetime()
+                three_months_ago = (taiwan_now - timedelta(days=90)).strftime('%Y-%m')
                 query = {
                     'bank_name': normalized_bank,
-                    'paid': {'$ne': True}
+                    'paid': {'$ne': True},
+                    'month': {'$gte': three_months_ago}
                 }
                 if target_month:
                     query['month'] = target_month
