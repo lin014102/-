@@ -784,25 +784,17 @@ class ReminderBot:
                 query = {'bank_name': normalized_bank}
                 if target_month:
                     query['month'] = target_month
-                else:
-                    latest_bill = self.bill_amounts_collection.find_one(
-                        {'bank_name': normalized_bank},
-                        sort=[('updated_at', -1)]
-                    )
-                    if latest_bill:
-                        query['month'] = latest_bill['month']
-                
                 result = self.bill_amounts_collection.update_many(
                     query,
                     {'$set': {
                         'paid': True,
                         'paid_at': taiwan_now.isoformat()
-                    }}
-                )
+                    }} 
+                )    
                 
                 if result.modified_count > 0:
-                    month_text = f"{target_month} 的" if target_month else ""
-                    return f"✅ 已標記 {normalized_bank} {month_text}帳單為已繳納\n💡 此帳單將不再出現在提醒中"
+                    month_text = f"{target_month} 的" if target_month else "所有"
+                    return f"✅ 已標記 {normalized_bank} {month_text}帳單為已繳納（共 {result.modified_count} 筆）\n💡 此帳單將不再出現在提醒中"
                 else:
                     return f"❌ 找不到 {normalized_bank} 的帳單記錄"
             else:
